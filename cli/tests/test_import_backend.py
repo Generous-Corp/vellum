@@ -74,6 +74,72 @@ def json_files(root: Path) -> dict[str, bytes]:
     }
 
 
+@unittest.skipUnless(shutil.which("node"), "requires Node")
+class InstalledFigImportTests(unittest.TestCase):
+    def test_fig_outline_select_by_name_and_reimport(self) -> None:
+        fixture = REPO / "packages/vellum-design-ir/test/fixtures/synthetic.fig"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prefix = root / "sdk"
+            installed = subprocess.run(
+                ["sh", str(REPO / "scripts/install.sh"), "--local", str(REPO),
+                 "--install-dir", str(prefix)],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
+            vellum = prefix / "bin/vellum"
+            environment = os.environ.copy()
+            environment.pop("VELLUM_BACKEND", None)
+
+            def command(*args: str) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    [str(vellum), *args], cwd=root, env=environment,
+                    capture_output=True, text=True, check=False,
+                )
+
+            listing = command("import", "--outline", str(fixture))
+            self.assertEqual(listing.returncode, 0, listing.stdout + listing.stderr)
+            self.assertIn("0:10  Paint Lab", listing.stdout)
+            outlined = command("import", str(fixture), "--outline", "--json")
+            self.assertEqual(outlined.returncode, 0, outlined.stdout + outlined.stderr)
+            payload = json.loads(outlined.stdout)
+            self.assertEqual(payload["status"], "fig_outline")
+            self.assertEqual(payload["data"]["title"], "Synthetic Fixture")
+            self.assertEqual(payload["data"]["pageCount"], 2)
+            page = next(page for page in payload["data"]["pages"] if page["name"] == "Page One")
+            frame = next(frame for frame in page["frames"] if frame["guid"] == "0:10")
+            self.assertEqual(frame["name"], "Paint Lab")
+            self.assertGreater(frame["descendants"], 0)
+            self.assertEqual(set(root.iterdir()), {prefix})
+
+            app = root / "app"
+            created = command("create", "Import App", "--directory", str(app))
+            self.assertEqual(created.returncode, 0, created.stdout + created.stderr)
+            before = json_files(app)
+            wrong_page = command(
+                "import", "--project", str(app), "--frame", frame["name"],
+                "--page", "Empty Page", str(fixture), "--json",
+            )
+            self.assertNotEqual(wrong_page.returncode, 0)
+            self.assertIn("frame not found", json.loads(wrong_page.stdout)["message"])
+            self.assertEqual(json_files(app), before)
+
+            imported = command(
+                "import", "--project", str(app), "--frame", frame["name"].lower(),
+                "--page", page["name"].lower(), str(fixture),
+            )
+            self.assertEqual(imported.returncode, 0, imported.stdout + imported.stderr)
+            materialized = json.loads((app / "ui/generated/main.materialized.json").read_text())
+            self.assertEqual(materialized["root"]["name"], frame["name"])
+            lock = json.loads((app / "design/import.lock.json").read_text())
+            self.assertEqual(lock["sources"]["main"]["figFrame"], frame["guid"])
+            checked = command("design", "check", "--project", str(app))
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            reimported = command("reimport", "--project", str(app), "--source", str(fixture), "--json")
+            self.assertEqual(reimported.returncode, 0, reimported.stdout + reimported.stderr)
+            self.assertEqual(json.loads(reimported.stdout)["status"], "reimport_unchanged")
+
+
 class ImportBackendTests(unittest.TestCase):
     def test_archive_staging_parser_ignores_backend_handshake_and_capture_options(self) -> None:
         arguments = [

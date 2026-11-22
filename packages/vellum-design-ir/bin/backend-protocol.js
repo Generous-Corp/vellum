@@ -20,8 +20,8 @@ export function parseArguments(values) {
             continue;
         }
         const key = argument.slice(2);
-        if (key === 'json') {
-            output.json = true;
+        if (key === 'json' || key === 'outline') {
+            output[key] = true;
             continue;
         }
         const value = values[index + 1];
