@@ -296,12 +296,13 @@ execute_process(COMMAND "${_nm}" -gU "${_provider}"
     RESULT_VARIABLE _provider_nm_result OUTPUT_VARIABLE _provider_nm ERROR_VARIABLE _provider_nm_error)
 if(NOT _provider_nm_result EQUAL 0 OR
    NOT _provider_nm MATCHES "register_native_dawn_bootstrap" OR
-   NOT _provider_nm MATCHES "register_native_dawn_bootstrap_for_bundle")
+   NOT _provider_nm MATCHES "register_native_dawn_bootstrap_for_bundle" OR
+   NOT _provider_nm MATCHES "create_dawn")
     message(FATAL_ERROR
-        "the installed provider does not export both native Dawn bootstrap entry points:\n"
+        "the installed provider does not export the native Dawn bootstrap and GpuSurface ABI entry points:\n"
         "${_provider_nm}\n${_provider_nm_error}")
 endif()
-message(STATUS "provider exports native Dawn bootstrap entry points: ok")
+message(STATUS "provider exports native Dawn bootstrap and GpuSurface ABI entry points: ok")
 # nm prints C++ names mangled (__ZN4dawn6native8GetProcsEv), so the pattern
 # matches the mangled spelling as well as the demangled one and the C entry
 # points. A planted reference proves the pattern sees what nm really prints.

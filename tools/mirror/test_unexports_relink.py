@@ -83,5 +83,24 @@ class GpuRuntimePinnedInterfaceTest(unittest.TestCase):
         provider = cmake[cmake.index("gpu-runtime-device-provider"):]
         self.assertIn("CXX_VISIBILITY_PRESET default", provider)
         self.assertIn("VISIBILITY_INLINES_HIDDEN OFF", provider)
+        mirror = (repo / "tools/mirror/VellumMirror.cmake").read_text(encoding="utf-8")
+        self.assertIn('list(FILTER _provider_whole EXCLUDE REGEX "^gpu-runtime-device$")', mirror)
+        self.assertIn('list(FILTER _provider_unit_links EXCLUDE REGEX "^gpu-runtime-device$")', mirror)
+        self.assertIn('list(FILTER _third_party EXCLUDE REGEX "^gpu-runtime-device$")', mirror)
+        consumer = (repo / "tools/mirror/RunMirrorConsumer.cmake").read_text(encoding="utf-8")
+        self.assertIn('NOT _provider_nm MATCHES "create_dawn"', consumer)
+        graphics = (repo / "graphics/CMakeLists.txt").read_text(encoding="utf-8")
+        self.assertIn('$<LINK_LIBRARY:WHOLE_ARCHIVE,VellumGpuRuntime::DeviceProvider>', graphics)
+        runtime = (repo / "gpu-runtime/CMakeLists.txt").read_text(encoding="utf-8")
+        self.assertNotIn('target_link_libraries(gpu-runtime-skia-log-bridge', runtime)
+        self.assertIn('"${CMAKE_CURRENT_LIST_DIR}/include"', runtime)
+        pin = "14bd4c5e430bc8da6b4204f1daa8a1bdbc6b7f3a"
+        def git(*args: str) -> str:
+            return subprocess.run(["git", *args], cwd=repo, check=True,
+                                  capture_output=True, text=True).stdout.strip()
+        self.assertEqual(
+            git("rev-parse", f"{pin}:gpu-runtime/include"),
+            git("rev-parse", "HEAD:gpu-runtime/include"),
+        )
         exports = (repo / "cmake/skia_dawn_provider.exports").read_text(encoding="utf-8")
-        self.assertIn("_register_native_dawn_bootstrap", exports)
+        self.assertIn("__ZN11gpu_runtime*", exports)

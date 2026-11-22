@@ -209,9 +209,9 @@ if(GPU_RUNTIME_HAS_DEVICE)
         POSITION_INDEPENDENT_CODE ON)
     # Skia's headers only; the image that registers the bridge links Skia.
     target_include_directories(gpu-runtime-skia-log-bridge PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/include"
         "${GPU_RUNTIME_DAWN_DIR}/build/include")
     target_compile_definitions(gpu-runtime-skia-log-bridge PRIVATE SK_RELEASE)
-    target_link_libraries(gpu-runtime-skia-log-bridge PUBLIC VellumGpuRuntime::Device)
 endif()
 
 if(GPU_RUNTIME_BUILD_TESTS)
