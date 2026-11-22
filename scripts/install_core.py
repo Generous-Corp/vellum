@@ -48,6 +48,7 @@ SAFE_ROOTS = {
     "ui",
     "vellum_backend.py",
     "vellum_cli.py",
+    "vellum_illustrator.py",
     "vellum_dev.py",
     "vellum_manifest.py",
     "vellum_native_backend.py",

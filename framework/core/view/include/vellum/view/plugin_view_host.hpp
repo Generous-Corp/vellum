@@ -99,7 +99,9 @@ public:
 
     struct Options {
         Size size = {400, 300};
-        bool use_gpu = false;  ///< Use GPU rendering (Dawn/Skia Graphite) instead of CoreGraphics
+        /// Request GPU rendering. The macOS built-in host is always GPU-backed
+        /// and ignores this flag; GPU initialization failure leaves it unavailable.
+        bool use_gpu = false;
 
         /// Presentation policy for this host. Embedded plug-in editors default
         /// to `nonblocking` because that is what every plug-in host IS; a
@@ -116,6 +118,13 @@ public:
         /// feature.
         bool enable_gpu_timing = false;
 
+        /// Keep the native backing layer visible until resume_presentation().
+        /// The host still attaches, initializes GPU state, and services idle
+        /// and frame callbacks, but presents no drawable while deferred.
+        /// Other platform hosts may treat this as unsupported and present
+        /// normally.
+        bool defer_presentation = false;
+
         /// The editor's own background, 0xRRGGBB. The host paints it wherever
         /// the view tree does not: the native layer before the first frame,
         /// every frame before the editor's document has mounted, and the
@@ -129,9 +138,8 @@ public:
     // Create a plugin view host for the given view tree.
     //
     // create(), set_factory(), clear_factory(), has_factory(), and
-    // register_platform_plugin_view_host() are declared here but DEFINED in pulp-view-tooling,
-    // together with the platform hosts. A target
-    // that links only pulp-view-core can subclass PluginViewHost but cannot create one.
+    // register_platform_plugin_view_host() are defined by Vellum's installed
+    // view-core host implementation together with the platform hosts.
     //
     // Platform support:
     //   - macOS: NSView-backed impl in plugin_view_host_mac.mm, including
@@ -153,9 +161,8 @@ public:
     static void clear_factory();
     static bool has_factory();
 
-    /// Out-of-line, and NOT trivial: it clears the back-pointer of every
-    /// NativeViewHost still attached to this host. See the registry at the
-    /// bottom of this class.
+    /// Out-of-line: clears this host's View-tree back-pointer and the
+    /// back-pointer of every NativeViewHost still attached to this host.
     virtual ~PluginViewHost();
 
     // Get the native view handle to pass to the DAW host. A non-null host view
@@ -221,6 +228,20 @@ public:
         return false;
     }
 
+    /// Number of frames presented by this host. The macOS GPU host exposes
+    /// this for installed-consumer tests. Hosts without a presentation counter
+    /// return zero.
+    virtual std::size_t presented_frame_count() const { return 0; }
+
+    /// Allow the root view to be painted after a deferred open. UI thread
+    /// only. Idempotent. Platform hosts that support deferral schedule their
+    /// first root frame here. Base-class hosts simply request a repaint.
+    virtual void resume_presentation() {
+        if (presentation_resumed_) return;
+        presentation_resumed_ = true;
+        repaint();
+    }
+
     // ── Bounded repaint damage ──────────────────────────────────────────
     //
     // Mirrors WindowHost's pending-damage surface so `View::request_repaint(Rect)`
@@ -252,6 +273,13 @@ public:
 
 protected:
     PendingDamage damage_;
+
+    /// Concrete hosts use this to keep their backing-layer paint background
+    /// only while Options::defer_presentation is active. Hosts that do not
+    /// support deferral can ignore it and continue presenting normally.
+    bool root_presentation_allowed() const noexcept {
+        return !presentation_deferred_ || presentation_resumed_;
+    }
 
 public:
 
@@ -601,6 +629,13 @@ public:
     virtual float scale_factor() const { return 1.0f; }
 
 private:
+    bool presentation_deferred_ = false;
+    bool presentation_resumed_ = false;
+
+    // Set by create() only after the host has been installed on the tree.
+    // The View tree must outlive its host, as concrete hosts also retain it.
+    View* root_view_ = nullptr;
+
     // ── Attached-view registry ──────────────────────────────────────────────
     //
     // A NativeViewHost holds a RAW, non-owning pointer back to the host it

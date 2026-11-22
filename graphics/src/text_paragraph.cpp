@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cctype>
 #include <cstddef>
 #include <filesystem>
 #include <mutex>
@@ -112,8 +113,8 @@ PackagedFontSet* packaged_fonts(const std::filesystem::path& directory,
     if (cached == font_cache.end()) {
         PackagedFontSet loaded;
         auto provider = sk_make_sp<skia::textlayout::TypefaceFontProvider>();
-        constexpr std::array<std::string_view, 7> packaged_fonts{
-            "Inter-Regular.ttf", "Jost-Regular.ttf", "Jost-Medium.ttf",
+        constexpr std::array<std::string_view, 8> packaged_fonts{
+            "Inter-Regular.ttf", "JetBrainsMono-Regular.ttf", "Jost-Regular.ttf", "Jost-Medium.ttf",
             "Jost-SemiBold.ttf", "Jost-Bold.ttf", "NotoSansJP[wght].ttf",
             "NotoSansArabic[wdth,wght].ttf",
         };
@@ -147,12 +148,51 @@ PackagedFontSet* packaged_fonts(const std::filesystem::path& directory,
 // The families a run is shaped with, in the order the shaper tries them for
 // each character: its own, then the packaged fallbacks.
 std::vector<SkString> run_families(std::string_view font_family) {
-    return {
-        font_family.empty() ? SkString("Inter") : SkString(font_family.data(), font_family.size()),
-        SkString("Noto Sans Arabic"),
-        SkString("Noto Sans JP"),
-        SkString("Inter"),
+    std::vector<SkString> families;
+    std::string name;
+    char quote = 0;
+    bool escaped = false;
+    const auto append = [&] {
+        const auto first = name.find_first_not_of(" \t\n\r\f");
+        if (first != std::string::npos) {
+            const auto last = name.find_last_not_of(" \t\n\r\f");
+            std::string family = name.substr(first, last - first + 1U);
+            std::string lower = family;
+            std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char character) {
+                return static_cast<char>(std::tolower(character));
+            });
+            if (lower == "monospace" || lower == "ui-monospace" || lower == "jetbrains mono") {
+                family = "JetBrains Mono";
+            } else if (lower == "sans-serif" || lower == "system-ui" || lower == "inter") {
+                family = "Inter";
+            }
+            families.emplace_back(family.c_str());
+        }
+        name.clear();
     };
+    for (const char character : font_family) {
+        if (escaped) {
+            name += character;
+            escaped = false;
+        } else if (character == '\\') {
+            escaped = true;
+        } else if (quote != 0) {
+            if (character == quote) quote = 0;
+            else name += character;
+        } else if (character == '\'' || character == '"') {
+            quote = character;
+        } else if (character == ',') {
+            append();
+        } else {
+            name += character;
+        }
+    }
+    append();
+    if (families.empty()) families.emplace_back("Inter");
+    families.emplace_back("Noto Sans Arabic");
+    families.emplace_back("Noto Sans JP");
+    families.emplace_back("Inter");
+    return families;
 }
 
 // Whether a face of one of `families` has a glyph for `code_point`.

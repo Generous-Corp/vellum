@@ -266,7 +266,7 @@ Vellum dependencies. Versions and licenses were cross-checked against Pulp's
 | ICU | `d578f2e8b7bd5938e21cfb6bf15c079e0aa5b738` | Unicode-3.0 plus bundled notices | `canvas` unit external input through the Skia build (text shaping); bytes not mirrored | Permissive; notice exists |
 | Inter | `4.001; git-9221beed3` | SIL OFL 1.1 | `framework/external/fonts/` (`canvas` unit) | Allowed font license |
 | JavaScriptCore | Apple system framework | LGPL-2.1+ components and Apple terms | Never mirrored; system framework only | **Not MIT-compatible**; system-only, never mirrored |
-| JetBrains Mono | `2.304` | SIL OFL 1.1 | `framework/external/fonts/` (`canvas` unit) | Allowed font license |
+| JetBrains Mono | `2.304` | SIL OFL 1.1 | `assets/fonts/` and `framework/external/fonts/` | Allowed font license |
 | Jost | `3.710` | SIL OFL 1.1 | `framework/external/fonts/` (`canvas` unit) | Allowed font license |
 | Mbed TLS | `v3.6.2` | Apache-2.0 | `foundation` unit external input (`framework/core/runtime/`); bytes not mirrored | MIT-compatible |
 | miniz | `3.0.2` | MIT | `framework/external/miniz/` (`foundation` unit) | MIT-compatible |

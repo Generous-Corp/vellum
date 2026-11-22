@@ -531,15 +531,10 @@ Copyright 2020 The Jost Project Authors (https://github.com/indestructible-type/
 
 Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
 
-JetBrains Mono Regular is carried only in the framework mirror
-(`mirror/external/fonts/`), not in the installed SDK, under the SIL Open Font
-License, Version 1.1 reproduced below.
-
-The installed SDK redistributes Inter Regular and Jost Regular, Medium,
-SemiBold, and Bold, plus variable-weight Noto Sans JP and variable-width/weight
-Noto Sans Arabic. All seven files are
-licensed under the SIL Open Font License, Version 1.1. Exact versions and hashes
-are recorded in `assets/fonts/README.md`.
+The installed SDK redistributes JetBrains Mono Regular, Inter Regular,
+Jost Regular, Medium, SemiBold, and Bold, variable-weight Noto Sans JP, and
+variable-width/weight Noto Sans Arabic under the SIL Open Font License,
+Version 1.1. Exact versions and hashes are recorded in `assets/fonts/README.md`.
 
 ### Noto Sans JP
 

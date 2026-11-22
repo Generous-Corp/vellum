@@ -895,6 +895,135 @@
         "windows-x64",
         "windows-arm64"
       ]
+    },
+    {
+      "framework_path": "framework/core/view/src/plugin_view_host.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Vellum's plug-in view host factory: PluginViewHost::create and the factory registry, exported from the SDK so a plug-in editor can embed a Vellum view (owner decision 2026-11-20: Vellum owns the GPU plug-in editor host). Written for Vellum, not taken from Pulp's plugin_view_host sources."
+    },
+    {
+      "framework_path": "framework/core/view/platform/mac/gpu_plugin_editor_host_mac.mm",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "The macOS plug-in view host: a per-image Metal view that renders the View tree with Skia on Dawn into its CAMetalLayer and routes mouse, wheel, key and focus input. Written for Vellum on its own Metal view, not taken from Pulp's plugin_view_host_mac sources."
+    },
+    {
+      "framework_path": "framework/core/view/js/web-compat.js",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Pulp's web-compat authoring layer, with product names respelled for Vellum: header and comments name Vellum, and navigator.userAgent reports Vellum/1.0. The bytes are Pulp's file put through the transfer rename plus those edits."
+    },
+    {
+      "framework_path": "framework/core/view/js/web-compat-runtime-apis.js",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Pulp's web-compat runtime APIs, with the header comment pointing at Vellum's prelude chain (framework/core/view/cmake/PulpViewJsPreludes.cmake) instead of Pulp's CMake. The bytes are Pulp's file put through the transfer rename plus that comment."
+    },
+    {
+      "framework_path": "framework/core/view/js/web-compat-selector.js",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Pulp's web-compat selector engine, with the header comment describing how Vellum loads it (after the native selector prelude, read verbatim by scripted UI consumers) instead of Pulp's harness adapter. The bytes are Pulp's file put through the transfer rename plus that comment."
+    },
+    {
+      "framework_path": "framework/core/view/js/web-compat-three-shim.js",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Pulp's Three.js web-compat shim, with its print markers renamed from PULP_THREE_SHIM / PULP_THREEJS to VELLUM_THREE_SHIM / VELLUM_THREEJS to match Vellum's smoke tests. The bytes are Pulp's file put through the transfer rename plus those markers."
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/gpu_plugin_editor_host_win.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "The Win32 plug-in view host: a child HWND that creates a Dawn/D3D12 surface after attachment and renders the View tree with Skia Graphite. Written for Vellum as the Windows counterpart to the macOS GPU editor host.",
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/view/platform/ios/ios_accessibility_bridge.mm",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "UIKit VoiceOver accessibility bridge for Vellum iOS view trees.",
+      "platforms": [
+        "ios-device-arm64",
+        "ios-simulator-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/view/platform/ios/ios_editor_surface_host.mm",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "UIKit plug-in editor surface host for Vellum iOS AUv3 embedding.",
+      "platforms": [
+        "ios-device-arm64",
+        "ios-simulator-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/view/platform/ios/ios_window_surface_host.mm",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "UIKit standalone window host for Vellum iOS applications.",
+      "platforms": [
+        "ios-device-arm64",
+        "ios-simulator-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/view/platform/linux/gpu_plugin_editor_host_x11.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "platforms": [
+        "linux-x64"
+      ],
+      "reason": "The Linux X11 plug-in editor host: a reparented child window that renders the View tree with Skia Graphite on Dawn/Vulkan. Written for Vellum, not taken from Pulp plugin-view-host sources."
     }
   ]
 }

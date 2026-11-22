@@ -190,21 +190,35 @@ target_link_libraries(gpu-guard-consumer PRIVATE Vellum::MirrorCanvas)
     endforeach()
 endif()
 
+# The hosted GPU proof opts into live rendering. The installed host can
+# exercise viewport geometry and input even without a native GPU adapter.
+set(_run_live_gpu FALSE)
+if(DEFINED ENV{VELLUM_MIRROR_LIVE_GPU})
+    set(_live_gpu "$ENV{VELLUM_MIRROR_LIVE_GPU}")
+    if(_live_gpu MATCHES "^(1|ON|TRUE|YES)$")
+        set(_run_live_gpu TRUE)
+    elseif(NOT _live_gpu MATCHES "^(0|OFF|FALSE|NO)?$")
+        message(FATAL_ERROR
+            "VELLUM_MIRROR_LIVE_GPU must be one of 1/0, ON/OFF, TRUE/FALSE, or YES/NO")
+    endif()
+endif()
+
 # A plug-in editor's view of the host: plugin_view_host.hpp reaches the GPU
 # device type only through platform/gpu_fwd.hpp, so it builds, links and runs
 # against the installed package without VELLUM_MIRROR_BUILD.
 set(_pvh_dir "${_work}/plugin-view-host")
 file(MAKE_DIRECTORY "${_pvh_dir}")
-file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/plugin_view_host_main.cpp"
+file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/plugin_view_host_main.mm"
     DESTINATION "${_pvh_dir}")
 file(WRITE "${_pvh_dir}/CMakeLists.txt" [=[
 cmake_minimum_required(VERSION 3.24)
-project(VellumPluginViewHostConsumer LANGUAGES CXX)
+project(VellumPluginViewHostConsumer LANGUAGES CXX OBJCXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Vellum CONFIG REQUIRED)
-add_executable(vellum-plugin-view-host-consumer plugin_view_host_main.cpp)
+add_executable(vellum-plugin-view-host-consumer plugin_view_host_main.mm)
 target_link_libraries(vellum-plugin-view-host-consumer PRIVATE Vellum::MirrorView_core)
+target_link_libraries(vellum-plugin-view-host-consumer PRIVATE "-framework AppKit")
 get_target_property(_defs vellum-plugin-view-host-consumer COMPILE_DEFINITIONS)
 if(_defs MATCHES "VELLUM_MIRROR_BUILD")
     message(FATAL_ERROR "the plug-in view host consumer must not define VELLUM_MIRROR_BUILD")
@@ -216,7 +230,71 @@ _run("plug-in view host consumer configure" "${CMAKE_COMMAND}"
     -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
     -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE)
 _run("plug-in view host consumer build" "${CMAKE_COMMAND}" --build "${_pvh_dir}/build")
-_run("plug-in view host consumer run" "${_pvh_dir}/build/vellum-plugin-view-host-consumer")
+set(_pvh_args)
+if(_run_live_gpu)
+    set(_pvh_args --live-gpu)
+endif()
+_run("plug-in view host consumer run" "${_pvh_dir}/build/vellum-plugin-view-host-consumer" ${_pvh_args})
+message(STATUS "${_last_stdout}")
+
+# The native bootstrap entry points are provider-owned. The installed mirror
+# consumer must resolve them from that dylib, and must not carry the Dawn proc
+# table calls that the old inline header emitted into plug-in objects. The
+# installed SDK intentionally does not ship libdawn_combined.a, so a consumer
+# cannot link a second pinned Dawn archive through this package boundary. The
+# no-proc-reference check below is the strongest installed-consumer proof, while
+# the provider's own whole-archive link remains the sole Dawn definition.
+set(_provider "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-skia-dawn-provider.dylib")
+find_program(_nm nm REQUIRED)
+execute_process(COMMAND "${_nm}" -gU "${_provider}"
+    RESULT_VARIABLE _provider_nm_result OUTPUT_VARIABLE _provider_nm ERROR_VARIABLE _provider_nm_error)
+if(NOT _provider_nm_result EQUAL 0 OR
+   NOT _provider_nm MATCHES "register_native_dawn_bootstrap" OR
+   NOT _provider_nm MATCHES "register_native_dawn_bootstrap_for_bundle")
+    message(FATAL_ERROR
+        "the installed provider does not export both native Dawn bootstrap entry points:\n"
+        "${_provider_nm}\n${_provider_nm_error}")
+endif()
+message(STATUS "provider exports native Dawn bootstrap entry points: ok")
+# nm prints C++ names mangled (__ZN4dawn6native8GetProcsEv), so the pattern
+# matches the mangled spelling as well as the demangled one and the C entry
+# points. A planted reference proves the pattern sees what nm really prints.
+set(_dawn_proc_ref_pattern "dawnProc(Set|Get)|dawn6native8GetProcs|dawn::native::GetProcs")
+set(_proc_control_dir "${_work}/dawn-proc-ref-control")
+file(MAKE_DIRECTORY "${_proc_control_dir}")
+file(WRITE "${_proc_control_dir}/CMakeLists.txt" [=[
+cmake_minimum_required(VERSION 3.24)
+project(VellumDawnProcRefControl LANGUAGES CXX)
+add_library(dawn_proc_ref_control STATIC control.cpp)
+]=])
+file(WRITE "${_proc_control_dir}/control.cpp" [=[
+namespace dawn::native { const void* GetProcs(); }
+const void* vellum_dawn_proc_ref_control() { return dawn::native::GetProcs(); }
+]=])
+_run("Dawn proc-table reference control configure" "${CMAKE_COMMAND}"
+    -S "${_proc_control_dir}" -B "${_proc_control_dir}/build" ${_generator}
+    -DCMAKE_BUILD_TYPE=Release)
+_run("Dawn proc-table reference control build" "${CMAKE_COMMAND}"
+    --build "${_proc_control_dir}/build")
+execute_process(COMMAND "${_nm}" -u "${_proc_control_dir}/build/libdawn_proc_ref_control.a"
+    RESULT_VARIABLE _control_nm_result OUTPUT_VARIABLE _control_nm ERROR_VARIABLE _control_nm_error)
+if(NOT _control_nm_result EQUAL 0 OR NOT _control_nm MATCHES "${_dawn_proc_ref_pattern}")
+    message(FATAL_ERROR
+        "negative control: the Dawn proc-table check does not see a planted "
+        "dawn::native::GetProcs reference, so a clean result would prove nothing:\n"
+        "${_control_nm}\n${_control_nm_error}")
+endif()
+message(STATUS "Dawn proc-table check sees a planted reference: ok")
+execute_process(COMMAND "${_nm}" -u "${_pvh_dir}/build/vellum-plugin-view-host-consumer"
+    RESULT_VARIABLE _consumer_nm_result OUTPUT_VARIABLE _consumer_nm ERROR_VARIABLE _consumer_nm_error)
+if(NOT _consumer_nm_result EQUAL 0)
+    message(FATAL_ERROR "installed plug-in consumer nm failed: ${_consumer_nm_error}")
+endif()
+if(_consumer_nm MATCHES "${_dawn_proc_ref_pattern}")
+    message(FATAL_ERROR
+        "installed plug-in consumer still references Dawn proc-table symbols:\n${_consumer_nm}")
+endif()
+message(STATUS "installed plug-in consumer has no Dawn proc-table references: ok")
 _run("debt probe" "${Python3_EXECUTABLE}"
     "${VELLUM_SOURCE_DIR}/tools/mirror/verify_mirror_inertness.py"
     --prefix "${_prefix}" --install-libdir "${VELLUM_INSTALL_LIBDIR}"
@@ -325,17 +403,7 @@ _run("direct GPU consumer build" "${CMAKE_COMMAND}" --build "${_work}/direct-gpu
 # runtime probe so an unavailable device is reported as such rather than being
 # mistaken for a passing consumer test. The hosted GPU proof sets this variable
 # around ctest; an opted-in runtime failure remains fatal through _run().
-set(_run_direct_gpu FALSE)
-if(DEFINED ENV{VELLUM_MIRROR_LIVE_GPU})
-    set(_live_gpu "$ENV{VELLUM_MIRROR_LIVE_GPU}")
-    if(_live_gpu MATCHES "^(1|ON|TRUE|YES)$")
-        set(_run_direct_gpu TRUE)
-    elseif(NOT _live_gpu MATCHES "^(0|OFF|FALSE|NO)?$")
-        message(FATAL_ERROR
-            "VELLUM_MIRROR_LIVE_GPU must be one of 1/0, ON/OFF, TRUE/FALSE, or YES/NO")
-    endif()
-endif()
-if(_run_direct_gpu)
+if(_run_live_gpu)
     _run("direct GPU consumer run" "${_work}/direct-gpu-build/vellum-gpu-direct-consumer")
 else()
     message(STATUS
@@ -534,4 +602,16 @@ target_link_libraries(vellum-v8-consumer PRIVATE Vellum::MirrorView_script)
     _run("V8 consumer build" "${CMAKE_COMMAND}" --build "${_work}/v8-consumer-build")
     _run("V8 consumer run" "${_work}/v8-consumer-build/vellum-v8-consumer" "${VELLUM_V8_VERSION}")
     message(STATUS "${_last_stdout}")
+    if(VELLUM_INSTALL_THREEJS)
+        _run("Three.js demo configure" "${CMAKE_COMMAND}"
+            -S "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/threejs-demo"
+            -B "${_work}/threejs-demo" ${_generator} -DCMAKE_BUILD_TYPE=Release
+            "-DVellum_DIR=${_prefix}/${VELLUM_INSTALL_LIBDIR}/cmake/Vellum"
+            -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
+            -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE)
+        _run("Three.js demo build" "${CMAKE_COMMAND}" --build "${_work}/threejs-demo")
+        _run("Three.js demo tests" "${CMAKE_CTEST_COMMAND}"
+            --test-dir "${_work}/threejs-demo" --no-tests=error --verbose)
+        message(STATUS "${_last_stdout}")
+    endif()
 endif()

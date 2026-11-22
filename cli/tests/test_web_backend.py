@@ -30,6 +30,8 @@ validate_component_source = BACKEND_MODULE["validate_component_source"]
 build_component_modules = BACKEND_MODULE["build_component_modules"]
 contains_sdk_install_path = BACKEND_MODULE["contains_sdk_install_path"]
 lower_dom_snapshot = BACKEND_MODULE["lower_dom_snapshot"]
+lower_computed_material = BACKEND_MODULE["_lower_computed_material"]
+computed_gradient = BACKEND_MODULE["_computed_gradient"]
 CAPTURE_STYLE_NAMES = BACKEND_MODULE["CAPTURE_STYLE_NAMES"]
 chrome_path = BACKEND_MODULE["chrome_path"]
 BackendFailure = BACKEND_MODULE["BackendFailure"]
@@ -76,6 +78,55 @@ class LiveBrowserGateTests(unittest.TestCase):
         popen.assert_not_called()
         run.assert_not_called()
 
+    def test_computed_material_rejects_elliptical_border_radius(self) -> None:
+        node = {"kind": "view", "properties": {}}
+        with self.assertRaisesRegex(BackendFailure, "elliptical border radius top-left") as raised:
+            lower_computed_material(
+                node, {"border-top-left-radius": "12px 6px"}, (0, 0, 80, 40))
+        self.assertEqual(raised.exception.status, "unsupported_material")
+
+    def test_computed_material_rejects_percentage_radius_on_non_square_box(self) -> None:
+        node = {"kind": "view", "properties": {}}
+        with self.assertRaisesRegex(BackendFailure, "percentage border radius top-left") as raised:
+            lower_computed_material(
+                node, {"border-top-left-radius": "50%"}, (0, 0, 80, 40))
+        self.assertEqual(raised.exception.status, "unsupported_material")
+
+    def test_computed_material_rejects_background_gradient_overflow(self) -> None:
+        node = {"kind": "view", "properties": {}}
+        layers = ", ".join("linear-gradient(to right, rgb(0, 0, 0), rgb(255, 255, 255))"
+                            for _ in range(9))
+        with self.assertRaisesRegex(BackendFailure, "more than 8 background gradients") as raised:
+            lower_computed_material(
+                node, {"background-image": layers}, (0, 0, 80, 40))
+        self.assertEqual(raised.exception.status, "unsupported_material")
+
+    def test_computed_gradient_retains_circle_shape_and_position(self) -> None:
+        gradient = computed_gradient(
+            "radial-gradient(circle 40% at 25% 75%, rgb(0, 0, 0), rgb(255, 255, 255))")
+        self.assertEqual(gradient["radiusX"], 0.4)
+        self.assertEqual(gradient["radiusY"], 0.4)
+        self.assertEqual(gradient["centerX"], 0.25)
+        self.assertEqual(gradient["centerY"], 0.75)
+
+    def test_computed_material_rejects_default_radial_gradient(self) -> None:
+        node = {"kind": "view", "properties": {}}
+        with self.assertRaisesRegex(BackendFailure, "default radial gradients") as raised:
+            lower_computed_material(
+                node, {"background-image": "radial-gradient(rgb(0, 0, 0), rgb(255, 255, 255))"},
+                (0, 0, 80, 40))
+        self.assertEqual(raised.exception.status, "unsupported_material")
+
+    def test_computed_material_rejects_unsupported_gradient_direction(self) -> None:
+        node = {"kind": "view", "properties": {}}
+        with self.assertRaisesRegex(BackendFailure, "unsupported CSS gradient layer") as raised:
+            lower_computed_material(
+                node,
+                {"background-image": "linear-gradient(to bottom right, rgb(0, 0, 0), rgb(255, 255, 255))"},
+                (0, 0, 80, 40),
+            )
+        self.assertEqual(raised.exception.status, "unsupported_material")
+
     def test_a_set_but_unusable_pinned_browser_fails_instead_of_skipping(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             missing = str(Path(directory) / "no-such-chrome")
@@ -99,6 +150,13 @@ class LiveBrowserGateTests(unittest.TestCase):
         self.assertIsNotNone(live_browser.live_browser_skip_reason({"VELLUM_TEST_ALLOW_SYSTEM_CHROME": "0"}))
         self.assertIsNotNone(live_browser.live_browser_skip_reason({}))
         self.assertIsNotNone(live_browser.live_browser_skip_reason({"VELLUM_CHROME_PATH": ""}))
+
+    def test_the_escape_hatch_does_not_reach_the_installed_browser_in_a_sandbox(self) -> None:
+        sandboxed = {"VELLUM_TEST_ALLOW_SYSTEM_CHROME": "1", "CODEX_SANDBOX": "seatbelt"}
+        self.assertIsNotNone(live_browser.live_browser_skip_reason(sandboxed))
+        result, popen, run, launched = self.run_live_capture_test(sandboxed)
+        self.assertEqual((len(result.skipped), len(result.failures), len(result.errors)), (1, 0, 0))
+        self.assertEqual(launched, [])
 
     def test_a_pinned_executable_browser_may_run(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -168,6 +226,22 @@ class ChromeDiscoveryTests(unittest.TestCase):
                 mock.patch.object(shutil, "which", return_value="/usr/bin/google-chrome"):
             self.assertEqual(chrome_path(), "/usr/bin/google-chrome")
 
+    def test_discovery_refuses_the_installed_app_inside_a_sandbox(self) -> None:
+        environment = {key: value for key, value in os.environ.items()
+                       if key not in ("VELLUM_CHROME_PATH", "CODEX_SANDBOX")}
+        application = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        real_is_file = Path.is_file
+        def is_file(path: Path) -> bool:
+            return str(path) == application or real_is_file(path)
+        with mock.patch.object(shutil, "which", return_value=None), \
+                mock.patch.object(Path, "is_file", is_file):
+            with mock.patch.dict("os.environ", environment, clear=True):
+                self.assertEqual(chrome_path(), application)
+            with mock.patch.dict("os.environ", {**environment, "CODEX_SANDBOX": "seatbelt"},
+                                 clear=True):
+                with self.assertRaisesRegex(BackendFailure, "sandbox"):
+                    chrome_path()
+
 
 class BrowserCaptureLoweringTests(unittest.TestCase):
     def test_dom_snapshot_treats_absent_node_value_as_empty(self) -> None:
@@ -184,6 +258,39 @@ class BrowserCaptureLoweringTests(unittest.TestCase):
             snapshot, settled_snapshot=snapshot, screenshot={},
         )
         self.assertEqual(root["name"], "#document")
+
+    def test_dom_snapshot_omits_non_rendered_inline_source(self) -> None:
+        inline_source = "x" * (64 * 1024 + 1)
+        snapshot = {
+            "strings": ["#document", "SCRIPT", "STYLE", "P", "#text", inline_source, "Visible"],
+            "documents": [{
+                "nodes": {
+                    "nodeType": [9, 1, 3, 1, 3, 1, 3],
+                    "nodeName": [0, 1, 4, 2, 4, 3, 4],
+                    "nodeValue": [-1, -1, 5, -1, 5, -1, 6],
+                    "parentIndex": [-1, 0, 1, 0, 3, 0, 5],
+                },
+                "layout": {"nodeIndex": [0, 5, 6], "styles": [[], [], []]},
+            }],
+        }
+        root, _assets, evidence = lower_dom_snapshot(
+            snapshot, settled_snapshot=snapshot, screenshot={},
+        )
+        script, style, paragraph = root["children"]
+        self.assertEqual(script["children"], [])
+        self.assertEqual(style["children"], [])
+        self.assertEqual(paragraph["children"][0]["text"], "Visible")
+        self.assertEqual(evidence["settledSnapshot"]["strings"][5], inline_source)
+
+        snapshot["documents"][0]["nodes"]["nodeValue"][6] = 5
+        with self.assertRaisesRegex(BackendFailure, r"nodeValue\[6\].*invalid bounded string"):
+            lower_dom_snapshot(snapshot, settled_snapshot=snapshot, screenshot={})
+
+        layout = snapshot["documents"][0]["layout"]
+        layout["nodeIndex"].append(2)
+        layout["styles"].append([])
+        with self.assertRaisesRegex(BackendFailure, r"nodeValue\[2\].*invalid bounded string"):
+            lower_dom_snapshot(snapshot, settled_snapshot=snapshot, screenshot={})
 
     def test_dom_snapshot_treats_empty_attribute_value_as_empty(self) -> None:
         """Chrome sends alt="" as the -1 sentinel, not an index to an empty string."""
@@ -249,6 +356,29 @@ class BrowserCaptureLoweringTests(unittest.TestCase):
         computed = root["children"][0]["properties"]["computedStyles"]
         self.assertEqual(computed[CAPTURE_STYLE_NAMES[0]], "block")
         self.assertEqual(computed[CAPTURE_STYLE_NAMES[1]], "")
+
+    def test_empty_pseudo_element_row_cannot_replace_its_painted_box(self) -> None:
+        gradient = "radial-gradient(80% 60% at 50% 20%, rgb(0, 0, 0), rgba(0, 0, 0, 0))"
+        snapshot = {
+            "strings": ["#document", "::before", gradient],
+            "documents": [{
+                "nodes": {"nodeType": [9, 1], "nodeName": [0, 1], "nodeValue": [-1, -1],
+                          "parentIndex": [-1, 0], "attributes": [[], []]},
+                "layout": {"nodeIndex": [0, 1, 1], "styles": [[], [-1, -1, -1, -1, 2], [-1, -1, -1, -1, 2]],
+                           "bounds": [[0, 0, 800, 600], [5, 6, 80, 60], [0, 0, 0, 0]]},
+            }],
+        }
+        layout = snapshot["documents"][0]["layout"]
+        for include_empty_row in (True, False):
+            with self.subTest(include_empty_row=include_empty_row):
+                if not include_empty_row:
+                    for values in layout.values():
+                        values.pop()
+                root, _assets, _evidence = lower_dom_snapshot(
+                    snapshot, settled_snapshot=snapshot, screenshot={})
+                properties = root["children"][0]["properties"]
+                self.assertEqual(properties["layout"], {"x": 5, "y": 6, "width": 80, "height": 60})
+                self.assertEqual(properties["paint"]["backgroundGradients"][0]["radiusX"], 0.8)
 
     def test_dom_snapshot_lowers_chrome_boxes_relative_to_parent(self) -> None:
         """Each laid-out node keeps Chrome's box as a parent-relative frame."""

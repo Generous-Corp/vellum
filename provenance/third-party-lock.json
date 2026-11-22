@@ -19,6 +19,15 @@
       "surface": "installed deterministic native text face"
     },
     {
+      "name": "JetBrains Mono",
+      "version": "2.304",
+      "license": "SIL-OFL-1.1",
+      "source": "https://github.com/JetBrains/JetBrainsMono",
+      "path": "assets/fonts/JetBrainsMono-Regular.ttf",
+      "sha256": "a0bf60ef0f83c5ed4d7a75d45838548b1f6873372dfac88f71804491898d138f",
+      "surface": "installed deterministic monospace face"
+    },
+    {
       "name": "Jost Regular",
       "version": "3.710",
       "license": "SIL-OFL-1.1",

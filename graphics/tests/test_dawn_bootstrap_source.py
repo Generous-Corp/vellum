@@ -10,7 +10,8 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 ALLOWED = {
-    ROOT / "graphics" / "include" / "vellum" / "graphics" / "dawn_native_bootstrap.hpp",
+    # The provider-owned implementation is the only Vellum native setter.
+    ROOT / "graphics" / "src" / "dawn_bootstrap.cpp",
     # gpu-runtime's native bootstrap, the device library's only setter. It runs
     # through the coordinator, and Vellum builds it host-owned, so it installs
     # nothing unless a host registers it.
