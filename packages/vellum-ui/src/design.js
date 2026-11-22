@@ -277,6 +277,9 @@ function retainedStyle(context, node, viewport, root) {
             ...paintNumbers(shadow, ['offsetX', 'offsetY', 'blurRadius', 'spreadRadius']),
             color: colorSlot(context, refs, 'boxShadow', shadow.color),
         }));
+        if (retainedShadows.length > 1 && refs.boxShadow !== undefined) {
+            throw new TypeError(`design node ${node.id} paint.boxShadow cannot use color tokens with multiple shadows`);
+        }
         style.boxShadow = retainedShadows.length === 1 ? retainedShadows[0] : retainedShadows;
     }
     if (drawsBox && paint.backgroundLinearGradient !== undefined) {

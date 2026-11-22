@@ -385,8 +385,12 @@ function validateBoxShadow(value, path) {
         if (value.length === 0 || value.length > 8) {
             throw new TypeError(`${path} must contain between 1 and 8 shadows`);
         }
-        return value.map((shadow, index) => validateBoxShadow(shadow, `${path}[${index}]`));
+        return value.map((shadow, index) => validateBoxShadowEntry(shadow, `${path}[${index}]`));
     }
+    return validateBoxShadowEntry(value, path);
+}
+
+function validateBoxShadowEntry(value, path) {
     const shadow = paintStyleObject(
         value, path, ['offsetX', 'offsetY', 'blurRadius', 'spreadRadius', 'color']);
     for (const name of ['offsetX', 'offsetY']) {
@@ -809,7 +813,9 @@ function tokenSlotColor(slot, type, style, pathProperties) {
     if (type === 'text-run') return undefined;
     if (slot === 'backgroundColor') return ['style.backgroundColor', style?.backgroundColor];
     if (slot === 'boxShadow') {
-        const shadow = Array.isArray(style?.boxShadow) ? style.boxShadow[0] : style?.boxShadow;
+        const shadows = style?.boxShadow;
+        if (Array.isArray(shadows) && shadows.length !== 1) return undefined;
+        const shadow = Array.isArray(shadows) ? shadows[0] : shadows;
         return ['style.boxShadow.color', shadow?.color];
     }
     if (stop) {
