@@ -20,18 +20,19 @@ their notices under `share/doc/VellumRmlUiNative/`. It is not part of the
 Vellum SDK. Each release publishes it separately as
 `vellum-rmlui-sdk-<version>-darwin-arm64.tar.gz`.
 
-When RmlUi is built inside Vellum with the retained view core, the module also
-adds `vellum/rmlui/plugin_view.hpp`. `vellum::rmlui::PluginView` is a normal
-Vellum `View`, so the existing Windows and Linux `PluginViewHost` implementations
-provide parent attachment, sizing, input dispatch, and presentation. This first
-cross-platform slice uses the CPU renderer and submits its RGBA frame through the
-host canvas. macOS `NativeParentHost` remains the reference native-parent path.
-
 Build it with `VELLUM_RMLUI_NATIVE=ON`, `VELLUM_RMLUI_METAL=ON` and
 `VELLUM_RMLUI_NATIVE_PACKAGE=ON`, or use `scripts/build_rmlui_sdk_artifact.py`,
 which builds the release archive reproducibly. Without
 `VELLUM_RMLUI_NATIVE_PACKAGE`, Native installs into the VellumRmlUi package
 directory instead, as a component of that package.
+
+## Hosting a document in a plug-in view
+
+When the Vellum mirror view unit is available, link the in-tree
+`VellumRmlUi::PluginView` target and include `vellum/rmlui/plugin_view.hpp`.
+The adapter exposes the CPU-rendered document as a Vellum view and submits
+its frame to the host canvas. The platform's `PluginViewHost` supplies child
+window attachment, input dispatch, and presentation.
 
 ## Choosing a renderer
 
