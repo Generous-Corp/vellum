@@ -1058,6 +1058,30 @@
         "ios-device-arm64",
         "ios-simulator-arm64"
       ]
+    },
+    {
+      "framework_path": "framework/core/view/include/vellum/view/platform/ios_au_editor_controller.h",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "UIKit AUv3 editor session contract and container for Vellum iOS view-core."
+    },
+    {
+      "framework_path": "framework/core/view/platform/ios/ios_au_editor_controller.mm",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "UIKit AUv3 editor session container for Vellum iOS view-core.",
+      "platforms": [
+        "ios-device-arm64",
+        "ios-simulator-arm64"
+      ]
     }
   ]
 }
