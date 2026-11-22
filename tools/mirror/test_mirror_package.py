@@ -1410,6 +1410,18 @@ class FrameworkPortsPlanTest(unittest.TestCase):
         self.fixture.write_receipt()
         self.assertRefused("closure was exported against skia archive")
 
+    def test_the_recorded_historical_skia_asset_passes(self) -> None:
+        historical = "dca73c0eee5b0f6d129fe357d0754f7165c6b436051e0de947aeedd3e1bde250"
+        self.fixture.skia_asset = historical
+        for dependency in self.fixture.closure["external_inputs"]:
+            dependency["asset_sha256"] = historical
+        self.fixture.closure["targets"][0]["external_link_inputs"][0]["asset_sha256"] = historical
+        lock = self.fixture.repo / "gpu-runtime/renderer-lock.json"
+        lock.parent.mkdir(parents=True)
+        lock.write_text(json.dumps({"historical_skia_assets": [historical]}), encoding="utf-8")
+        self.fixture.write_receipt()
+        self.fixture.plan()
+
     def test_an_unrecorded_file_is_refused_until_a_ledger_row_adds_it(self) -> None:
         self.fixture.write(self.NEW, b"int ported() { return 2; }\n")
         self.assertRefused("does not list")
