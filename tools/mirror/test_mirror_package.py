@@ -1422,7 +1422,7 @@ class FrameworkPortsPlanTest(unittest.TestCase):
         self.fixture.write_receipt()
         with mock.patch.object(mp, "recorded_historical_skia_assets", wraps=mp.recorded_historical_skia_assets) as recorded:
             self.fixture.plan()
-        recorded.assert_called_once_with(self.fixture.repo)
+        recorded.assert_called_once_with(self.fixture.repo.resolve())
 
     def test_an_unrecorded_file_is_refused_until_a_ledger_row_adds_it(self) -> None:
         self.fixture.write(self.NEW, b"int ported() { return 2; }\n")
