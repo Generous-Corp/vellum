@@ -98,6 +98,7 @@ class VellumRenderer final : public RenderInterface {
     struct CachedTexture {
         std::shared_ptr<const std::string> source;
         std::shared_ptr<const vellum::graphics::MeshTexture> texture;
+        bool decoded = false; // built by the image decoder, not from raw RGBA
     };
     std::unordered_map<const std::string*, CachedTexture> textures_;
     Clock clock_;

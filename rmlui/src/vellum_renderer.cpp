@@ -112,9 +112,13 @@ void VellumRenderer::begin_frame(std::uint32_t width, std::uint32_t height) {
 
 std::shared_ptr<const graphics::MeshTexture>
 VellumRenderer::texture_for(const DrawCommand& command) {
-    if (const auto found = textures_.find(command.texture_bytes.get()); found != textures_.end())
+    const bool decoded = !command.texture_path.empty();
+    if (const auto found = textures_.find(command.texture_bytes.get());
+        found != textures_.end() && found->second.decoded == decoded &&
+        (decoded || (found->second.texture->width == command.texture_width &&
+                     found->second.texture->height == command.texture_height)))
         return found->second.texture;
-    if (command.texture_path.empty()) {
+    if (!decoded) {
         const auto expected =
             static_cast<std::size_t>(command.texture_width) * command.texture_height * 4u;
         if (command.texture_width == 0 || command.texture_height == 0 ||
@@ -125,8 +129,8 @@ VellumRenderer::texture_for(const DrawCommand& command) {
         texture->height = command.texture_height;
         const auto* bytes = reinterpret_cast<const std::uint8_t*>(command.texture_bytes->data());
         texture->premultiplied_rgba.assign(bytes, bytes + expected);
-        textures_.emplace(command.texture_bytes.get(),
-                          CachedTexture{command.texture_bytes, texture});
+        textures_.insert_or_assign(command.texture_bytes.get(),
+                                   CachedTexture{command.texture_bytes, texture, false});
         return texture;
     }
     auto texture = std::make_shared<graphics::MeshTexture>();
@@ -137,7 +141,8 @@ VellumRenderer::texture_for(const DrawCommand& command) {
         texture->premultiplied_rgba.size() !=
             static_cast<std::size_t>(texture->width) * texture->height * 4u)
         return nullptr;
-    textures_.emplace(command.texture_bytes.get(), CachedTexture{command.texture_bytes, texture});
+    textures_.insert_or_assign(command.texture_bytes.get(),
+                               CachedTexture{command.texture_bytes, texture, true});
     return texture;
 }
 

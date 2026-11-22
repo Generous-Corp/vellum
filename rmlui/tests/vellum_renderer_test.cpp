@@ -231,6 +231,17 @@ void check_command_mapping(vellum::graphics::SkiaDawnSurface& surface) {
     cached.submit(cached_image);
     cached.end_frame();
     VELLUM_RMLUI_CHECK(decodes == 2);
+    // The same shared buffer submitted as a raw texture is not served from the
+    // decoded entry: its dimensions are validated against the buffer.
+    auto raw_as_image = cached_image;
+    raw_as_image.texture_path.clear();
+    raw_as_image.texture_width = 5;
+    raw_as_image.texture_height = 5;
+    cached.begin_frame(width, height);
+    cached.submit(cached_image);
+    cached.submit(raw_as_image);
+    cached.end_frame();
+    VELLUM_RMLUI_CHECK(cached.skipped_draws() == 1);
     cached.on_close();
     VELLUM_RMLUI_CHECK(cached.cached_texture_count() == 0);
 }
