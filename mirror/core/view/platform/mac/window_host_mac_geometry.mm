@@ -278,7 +278,36 @@ pulp::view::KeyCode key_code_from_ns(unsigned short code) {
         case 123: return KC::left; case 124: return KC::right;
         case 125: return KC::down; case 126: return KC::up;
         case 115: return KC::home; case 119: return KC::end_;
+        case 116:
+            return KC::page_up;
+        case 121:
+            return KC::page_down;
         case 49: return KC::space;
+        // Function keys (kVK_F1..kVK_F12); the virtual keycodes are not in order.
+        case 122:
+            return KC::f1;
+        case 120:
+            return KC::f2;
+        case 99:
+            return KC::f3;
+        case 118:
+            return KC::f4;
+        case 96:
+            return KC::f5;
+        case 97:
+            return KC::f6;
+        case 98:
+            return KC::f7;
+        case 100:
+            return KC::f8;
+        case 101:
+            return KC::f9;
+        case 109:
+            return KC::f10;
+        case 103:
+            return KC::f11;
+        case 111:
+            return KC::f12;
         default: return KC::unknown;
     }
 }
@@ -369,6 +398,9 @@ NSWindow* create_configured_window(const pulp::view::WindowOptions& options) {
     // window hosts back onto this factory, so the opt-in belongs here rather
     // than in one of them.
     [window setAcceptsMouseMovedEvents:YES];
+
+    // Test runs present into a transparent, click-through window.
+    pulp::platform::make_window_invisible_for_test(window);
 
     return window;
 }

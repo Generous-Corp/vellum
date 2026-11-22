@@ -236,7 +236,7 @@ extern "C" void pulp_mac_text_input_client_category_anchor();
     // THIS window's root, never the process-wide `active_popup_` mirror, which
     // can name another window's (or a hosted plugin editor's) open menu.
     if (!self.rootView) return NO;
-    auto* combo = pulp::view::ComboBox::active_popup_in(*self.rootView);
+    auto* combo = pulp::view::enabled_open_popup_in(*self.rootView);
     if (!combo) return NO;
     float ddx = 0, ddy = 0, ddw = 0, ddh = 0;
     if (!combo->dropdown_window_rect(ddx, ddy, ddw, ddh)) return NO;
@@ -272,10 +272,10 @@ extern "C" void pulp_mac_text_input_client_category_anchor();
     // pump and passes a no-op).
     pulp::view::WheelHost host;
     host.request_repaint = [self] { [self setNeedsDisplay:YES]; };
-    pulp::view::deliver_mouse_wheel(
-        *self.rootView, pt, static_cast<float>(event.scrollingDeltaX),
-        static_cast<float>(-event.scrollingDeltaY),
-        modifiers_from_ns_flags(event.modifierFlags), host);
+    const pulp::view::WheelAttributes attributes{modifiers_from_ns_flags(event.modifierFlags),
+                                                 event.hasPreciseScrollingDeltas == YES};
+    pulp::view::deliver_mouse_wheel(*self.rootView, pt, static_cast<float>(event.scrollingDeltaX),
+                                    static_cast<float>(-event.scrollingDeltaY), attributes, host);
 }
 
 - (void)mouseDown:(NSEvent*)event {
@@ -316,7 +316,8 @@ extern "C" void pulp_mac_text_input_client_category_anchor();
                                    ? _dragTargetCapture.live_in(*root)
                                    : nullptr;
                 if (!root || !target ||
-                    !pulp::view::transfer_input_focus(*root, target)) {
+                    !pulp::view::transfer_input_focus(*root, target,
+                                                      pulp::view::FocusCause::pointer)) {
                     _dragTargetCapture.reset();
                     _focusedView = root
                                        ? pulp::view::focused_input_under_root(*root)
@@ -801,7 +802,7 @@ extern "C" void pulp_mac_text_input_client_category_anchor();
     gke.is_repeat = event.isARepeat;
 
     if (auto* fv = [self liveFocusedView]) {
-        if (fv->on_key_event(gke)) {
+        if (pulp::view::deliver_key_event(*fv, gke)) {
             [self startAnimationTimerIfNeeded];
             [self setNeedsDisplay:YES];
             return YES;
@@ -874,7 +875,7 @@ extern "C" void pulp_mac_text_input_client_category_anchor();
                 ke.modifiers = mods;
                 ke.is_down = true;
                 ke.is_repeat = event.isARepeat;
-                if (fv->on_key_event(ke)) {
+                if (pulp::view::deliver_key_event(*fv, ke)) {
                     [self startAnimationTimerIfNeeded];
                     [self setNeedsDisplay:YES];
                     return;
@@ -891,32 +892,14 @@ extern "C" void pulp_mac_text_input_client_category_anchor();
             else
                 next = pulp::view::View::focus_next(*self.rootView, old);
             if (next && next != old) {
-                pulp::view::ViewCapture next_capture;
-                next_capture.set(next);
-                if (old) {
-                    old->release_input_focus();
-                    old->on_focus_changed(false);
-                }
-                auto* liveRoot = self.rootView;
-                if (!liveRoot) {
-                    _focusedView = nullptr;
-                    [self setNeedsDisplay:YES];
-                    return;
-                }
-                next = next_capture.live_in(*liveRoot);
-                if (!next) {
-                    _focusedView = nullptr;
-                    [self setNeedsDisplay:YES];
-                    return;
-                }
-                _focusedView = next;
-                _focusedView->on_focus_changed(true);
-                liveRoot = self.rootView;
-                _focusedView = liveRoot
-                                   ? next_capture.live_in(*liveRoot)
-                                   : nullptr;
-                if (_focusedView)
-                    _focusedView->claim_input_focus();
+                // The same transfer a click uses: the previous holder blurs,
+                // the new one gains, and each side's ancestors are told, with
+                // the cause recorded as keyboard.
+                if (auto* liveRoot = self.rootView)
+                    pulp::view::transfer_input_focus(*liveRoot, next,
+                                                     pulp::view::FocusCause::keyboard);
+                _focusedView =
+                    self.rootView ? pulp::view::focused_input_under_root(*self.rootView) : nullptr;
             }
             [self setNeedsDisplay:YES];
             return;
@@ -991,7 +974,7 @@ extern "C" void pulp_mac_text_input_client_category_anchor();
                 ke.modifiers = mods;
                 ke.is_down = true;
                 ke.is_repeat = event.isARepeat;
-                fv->on_key_event(ke);
+                pulp::view::deliver_key_event(*fv, ke);
                 [self startAnimationTimerIfNeeded];
                 [self setNeedsDisplay:YES];
             }
@@ -1007,6 +990,18 @@ extern "C" void pulp_mac_text_input_client_category_anchor();
     }
 }
 
+// A modifier key went down or up with no other key. Tell the focused view and
+// any view a pointer press is captured by, so Shift pressed mid-drag takes
+// effect without the pointer moving.
+- (void)flagsChanged:(NSEvent*)event {
+    if (self.rootView) {
+        if (pulp::view::deliver_modifier_keys_changed(*self.rootView,
+                                                      modifiers_from_ns_flags(event.modifierFlags)))
+            [self setNeedsDisplay:YES];
+    }
+    [super flagsChanged:event];
+}
+
 // Symmetric key-up so released keys reach handlers that need both edges — most
 // importantly musical-typing note-off (without this, computer-keyboard notes
 // stick). Routes the global-key hook (is_down=false) then the focused view.
@@ -1019,7 +1014,8 @@ extern "C" void pulp_mac_text_input_client_category_anchor();
             ke.is_down = false;
             if (self.rootView && self.rootView->on_global_key)
                 self.rootView->on_global_key(ke);
-            if (auto* fv = [self liveFocusedView]) fv->on_key_event(ke);
+            if (auto* fv = [self liveFocusedView])
+                pulp::view::deliver_key_event(*fv, ke);
             [self setNeedsDisplay:YES];
         } catch (const std::exception& e) {
             std::cerr << "MacWindowHost keyUp error: " << e.what() << "\n";
@@ -1050,8 +1046,7 @@ extern "C" void pulp_mac_text_input_client_category_anchor();
     }
     if (inspector_cursor >= 0)
         return static_cast<pulp::view::View::CursorStyle>(inspector_cursor);
-    if (auto* target = pulp::view::hover_target_at(*self.rootView, pt)) return target->cursor();
-    return std::nullopt;
+    return pulp::view::hover_cursor_under(*self.rootView, pt);
 }
 
 // AppKit asks the owner of a NSTrackingCursorUpdate area what cursor to show
@@ -1094,6 +1089,9 @@ extern "C" void pulp_mac_text_input_client_category_anchor();
 - (void)refreshHoverCursor {
     if (!self.rootView || !_hoverCursor.has_pointer()) return;
     if (_pointerOverNativeChild) return;
+    // The frame may have slid a different view under a pointer that did not
+    // move; bring hover state in line before resolving the cursor.
+    pulp::view::reevaluate_stationary_hover(*self.rootView);
     auto style = [self resolveHoverCursorAt:_hoverCursor.pointer()];
     if (!style) return;
     if (auto changed = _hoverCursor.poll_resolved(*style))
@@ -1118,9 +1116,8 @@ extern "C" void pulp_mac_text_input_client_category_anchor();
                 // Don't consume — let normal hover handling continue for cursor changes
             }
 
-            if (auto* combo = self.rootView
-                    ? pulp::view::ComboBox::active_popup_in(*self.rootView)
-                    : nullptr) {
+            if (auto* combo =
+                    self.rootView ? pulp::view::enabled_open_popup_in(*self.rootView) : nullptr) {
                 float cx = 0, cy = 0;
                 auto* v = static_cast<pulp::view::View*>(combo);
                 while (v) { cx += v->bounds().x; cy += v->bounds().y; v = v->parent(); }
@@ -1702,7 +1699,7 @@ public:
                 mac_menu::install_application_menu(
                     menu_commands_, [] { pulp::view::mac_lifecycle::request_cocoa_app_stop(); });
                 show();
-                [NSApp activateIgnoringOtherApps:YES];
+                pulp::platform::activate_app_for_window();
             }
             [NSApp run];
             pulp::view::mac_lifecycle::pump_cocoa_main_thread_until(ready_to_return);
@@ -1858,7 +1855,7 @@ public:
     void adopt_foreground_role() {
         if (foreground_role_adopted_) return;
         foreground_role_adopted_ = true;
-        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+        [NSApp setActivationPolicy:pulp::platform::foreground_activation_policy()];
         mac_menu::install_application_menu(
             menu_commands_, [] { pulp::view::mac_lifecycle::request_cocoa_app_stop(); });
     }
@@ -2193,7 +2190,7 @@ public:
             if (!options_initially_hidden_) {
                 show();
                 [window_ makeFirstResponder:metal_view_];
-                [NSApp activateIgnoringOtherApps:YES];
+                pulp::platform::activate_app_for_window();
             }
             [NSApp run];
             pulp::view::mac_lifecycle::pump_cocoa_main_thread_until(ready_to_return);
