@@ -1,0 +1,76 @@
+diff --git a/Include/RmlUi/Core/Context.h b/Include/RmlUi/Core/Context.h
+index bf73811a..a9a31093 100644
+--- a/Include/RmlUi/Core/Context.h
++++ b/Include/RmlUi/Core/Context.h
+@@ -7,0 +8,2 @@
++
++#include <functional>
+@@ -55,0 +58,7 @@ public:
++	using ContentChangedCallback = std::function<void()>;
++
++	/// Sets a callback invoked when document content becomes dirty.
++	void SetContentChangedCallback(ContentChangedCallback callback);
++	/// Notifies the context owner that document content changed.
++	void NotifyContentChanged();
++
+@@ -392,0 +402,2 @@ private:
++	ContentChangedCallback content_changed_callback;
++
+diff --git a/Source/Core/Context.cpp b/Source/Core/Context.cpp
+index 6af67fb5..cdc86c5f 100644
+--- a/Source/Core/Context.cpp
++++ b/Source/Core/Context.cpp
+@@ -22,0 +23 @@
++#include <utility>
+@@ -128,0 +130,11 @@ const String& Context::GetName() const
++void Context::SetContentChangedCallback(ContentChangedCallback callback)
++{
++	content_changed_callback = std::move(callback);
++}
++
++void Context::NotifyContentChanged()
++{
++	if (content_changed_callback)
++		content_changed_callback();
++}
++
+@@ -162,0 +175 @@ void Context::SetDensityIndependentPixelRatio(float dp_ratio)
++		NotifyContentChanged();
+@@ -528,0 +542 @@ bool Context::ProcessKeyDown(Input::KeyIdentifier key_identifier, int key_modifi
++	NotifyContentChanged();
+@@ -541,0 +556 @@ bool Context::ProcessKeyUp(Input::KeyIdentifier key_identifier, int key_modifier
++	NotifyContentChanged();
+@@ -554,0 +570 @@ bool Context::ProcessTextInput(char character)
++	NotifyContentChanged();
+@@ -562,0 +579 @@ bool Context::ProcessTextInput(Character character)
++	NotifyContentChanged();
+@@ -569,0 +587 @@ bool Context::ProcessTextInput(const String& string)
++	NotifyContentChanged();
+@@ -581,0 +600 @@ bool Context::ProcessMouseMove(int x, int y, int key_modifier_state)
++	NotifyContentChanged();
+@@ -622,0 +642 @@ bool Context::ProcessMouseButtonDown(int button_index, int key_modifier_state)
++	NotifyContentChanged();
+@@ -726,0 +747 @@ bool Context::ProcessMouseButtonUp(int button_index, int key_modifier_state)
++	NotifyContentChanged();
+@@ -800,0 +822 @@ bool Context::ProcessMouseWheel(float wheel_delta, int key_modifier_state)
++	NotifyContentChanged();
+@@ -805,0 +828 @@ bool Context::ProcessMouseWheel(Vector2f wheel_delta, int key_modifier_state)
++	NotifyContentChanged();
+@@ -840,0 +864 @@ bool Context::ProcessMouseLeave()
++	NotifyContentChanged();
+diff --git a/Source/Core/Element.cpp b/Source/Core/Element.cpp
+index fa087f95..9baebcae 100644
+--- a/Source/Core/Element.cpp
++++ b/Source/Core/Element.cpp
+@@ -1987,0 +1988 @@ void Element::DirtyLayout()
++	{
+@@ -1988,0 +1990,3 @@ void Element::DirtyLayout()
++		if (Context* context = GetContext())
++			context->NotifyContentChanged();
++	}
+@@ -2494,0 +2499,2 @@ void Element::DirtyStackingContext()
++	if (Context* context = GetContext())
++		context->NotifyContentChanged();
+@@ -2519,0 +2526,2 @@ void Element::DirtyDefinition(DirtyNodes dirty_nodes)
++	if (Context* context = GetContext())
++		context->NotifyContentChanged();

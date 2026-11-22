@@ -4,6 +4,7 @@
 #include <vellum/rmlui/export.hpp>
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -244,6 +245,7 @@ class VELLUM_RMLUI_API Backend {
         return last_load_;
     }
     void render();
+    [[nodiscard]] bool needs_render() const noexcept;
     void close();
     [[nodiscard]] bool is_open() const noexcept {
         return open_;
@@ -266,6 +268,7 @@ class VELLUM_RMLUI_API Backend {
     std::uint32_t height_ = 0;
     float density_ratio_ = 1.0f;
     bool open_ = false;
+    std::atomic_bool content_changed_{true};
     Asset document_;
     std::vector<CustomPropertyRegistration> custom_properties_;
     std::vector<ElementInstancerRegistration> element_instancers_;

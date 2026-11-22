@@ -285,6 +285,7 @@ bool NativeParentHost::set_size(const NativeHostSize& s) {
 }
 void NativeParentHost::idle() {
     if (!impl_->backend.is_open() || !impl_->visible) return;
+    if (!impl_->backend.needs_render()) return;
     impl_->backend.render();
     if (soft_) impl_->present(*soft_, size_.scale);
 }

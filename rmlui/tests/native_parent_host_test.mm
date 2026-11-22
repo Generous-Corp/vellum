@@ -137,7 +137,11 @@ int main() {
         model->on = true;
         VELLUM_RMLUI_CHECK(host.dirty_model("part", "on") == Status::ok);
         host.idle();
+        id changed_contents = child.layer.contents;
+        VELLUM_RMLUI_CHECK(changed_contents != initial_contents);
         VELLUM_RMLUI_CHECK(rgb_at(host, 5, 5) == 0x0000ffu);
+        host.idle();
+        VELLUM_RMLUI_CHECK(child.layer.contents == changed_contents);
 
         // A click reaches the document and writes the model back.
         VELLUM_RMLUI_CHECK(host.process_mouse_move(5, 5) == Status::ok);

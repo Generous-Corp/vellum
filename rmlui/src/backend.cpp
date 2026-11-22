@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -366,6 +367,9 @@ Status Backend::open(std::uint32_t width, std::uint32_t height) {
         return Status::rejected;
     }
     runtime_->context->SetDensityIndependentPixelRatio(density_ratio_);
+    runtime_->context->SetContentChangedCallback([this] {
+        content_changed_.store(true, std::memory_order_release);
+    });
     width_ = width;
     height_ = height;
     open_ = true;
@@ -442,6 +446,7 @@ Status Backend::load_document(std::string_view path) {
         runtime_->document = document;
         runtime_->document->Show();
     }
+    content_changed_.store(true, std::memory_order_release);
     document_ = std::move(asset);
     return Status::ok;
 }
@@ -566,6 +571,8 @@ Status Backend::dirty_model(std::string_view name, std::string_view field) {
     if (it == runtime_->models.end() || field.empty())
         return Status::rejected;
     it->second.handle.DirtyVariable(Rml::String(field));
+    if (runtime_->context)
+        runtime_->context->NotifyContentChanged();
     return Status::ok;
 }
 
@@ -593,6 +600,7 @@ Status Backend::set_element_class(std::string_view element_id, std::string_view 
     if (!element)
         return Status::rejected;
     element->SetClass(Rml::String(class_name), on);
+    runtime_->context->NotifyContentChanged();
     return Status::ok;
 }
 
@@ -668,9 +676,18 @@ bool Backend::mouse_interacting() const noexcept {
     return open_ && runtime_ && runtime_->context && runtime_->context->IsMouseInteracting();
 }
 
+bool Backend::needs_render() const noexcept {
+    if (!open_ || !runtime_ || !runtime_->context)
+        return false;
+    if (content_changed_.load(std::memory_order_acquire))
+        return true;
+    return runtime_->context->GetNextUpdateDelay() != std::numeric_limits<double>::infinity();
+}
+
 void Backend::render() {
     if (!open_)
         return;
+    content_changed_.store(false, std::memory_order_release);
     renderer_.begin_frame(width_, height_);
     if (runtime_ && runtime_->context) {
         detail::AssetScope scope(&assets_, runtime_->scope_prefix, runtime_.get());
@@ -705,6 +722,7 @@ void Backend::close() {
     document_ = {};
     open_ = false;
     width_ = height_ = 0;
+    content_changed_.store(false, std::memory_order_release);
 }
 
 } // namespace vellum::rmlui
