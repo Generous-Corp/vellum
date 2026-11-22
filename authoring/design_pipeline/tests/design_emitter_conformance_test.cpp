@@ -39,7 +39,7 @@
 #include <vellum/view/widget_bridge.hpp>
 #include <vellum/view/widgets.hpp>
 
-#include <catch2/catch_test_macros.hpp>
+#include "mini_test.hpp"
 #include <choc/text/choc_JSON.h>
 
 #include <algorithm>
@@ -833,3 +833,5 @@ TEST_CASE("the conformance comparison reports planted divergences",
         CHECK_FALSE(allows(entry, {"js", "f", "a", "kind", "vellum::view::Checkbox", "x"}));
     }
 }
+
+int main() { return mini_test::run_all(); }

@@ -69,7 +69,7 @@ if(VELLUM_BUILD_TESTS)
     add_executable(vellum-design-emitter-conformance
         tests/design_emitter_conformance_test.cpp)
     target_link_libraries(vellum-design-emitter-conformance
-        PRIVATE vellum-emitter-conformance-baked Vellum::MirrorDesign_import Catch2::Catch2WithMain)
+        PRIVATE vellum-emitter-conformance-baked Vellum::MirrorDesign_import)
     target_compile_definitions(vellum-design-emitter-conformance PRIVATE
         VELLUM_REPO_ROOT="${PROJECT_SOURCE_DIR}")
     add_test(NAME vellum.design-emitter-conformance
