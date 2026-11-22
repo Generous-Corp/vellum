@@ -49,7 +49,7 @@ export function decodeNativeSource(bytes, { sourceKey, sourceHash, sourceType })
             snapshotHash: sourceHash,
         },
         root: irNode(ir.root, '$.root', diagnostics),
-        tokens: irTokens(ir.tokens),
+        tokens: irTokens(ir.tokens, sourceType),
         diagnostics,
     });
     return { backendDiagnostics: diagnostics.map(toBackend), document };
@@ -109,13 +109,26 @@ function irNode(node, path, diagnostics) {
     };
 }
 
-function irTokens(tokens) {
+function irTokens(tokens, sourceType) {
     const entries = [];
+    const typography = new Map();
     for (const [group, type] of [['colors', 'color'], ['dimensions', 'dimension'], ['strings', 'string']]) {
         for (const [name, value] of Object.entries(tokens?.[group] ?? {})) {
-            const tokenValue = type === 'dimension' ? { value, unit: 'px' } : value;
+            let tokenValue = type === 'dimension' ? { value, unit: 'px' } : value;
+            if (sourceType === 'designmd' && typeof tokenValue === 'string') {
+                tokenValue = tokenValue.replace(/^\{colors\.([^{}]+)\}$/, '{$1}');
+                const field = /^(typography\.[^.]+)\.([^.]+)$/.exec(name);
+                if (field) {
+                    const [, family, property] = field;
+                    if (!typography.has(family)) typography.set(family, []);
+                    typography.get(family).push([property, tokenValue]);
+                }
+            }
             entries.push([name, { $type: type, $value: tokenValue }]);
         }
+    }
+    for (const [name, fields] of typography) {
+        entries.push([name, { $type: 'typography', $value: Object.fromEntries(fields) }]);
     }
     return Object.fromEntries(entries);
 }
