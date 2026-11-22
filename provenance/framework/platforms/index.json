@@ -1,0 +1,6 @@
+{
+  "schema": "vellum.framework-platform-index.v1",
+  "platforms": {
+    "linux-x64": "provenance/framework/platforms/linux-x64/record.json"
+  }
+}

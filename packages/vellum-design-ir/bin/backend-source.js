@@ -8,6 +8,7 @@ import {
     parseDesignIR,
 } from '../src/index.js';
 import { decodeFigSource, outlineFigFile } from '../src/fig-file/import.js';
+import { decodeNativeSource, nativeSourceTypes } from './backend-native-source.js';
 import {
     fail,
     isSafeRelativeAsset,
@@ -51,7 +52,7 @@ export async function outlineSource(sourcePath, sourceType) {
 }
 
 export async function loadSource(sourcePath, { captureEnvelope, figFrame, figPage, sourceArchive, sourceKey, sourceType }) {
-    if (!['fig', 'figma', 'design-ir', 'html', 'claude-design'].includes(sourceType)) {
+    if (!['fig', 'figma', 'design-ir', 'html', 'claude-design'].includes(sourceType) && !nativeSourceTypes.has(sourceType)) {
         fail('unsupported_source_type', `Unsupported source type '${sourceType}'`);
     }
     const file = resolve(sourcePath);
@@ -144,6 +145,17 @@ export async function loadSource(sourcePath, { captureEnvelope, figFrame, figPag
                 kind: 'fig', name: basename(file), sha256: sourceHash,
                 frame: resolvedFrame,
             },
+            sourceBytes, sourceHash, sourceName: basename(file),
+        };
+    }
+    if (nativeSourceTypes.has(sourceType)) {
+        const sourceHash = `sha256:${sha256(sourceBytes)}`;
+        const decoded = decodeNativeSource(sourceBytes, { sourceKey, sourceHash, sourceType });
+        return {
+            ...decoded,
+            archiveBytes: null,
+            revision: validateRevision(decoded.document.source.revision),
+            sourceArtifact: { kind: sourceType, name: basename(file), sha256: sourceHash },
             sourceBytes, sourceHash, sourceName: basename(file),
         };
     }
