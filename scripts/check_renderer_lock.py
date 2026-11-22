@@ -32,6 +32,12 @@ ROOT = Path(__file__).resolve().parents[1]
 LOCK = "gpu-runtime/renderer-lock.json"
 SCHEMA = "gpu-runtime.renderer-lock.v2"
 PLATFORM = "macos-arm64"
+BUILDER_CHANGE_EXCEPTION = {
+    "from": "312f05e24a5d5a45d4a3e70ca70ff3ccff1b4d97",
+    "to": "1b97010d2f025b4331a9c0db9481c440d1f33042",
+    "skia": "be7d7c3e996e567eda7dc9774274f7a0103cdb8c",
+    "dawn": "1716e88cc9e58398fab5d4473f7f2e858667b677",
+}
 HEX_64 = re.compile(r"\b[0-9a-f]{64}\b")
 # Any-case digests in other files: an UPPERCASE hand copy is still a copy.
 ANY_HEX_64 = re.compile(r"\b[0-9a-fA-F]{64}\b")
@@ -78,6 +84,10 @@ def load_lock(root: Path, problems: list[str]) -> dict | None:
                          ("sources.dawn", sources.get("dawn"))):
         if not isinstance(value, str) or not HEX_40.fullmatch(value):
             problems.append(f"{LOCK}: {label} is not a 40-character commit")
+    if lock.get("builder_change_exception") != BUILDER_CHANGE_EXCEPTION:
+        problems.append(f"{LOCK}: builder change is not the recorded attested exception")
+    elif builder.get("commit") != BUILDER_CHANGE_EXCEPTION["to"]:
+        problems.append(f"{LOCK}: builder commit is not the recorded attested exception target")
     platform = (lock.get("platforms") or {}).get(PLATFORM)
     if not isinstance(platform, dict):
         problems.append(f"{LOCK}: platform {PLATFORM} is missing")
