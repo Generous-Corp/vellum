@@ -3605,6 +3605,34 @@ class RendererPinTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertTrue(rows[0]["matches_lock"])
 
+    def test_historical_assets_must_be_a_list_of_full_digests(self) -> None:
+        renderer_path = self.root / "gpu-runtime/renderer-lock.json"
+        renderer = json.loads(renderer_path.read_text())
+        renderer["historical_skia_assets"] = ""
+        renderer_path.write_text(json.dumps(renderer))
+        receipt = self.receipt(self.pulp_commit(self.matching_pin))
+        errors, _ = verify_extraction.renderer_pin_errors(self.root, self.pulp, [receipt])
+        self.assertTrue(errors)
+        self.assertIn("historical_skia_assets", errors[0])
+
+        renderer["historical_skia_assets"] = ["a" * 63]
+        renderer_path.write_text(json.dumps(renderer))
+        errors, _ = verify_extraction.renderer_pin_errors(self.root, self.pulp, [receipt])
+        self.assertTrue(errors)
+        self.assertIn("historical_skia_assets", errors[0])
+
+    def test_historical_asset_requires_full_archive_sha(self) -> None:
+        renderer_path = self.root / "gpu-runtime/renderer-lock.json"
+        renderer = json.loads(renderer_path.read_text())
+        renderer["historical_skia_assets"] = ["a" * 64]
+        renderer_path.write_text(json.dumps(renderer))
+        pin = json.loads(json.dumps(self.matching_pin))
+        pin["release_assets"]["mac-universal"]["sha256"] = ""
+        receipt = self.receipt(self.pulp_commit(pin))
+        errors, _ = verify_extraction.renderer_pin_errors(self.root, self.pulp, [receipt])
+        self.assertTrue(errors)
+        self.assertIn("archive_sha256", errors[0])
+
     def test_an_unrecorded_builder_change_is_refused(self) -> None:
         pin = json.loads(json.dumps(self.matching_pin))
         pin["skia_builder_ref"] = "9" * 40
@@ -3734,6 +3762,47 @@ class RendererPinTests(unittest.TestCase):
                                       "mirror_tree": new_tree}), encoding="utf-8")
         errors, _ = verify_extraction.mirror_renderer_pin_check(self.root, self.pulp, [older, newest])
         self.assertIn("which is not a landed receipt", errors[0])
+
+    def test_transfer_successor_cannot_name_an_older_landed_receipt(self) -> None:
+        old_tree = self.commit_mirror(b"old\n")
+        older = self.landed("older", self.pulp_commit(self.matching_pin), old_tree)
+        new_tree = self.commit_mirror(b"new\n")
+        newest = self.landed("newest", self.pulp_commit(self.other_milestone()), new_tree)
+        git = ["git", "-C", str(self.root), "-c", "user.name=t", "-c", "user.email=t@t"]
+        subprocess.run(git + ["rm", "-q", "-r", "mirror"], check=True)
+        (self.root / "framework").mkdir()
+        (self.root / "framework/a.cpp").write_bytes(b"new\n")
+        subprocess.run(git + ["add", "framework"], check=True)
+        subprocess.run(git + ["commit", "-q", "-m", "transfer"], check=True)
+        record = self.root / verify_extraction.FRAMEWORK_TRANSFER_RECORD
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(json.dumps({"export_receipt": older, "mirror_tree": old_tree}), encoding="utf-8")
+        successor = self.root / verify_extraction.FRAMEWORK_TRANSFER_SUCCESSOR
+        successor.write_text(json.dumps({"export_receipt": older, "mirror_tree": old_tree}), encoding="utf-8")
+        errors, _ = verify_extraction.mirror_renderer_pin_check(self.root, self.pulp, [older, newest])
+        self.assertTrue(errors)
+        self.assertIn("successor", errors[0])
+
+    def test_malformed_transfer_successor_is_refused(self) -> None:
+        old_tree = self.commit_mirror(b"old\n")
+        older = self.landed("older", self.pulp_commit(self.matching_pin), old_tree)
+        git = ["git", "-C", str(self.root), "-c", "user.name=t", "-c", "user.email=t@t"]
+        subprocess.run(git + ["rm", "-q", "-r", "mirror"], check=True)
+        (self.root / "framework").mkdir()
+        (self.root / "framework/a.cpp").write_bytes(b"old\n")
+        subprocess.run(git + ["add", "framework"], check=True)
+        subprocess.run(git + ["commit", "-q", "-m", "transfer"], check=True)
+        record = self.root / verify_extraction.FRAMEWORK_TRANSFER_RECORD
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(json.dumps({"export_receipt": older, "mirror_tree": old_tree}), encoding="utf-8")
+        successor = self.root / verify_extraction.FRAMEWORK_TRANSFER_SUCCESSOR
+        successor.write_text("[]", encoding="utf-8")
+        errors, _ = verify_extraction.mirror_renderer_pin_check(self.root, self.pulp, [older])
+        self.assertTrue(errors)
+        self.assertIn("successor", errors[0])
+
+    def test_transfer_successor_is_framework_data(self) -> None:
+        self.assertIn(verify_extraction.FRAMEWORK_TRANSFER_SUCCESSOR, verify_extraction.FRAMEWORK_DATA_FILES)
 
     def test_transfer_successor_names_the_current_receipt(self) -> None:
         old_tree = self.commit_mirror(b"old\n")
