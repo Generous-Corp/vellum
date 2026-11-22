@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Negative controls for the installed-dylib symbol census."""
+"""Tests for the installed-dylib symbol census and runtime identity."""
 
 from __future__ import annotations
 
 import contextlib
 import importlib.util
 import io
+import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -59,6 +61,83 @@ def classes(*names: str) -> str:
     rows = ["Contents of (__DATA,__objc_classlist) section"]
     rows += [f"0000000000004000 0x5000 _OBJC_CLASS_$_{n}" for n in names]
     return "\n".join(rows) + "\n"
+
+
+class MirrorRuntimeIdentityTest(unittest.TestCase):
+    def test_two_runtime_identities_use_disjoint_macho_and_objc_names(self) -> None:
+        cmake = (HERE / "VellumMirror.cmake").read_text(encoding="utf-8")
+        self.assertIn('OUTPUT_NAME "vellum-mirror-${_vellum_mirror_unit}${VELLUM_RUNTIME_IDENTITY_SUFFIX}"', cmake)
+        self.assertIn('OUTPUT_NAME "vellum-skia-dawn-provider${VELLUM_RUNTIME_IDENTITY_SUFFIX}"', cmake)
+        self.assertIn("PULP_VIEW_OBJC_SUFFIX=${VELLUM_RUNTIME_OBJC_SUFFIX}", cmake)
+        self.assertIn("string(SHA256 _vellum_runtime_identity_hash", cmake)
+
+    def test_recomputed_identity_replaces_a_stale_cache_entry(self) -> None:
+        cmake = (HERE / "VellumMirror.cmake").read_text(encoding="utf-8")
+        start = cmake.index('set(VELLUM_RUNTIME_IDENTITY_TAG "${VELLUM_RUNTIME_IDENTITY_TAG}"')
+        stmt = cmake[start:cmake.index(")\n", start)]
+        self.assertIn("CACHE INTERNAL", stmt)
+        self.assertRegex(stmt, r"\bFORCE\b")
+
+    def test_sdl_objc_rename_uses_the_registered_provided_target(self) -> None:
+        cmake = (HERE / "VellumMirror.cmake").read_text(encoding="utf-8")
+        match = re.search(r"        if\([^\n]*APPLE\)\n            foreach\(_sdl_class", cmake)
+        self.assertIsNotNone(match)
+        start = match.start()
+        end = cmake.index("        endif()", start) + len("        endif()")
+        condition = re.sub(
+            r'target_compile_definitions\("\$\{_provided\}" PRIVATE.*?\)',
+            'set(_sdl_rename_taken TRUE)',
+            cmake[start:end],
+            flags=re.DOTALL,
+        )
+        registration = (HERE / "mirror_package.py").read_text(encoding="utf-8")
+        self.assertIn('"sdl3":', registration)
+        self.assertIn('"provides": ["SDL3-static"]', registration)
+        script = "\n".join((
+            'set(_vellum_mirror_dep_name "sdl3")',
+            'string(MAKE_C_IDENTIFIER "${_vellum_mirror_dep_name}" _key)',
+            'string(TOUPPER "${_key}" _key)',
+            'set(_provided "SDL3-static")',
+            'set(APPLE TRUE)',
+            condition,
+            'if(NOT _sdl_rename_taken)',
+            'message(FATAL_ERROR "SDL rename branch was not taken")',
+            'endif()',
+        )) + "\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            script_path = Path(tmp) / "sdl-rename.cmake"
+            script_path.write_text(script, encoding="utf-8")
+            result = subprocess.run(["cmake", "-P", str(script_path)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+
+    @unittest.skipUnless(os.environ.get("VELLUM_RUNTIME_IDENTITY_BUILD"),
+                         "requires a built macOS mirror runtime")
+    def test_dylib_and_objc_names_include_build_identity(self) -> None:
+        build = Path(os.environ["VELLUM_RUNTIME_IDENTITY_BUILD"])
+        identity = os.environ["VELLUM_RUNTIME_IDENTITY_TAG"]
+        objc_suffix = "_" + identity.replace("-", "_").replace(".", "_")
+        images = sorted(build.glob("libvellum-mirror-*.dylib"))
+        self.assertTrue(images, f"no mirror dylibs in {build}")
+        providers = sorted(build.glob("libvellum-skia-dawn-provider*.dylib"))
+        self.assertEqual(len(providers), 1, f"expected one provider in {build}")
+
+        findings = []
+        classes_seen = set()
+        for image in [*images, *providers]:
+            result = subprocess.run(["otool", "-D", str(image)], check=True,
+                                    capture_output=True, text=True)
+            _, install_name = result.stdout.splitlines()
+            if install_name != f"@rpath/{image.name}" or not image.name.endswith(f"-{identity}.dylib"):
+                findings.append(f"{image.name}: {install_name}")
+            for name in sorted(sc.objc_classes(sc.run_otool(image))):
+                classes_seen.add(name)
+                if not name.endswith(objc_suffix):
+                    findings.append(f"{image.name}: Objective-C class {name}")
+
+        self.assertTrue(any(name.startswith("VellumMirrorMetalView") for name in classes_seen),
+                        "the selected dylibs do not define the plug-in's Metal view base class")
+        if findings:
+            self.fail("\n".join(findings))
 
 
 class SymbolCensusTest(unittest.TestCase):
@@ -295,6 +374,45 @@ class SymbolCensusTest(unittest.TestCase):
         undefined = "                 (undefined) external " + FN
         _, findings = run({"a.dylib": listing(sym(FN)), "b.dylib": listing(undefined)})
         self.assertEqual(findings, [])
+
+
+class RuntimeIdentityRevisionCheckTest(unittest.TestCase):
+    """The configure-time source revision check must accept a real commit id."""
+
+    def test_cmake_revision_check_accepts_a_full_sha_and_rejects_junk(self) -> None:
+        text = (HERE / "VellumMirror.cmake").read_text()
+        start = text.index("string(LENGTH \"${_vellum_runtime_source_revision}\"")
+        end = text.index("endif()", start) + len("endif()")
+        check = text[start:end].replace(
+            'message(FATAL_ERROR "Vellum: runtime identity needs an authoritative source revision")',
+            'set(rejected TRUE)')
+        for revision, rejected in (("4a13b98d8678ccdcfdb100b097de212708032482", False),
+                                   ("4a13b98", False), ("xyz", True), ("4a13", True), ("", True)):
+            with self.subTest(revision=revision), tempfile.TemporaryDirectory() as tmp:
+                script = Path(tmp) / "check.cmake"
+                script.write_text(
+                    f'set(_vellum_runtime_source_revision "{revision}")\n'
+                    "set(_vellum_runtime_source_result 0)\nset(rejected FALSE)\n"
+                    f"{check}\nif(rejected)\nmessage(\"REJECTED\")\nelse()\nmessage(\"ACCEPTED\")\nendif()\n")
+                out = subprocess.run(["cmake", "-P", str(script)], capture_output=True, text=True)
+                self.assertIn("REJECTED" if rejected else "ACCEPTED", out.stderr + out.stdout)
+
+
+class ConsumerProviderPathTest(unittest.TestCase):
+    """RunMirrorConsumer must keep the provider path from runtime-images.json."""
+
+    def test_provider_path_is_never_reset_to_an_unsuffixed_name(self) -> None:
+        text = (HERE / "RunMirrorConsumer.cmake").read_text()
+        assigns = re.findall(r"^\s*set\(_provider\s+\"[^\n]*$", text, re.M)
+        self.assertEqual(assigns, ['set(_provider "${_prefix}/${_provider_relative}")'])
+        self.assertNotIn("libvellum-skia-dawn-provider.dylib", text)
+
+    def test_gpu_device_archive_gets_the_objc_suffix(self) -> None:
+        text = (HERE / "VellumMirror.cmake").read_text()
+        self.assertRegex(
+            text,
+            r"target_compile_definitions\(gpu-runtime-device-provider PRIVATE\s+"
+            r"GPU_RUNTIME_OBJC_SUFFIX=\$\{VELLUM_RUNTIME_OBJC_SUFFIX\}\)")
 
 
 if __name__ == "__main__":

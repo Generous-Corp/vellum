@@ -37,6 +37,13 @@ function(_run label)
 endfunction()
 
 _run("install" "${CMAKE_COMMAND}" --install "${VELLUM_BUILD_DIR}" --prefix "${_prefix}")
+file(READ "${_prefix}/share/vellum/runtime-images.json" _runtime_images)
+string(JSON _provider_relative GET "${_runtime_images}" provider)
+string(JSON _canvas_relative GET "${_runtime_images}" canvas)
+set(_provider "${_prefix}/${_provider_relative}")
+set(_canvas "${_prefix}/${_canvas_relative}")
+get_filename_component(_provider_name "${_provider}" NAME)
+get_filename_component(_canvas_name "${_canvas}" NAME)
 file(GLOB_RECURSE _package_files "${_prefix}/*.cmake")
 foreach(_package_file IN LISTS _package_files)
     file(READ "${_package_file}" _contents)
@@ -203,7 +210,6 @@ if(DEFINED ENV{VELLUM_MIRROR_LIVE_GPU})
     endif()
 endif()
 
-set(_provider "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-skia-dawn-provider.dylib")
 find_program(_nm nm REQUIRED)
 set(_provider_census "${Python3_EXECUTABLE}" -I
     "${VELLUM_SOURCE_DIR}/tools/mirror/provider_symbol_census.py"
@@ -292,6 +298,7 @@ message(STATUS "${_last_stdout}")
 # cannot link a second pinned Dawn archive through this package boundary. The
 # no-proc-reference check below is the strongest installed-consumer proof, while
 # the provider's own whole-archive link remains the sole Dawn definition.
+find_program(_nm nm REQUIRED)
 execute_process(COMMAND "${_nm}" -gU "${_provider}"
     RESULT_VARIABLE _provider_nm_result OUTPUT_VARIABLE _provider_nm ERROR_VARIABLE _provider_nm_error)
 if(NOT _provider_nm_result EQUAL 0 OR
@@ -372,16 +379,15 @@ set(VELLUM_MIRROR_PREFIX "" CACHE PATH "Installed Vellum prefix")
 set(VELLUM_INSTALL_LIBDIR "lib" CACHE STRING "Installed Vellum library directory")
 add_library(vellum-mirror-direct SHARED IMPORTED)
 set_target_properties(vellum-mirror-direct PROPERTIES
-    IMPORTED_LOCATION "${VELLUM_MIRROR_PREFIX}/mirror/lib/libvellum-mirror-canvas.dylib"
+    IMPORTED_LOCATION "${VELLUM_MIRROR_CANVAS}"
     INTERFACE_INCLUDE_DIRECTORIES "${VELLUM_MIRROR_PREFIX}/mirror/include")
 add_executable(vellum-mirror-direct-consumer direct_main.cpp)
 target_link_libraries(vellum-mirror-direct-consumer PRIVATE vellum-mirror-direct)
-# Retain only libvellum-mirror-canvas.dylib as the explicit link input; the
-# installed prefix also supplies the runtime search paths below.
+# Retain only the canvas dylib as the explicit link input.
 target_link_directories(vellum-mirror-direct-consumer PRIVATE
     "${VELLUM_MIRROR_PREFIX}/${VELLUM_INSTALL_LIBDIR}")
 target_link_options(vellum-mirror-direct-consumer PRIVATE
-    "LINKER:-needed_library,${VELLUM_MIRROR_PREFIX}/mirror/lib/libvellum-mirror-canvas.dylib")
+    "LINKER:-needed_library,${VELLUM_MIRROR_CANVAS}")
 set_target_properties(vellum-mirror-direct-consumer PROPERTIES
     BUILD_RPATH "${VELLUM_MIRROR_PREFIX}/mirror/lib;${VELLUM_MIRROR_PREFIX}/${VELLUM_INSTALL_LIBDIR}")
 ]=])
@@ -391,21 +397,24 @@ _run("direct consumer configure" "${CMAKE_COMMAND}"
     -S "${_work}/direct" -B "${_work}/direct-build"
     ${_generator} -DCMAKE_BUILD_TYPE=Release
     "-DVELLUM_MIRROR_PREFIX=${_prefix}"
-    "-DVELLUM_INSTALL_LIBDIR=${VELLUM_INSTALL_LIBDIR}")
+    "-DVELLUM_INSTALL_LIBDIR=${VELLUM_INSTALL_LIBDIR}"
+    "-DVELLUM_MIRROR_CANVAS=${_canvas}")
 _run("direct consumer build" "${CMAKE_COMMAND}" --build "${_work}/direct-build")
-_run("direct consumer run" "${_work}/direct-build/vellum-mirror-direct-consumer")
+_run("direct consumer run" "${_work}/direct-build/vellum-mirror-direct-consumer"
+    "@rpath/${_canvas_name}" "${_provider_name}")
 
 # Keep the ABI assertion explicit so a future change cannot make this fixture
 # pass by hiding the re-export behind target transitivity or a second provider
 # definition.
 find_program(_otool otool REQUIRED)
 execute_process(
-    COMMAND "${_otool}" -L "${_prefix}/mirror/lib/libvellum-mirror-canvas.dylib"
+    COMMAND "${_otool}" -L "${_canvas}"
     RESULT_VARIABLE _mirror_otool_result
     OUTPUT_VARIABLE _mirror_otool
     ERROR_VARIABLE _mirror_otool_error)
+string(FIND "${_mirror_otool}" "@rpath/${_provider_name} (" _mirror_provider_link)
 if(NOT _mirror_otool_result EQUAL 0 OR
-   NOT _mirror_otool MATCHES "libvellum-skia-dawn-provider\\.dylib" OR
+   _mirror_provider_link EQUAL -1 OR
    NOT _mirror_otool MATCHES "reexport")
     message(FATAL_ERROR
         "MirrorCanvas does not carry the provider re-export contract:\n"
@@ -434,7 +443,7 @@ target_include_directories(vellum-gpu-direct-consumer PRIVATE
 target_link_directories(vellum-gpu-direct-consumer PRIVATE
     "${VELLUM_MIRROR_PREFIX}/${VELLUM_INSTALL_LIBDIR}")
 target_link_options(vellum-gpu-direct-consumer PRIVATE
-    "LINKER:-dylib_file,@rpath/libvellum-skia-dawn-provider.dylib:${VELLUM_MIRROR_PREFIX}/${VELLUM_INSTALL_LIBDIR}/libvellum-skia-dawn-provider.dylib")
+    "LINKER:-dylib_file,@rpath/${VELLUM_PROVIDER_NAME}:${VELLUM_PROVIDER_PATH}")
 ]=])
 file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/direct_gpu_main.cpp"
     DESTINATION "${_work}/direct-gpu")
@@ -442,7 +451,9 @@ _run("direct GPU consumer configure" "${CMAKE_COMMAND}"
     -S "${_work}/direct-gpu" -B "${_work}/direct-gpu-build"
     ${_generator} -DCMAKE_BUILD_TYPE=Release
     "-DVELLUM_MIRROR_PREFIX=${_prefix}"
-    "-DVELLUM_INSTALL_LIBDIR=${VELLUM_INSTALL_LIBDIR}")
+    "-DVELLUM_INSTALL_LIBDIR=${VELLUM_INSTALL_LIBDIR}"
+    "-DVELLUM_PROVIDER_PATH=${_provider}"
+    "-DVELLUM_PROVIDER_NAME=${_provider_name}")
 _run("direct GPU consumer build" "${CMAKE_COMMAND}" --build "${_work}/direct-gpu-build")
 
 # A local mirror-consumer run may not have a live GPU even when the installed
@@ -481,17 +492,18 @@ _run("runtime image census build" "${CMAKE_COMMAND}"
     --build "${_work}/runtime-census-build")
 _run("runtime image census"
     "${_work}/runtime-census-build/vellum-runtime-image-census"
-    "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-skia-dawn-provider.dylib"
+    "${_provider}"
     "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-gpu.dylib"
-    "${_prefix}/mirror/lib/libvellum-mirror-canvas.dylib")
+    "${_canvas}")
 
 execute_process(
     COMMAND "${_otool}" -L "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-gpu.dylib"
     RESULT_VARIABLE _gpu_otool_result
     OUTPUT_VARIABLE _gpu_otool
     ERROR_VARIABLE _gpu_otool_error)
+string(FIND "${_gpu_otool}" "@rpath/${_provider_name} (" _gpu_provider_link)
 if(NOT _gpu_otool_result EQUAL 0 OR
-   NOT _gpu_otool MATCHES "libvellum-skia-dawn-provider\\.dylib" OR
+   _gpu_provider_link EQUAL -1 OR
    NOT _gpu_otool MATCHES "reexport")
     message(FATAL_ERROR
         "GPU frontend does not carry the provider re-export contract:\n"
@@ -507,15 +519,12 @@ message(STATUS "GPU provider re-export metadata: ok")
 find_program(_install_name_tool install_name_tool REQUIRED)
 set(_cross_image_dir "${_work}/cross-image")
 file(MAKE_DIRECTORY "${_cross_image_dir}")
-set(_provider "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-skia-dawn-provider.dylib")
-set(_duplicate "${_cross_image_dir}/libvellum-skia-dawn-provider-duplicate.dylib")
-file(COPY "${_provider}" DESTINATION "${_cross_image_dir}")
-file(RENAME
-    "${_cross_image_dir}/libvellum-skia-dawn-provider.dylib"
-    "${_duplicate}")
+set(_duplicate_name "duplicate-${_provider_name}")
+set(_duplicate "${_cross_image_dir}/${_duplicate_name}")
+file(COPY_FILE "${_provider}" "${_duplicate}")
 execute_process(
     COMMAND "${_install_name_tool}" -id
-        "@rpath/libvellum-skia-dawn-provider-duplicate.dylib" "${_duplicate}"
+        "@rpath/${_duplicate_name}" "${_duplicate}"
     RESULT_VARIABLE _duplicate_id_result
     OUTPUT_VARIABLE _duplicate_id_stdout
     ERROR_VARIABLE _duplicate_id_stderr)
@@ -558,7 +567,7 @@ execute_process(
         "${_work}/consumer/vellum-mirror-consumer"
         "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-gpu.dylib"
         "${_provider}"
-        "${_prefix}/mirror/lib/libvellum-mirror-canvas.dylib"
+        "${_canvas}"
         "${_duplicate}"
     RESULT_VARIABLE _duplicate_census_result
     OUTPUT_VARIABLE _duplicate_census_stdout
@@ -575,8 +584,8 @@ _run("shared provider symbol ownership" "${Python3_EXECUTABLE}"
     "${VELLUM_SOURCE_DIR}/graphics/tests/test_dawn_provider_topology.py"
     "${_work}/consumer/vellum-mirror-consumer"
     "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-gpu.dylib"
-    "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-skia-dawn-provider.dylib"
-    "${_prefix}/mirror/lib/libvellum-mirror-canvas.dylib")
+    "${_provider}"
+    "${_canvas}")
 _run("Phase-6 debt inertness" "${Python3_EXECUTABLE}"
     "${VELLUM_SOURCE_DIR}/tools/mirror/verify_mirror_inertness.py"
     --prefix "${_prefix}" --install-libdir "${VELLUM_INSTALL_LIBDIR}"
