@@ -343,5 +343,27 @@ class SymbolCensusTest(unittest.TestCase):
         self.assertEqual(findings, [])
 
 
+class RuntimeIdentityRevisionCheckTest(unittest.TestCase):
+    """The configure-time source revision check must accept a real commit id."""
+
+    def test_cmake_revision_check_accepts_a_full_sha_and_rejects_junk(self) -> None:
+        text = (HERE / "VellumMirror.cmake").read_text()
+        start = text.index("string(LENGTH \"${_vellum_runtime_source_revision}\"")
+        end = text.index("endif()", start) + len("endif()")
+        check = text[start:end].replace(
+            'message(FATAL_ERROR "Vellum: runtime identity needs an authoritative source revision")',
+            'set(rejected TRUE)')
+        for revision, rejected in (("4a13b98d8678ccdcfdb100b097de212708032482", False),
+                                   ("4a13b98", False), ("xyz", True), ("4a13", True), ("", True)):
+            with self.subTest(revision=revision), tempfile.TemporaryDirectory() as tmp:
+                script = Path(tmp) / "check.cmake"
+                script.write_text(
+                    f'set(_vellum_runtime_source_revision "{revision}")\n'
+                    "set(_vellum_runtime_source_result 0)\nset(rejected FALSE)\n"
+                    f"{check}\nif(rejected)\nmessage(\"REJECTED\")\nelse()\nmessage(\"ACCEPTED\")\nendif()\n")
+                out = subprocess.run(["cmake", "-P", str(script)], capture_output=True, text=True)
+                self.assertIn("REJECTED" if rejected else "ACCEPTED", out.stderr + out.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

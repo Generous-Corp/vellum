@@ -50,8 +50,11 @@ execute_process(
     OUTPUT_VARIABLE _vellum_runtime_source_revision
     OUTPUT_STRIP_TRAILING_WHITESPACE
     RESULT_VARIABLE _vellum_runtime_source_result)
+# CMake regular expressions have no {n,m} interval, so the length is checked apart.
+string(LENGTH "${_vellum_runtime_source_revision}" _vellum_runtime_source_length)
 if(NOT _vellum_runtime_source_result EQUAL 0 OR
-   NOT _vellum_runtime_source_revision MATCHES "^[0-9a-fA-F]{7,64}$")
+   NOT _vellum_runtime_source_revision MATCHES "^[0-9a-fA-F]+$" OR
+   _vellum_runtime_source_length LESS 7 OR _vellum_runtime_source_length GREATER 64)
     message(FATAL_ERROR "Vellum: runtime identity needs an authoritative source revision")
 endif()
 file(SHA256 "${PROJECT_SOURCE_DIR}/gpu-runtime/renderer-lock.json" _vellum_runtime_renderer_pin)
