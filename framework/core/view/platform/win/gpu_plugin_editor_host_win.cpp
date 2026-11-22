@@ -58,12 +58,12 @@ public:
     ~WinPluginViewHost() override {
         if (hwnd_)
             SetWindowLongPtrW(hwnd_, GWLP_USERDATA, 0);
+        invalidate_gpu_surface();
         skia_.reset();
         gpu_.reset();
         if (hwnd_)
             DestroyWindow(hwnd_);
         hwnd_ = nullptr;
-        publish_gpu_surface(nullptr, GpuSurfaceState::unavailable);
     }
 
     NativeViewHandle native_handle() override { return hwnd_; }
@@ -213,8 +213,8 @@ private:
             render::GpuSurface::AdapterBackendPreference::d3d12;
         config.native_surface_handle = hwnd_;
         if (!gpu_->initialize(config)) {
+            invalidate_gpu_surface();
             gpu_.reset();
-            publish_gpu_surface(nullptr, GpuSurfaceState::unavailable);
             return;
         }
         render::SkiaSurface::Config skia_config;
@@ -223,9 +223,9 @@ private:
         skia_config.scale_factor = scale;
         skia_ = render::SkiaSurface::create(*gpu_, skia_config);
         if (!skia_ || !skia_->is_available()) {
+            invalidate_gpu_surface();
             skia_.reset();
             gpu_.reset();
-            publish_gpu_surface(nullptr, GpuSurfaceState::unavailable);
             return;
         }
         gpu_ready_ = true;
