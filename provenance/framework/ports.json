@@ -1036,30 +1036,6 @@
       "reason": "Centralizes the Graphite raster options used by the plug-in editor surface and its regression test."
     },
     {
-      "framework_path": "framework/integrations/vellum-auv3-ios/ios_au_editor_controller.h",
-      "change": "added",
-      "target": null,
-      "origin": "native",
-      "pulp_path": null,
-      "pulp_commits": [],
-      "framework_blob": null,
-      "reason": "CoreAudioKit AUv3 controller for Vellum iOS extensions."
-    },
-    {
-      "framework_path": "framework/integrations/vellum-auv3-ios/ios_au_editor_controller.mm",
-      "change": "added",
-      "target": "vellum-auv3-ios-integration",
-      "origin": "native",
-      "pulp_path": null,
-      "pulp_commits": [],
-      "framework_blob": null,
-      "reason": "AUv3 controller lifecycle integration for Vellum iOS extensions.",
-      "platforms": [
-        "ios-device-arm64",
-        "ios-simulator-arm64"
-      ]
-    },
-    {
       "framework_path": "framework/core/view/include/vellum/view/platform/ios_au_editor_controller.h",
       "change": "added",
       "target": null,

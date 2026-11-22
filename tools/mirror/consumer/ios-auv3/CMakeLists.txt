@@ -12,7 +12,7 @@ set(controller_test "${vellum_root}/tools/framework-tests/ios_au_editor_controll
 # Compile the UIKit contract in view-core and the AU-facing controller in its
 # extension integration target.
 add_library(vellum-ios-auv3-integration STATIC
-    "${vellum_root}/framework/integrations/vellum-auv3-ios/ios_au_editor_controller.mm")
+    "${vellum_root}/integrations/vellum-auv3-ios/ios_au_editor_controller.mm")
 set_target_properties(vellum-ios-auv3-integration PROPERTIES OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED ON)
 target_compile_options(vellum-ios-auv3-integration PRIVATE
     -fno-objc-arc -fapplication-extension -Werror=protocol -Werror=objc-method-access)
@@ -56,7 +56,7 @@ if(VELLUM_IOS_AUV3_LINK_TEST)
     target_include_directories(vellum-ios-auv3-controller-test PRIVATE
         "${vellum_root}/framework" "${vellum_root}/integrations")
     target_sources(vellum-ios-auv3-controller-test PRIVATE
-        "${vellum_root}/framework/integrations/vellum-auv3-ios/ios_au_editor_controller.mm"
+        "${vellum_root}/integrations/vellum-auv3-ios/ios_au_editor_controller.mm"
         "${view_root}/platform/ios/ios_au_editor_controller.mm")
     target_link_libraries(vellum-ios-auv3-controller-test PRIVATE
         Vellum::MirrorView_core "-framework CoreAudioKit" "-framework AudioToolbox" "-framework UIKit")
