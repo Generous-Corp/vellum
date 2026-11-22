@@ -38,7 +38,7 @@ foreach(_case IN ITEMS clean private near_match genex alias unlinked_renderer un
             "-DVELLUM_RMLUI_MODULE_DIR=${PROJECT_SOURCE_DIR}"
             "-DPLANT=${_case}")
     if(_case STREQUAL "clean")
-        continue()
+        set(_expect "rmlui-link-boundary: [0-9]+ targets checked; only vellum-rmlui-vellum-renderer and vellum-rmlui-plugin-view may link Vellum")
     elseif(_case STREQUAL "private")
         set(_expect "rmlui-link-boundary: vellum-rmlui-native links Vellum::Gpu")
     elseif(_case STREQUAL "near_match")
