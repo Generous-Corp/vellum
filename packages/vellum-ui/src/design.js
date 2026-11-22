@@ -269,45 +269,44 @@ function retainedStyle(context, node, viewport, root) {
         style.backgroundColor = colorSlot(context, refs, 'backgroundColor', paint.backgroundColor);
     }
     if (drawsBox && paint.boxShadow !== undefined) {
-        const shadows = Array.isArray(paint.boxShadow) ? paint.boxShadow : [paint.boxShadow];
-        if (shadows.some((shadow) => !shadow || typeof shadow !== 'object')) {
+        const shadow = paint.boxShadow;
+        if (!shadow || typeof shadow !== 'object') {
             throw new TypeError(`design node ${node.id} paint.boxShadow must be an object`);
         }
-        const retainedShadows = shadows.map((shadow) => ({
+        style.boxShadow = {
             ...paintNumbers(shadow, ['offsetX', 'offsetY', 'blurRadius', 'spreadRadius']),
             color: colorSlot(context, refs, 'boxShadow', shadow.color),
-        }));
-        style.boxShadow = retainedShadows.length === 1 ? retainedShadows[0] : retainedShadows;
+        };
     }
     if (drawsBox && paint.backgroundLinearGradient !== undefined) {
         style.backgroundLinearGradient = retainedGradient(
             context, refs, 'backgroundLinearGradient', paint.backgroundLinearGradient);
     }
-    if (drawsBox && paint.backgroundGradient !== undefined) {
-        style.backgroundGradient = retainedGradient(
-            context, refs, 'backgroundGradient', paint.backgroundGradient);
+    if (drawsBox && Array.isArray(paint.backgroundGradients)) {
+        style.backgroundGradients = paint.backgroundGradients.map((gradient, index) =>
+            retainedGradient(context, refs, `backgroundGradients.${index}`, gradient));
     }
-    if (drawsBox && paint.border && typeof paint.border === 'object') {
-        style.border = paint.border;
+    for (const property of [
+        'borderRadius', 'borderTopLeftRadius', 'borderTopRightRadius',
+        'borderBottomRightRadius', 'borderBottomLeftRadius',
+        'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
+    ]) {
+        const value = tokenValue(tokens, paint[property], [], context.tokenLayers);
+        if (typeof value === 'number' && Number.isFinite(value)) style[property] = value;
     }
-    if (typeof paint.borderRadius === 'number' || typeof paint.borderRadius === 'string') {
-        const radius = tokenValue(tokens, paint.borderRadius, [], context.tokenLayers);
-        if (typeof radius === 'number' && Number.isFinite(radius)) style.borderRadius = radius;
-    }
-    for (const property of ['borderTopLeftRadius', 'borderTopRightRadius',
-        'borderBottomRightRadius', 'borderBottomLeftRadius']) {
-        if (typeof paint[property] === 'number' && Number.isFinite(paint[property])) {
-            style[property] = paint[property];
+    for (const property of [
+        'borderTopColor', 'borderRightColor', 'borderBottomColor', 'borderLeftColor',
+    ]) {
+        if (typeof paint[property] === 'string') {
+            style[property] = canonicalColor(tokenValue(
+                tokens, paint[property], [], context.tokenLayers));
         }
     }
     if (typeof typography.color === 'string' && node.kind !== 'path') {
         style.color = colorSlot(context, refs, 'color', typography.color);
     }
-    Object.assign(style, paintNumbers(typography, ['fontSize', 'letterSpacing', 'fontWeight']));
+    Object.assign(style, paintNumbers(typography, ['fontSize', 'fontWeight', 'letterSpacing']));
     if (typeof typography.fontFamily === 'string') style.fontFamily = typography.fontFamily;
-    for (const property of ['fontStyle', 'textAlign', 'verticalAlign']) {
-        if (typeof typography[property] === 'string') style[property] = typography[property];
-    }
     for (const property of VECTOR_PAINT_KEYS) {
         if (typeof paint[property] === 'string') style[property] = paint[property];
     }
