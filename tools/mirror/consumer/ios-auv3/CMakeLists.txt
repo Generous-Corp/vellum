@@ -26,9 +26,9 @@ target_compile_options(vellum-ios-auv3-proof PRIVATE
     -fno-objc-arc -fapplication-extension -Werror=protocol -Werror=objc-method-access)
 file(GLOB framework_includes LIST_DIRECTORIES true "${vellum_root}/framework/core/*/include")
 target_include_directories(vellum-ios-auv3-proof PRIVATE
-    ${framework_includes} "${vellum_root}/framework" "${vellum_root}/integrations")
+    ${framework_includes} "${vellum_root}" "${vellum_root}/framework" "${vellum_root}/integrations")
 target_include_directories(vellum-ios-auv3-integration PRIVATE
-    ${framework_includes} "${vellum_root}/framework" "${vellum_root}/integrations")
+    ${framework_includes} "${vellum_root}" "${vellum_root}/framework" "${vellum_root}/integrations")
 target_link_libraries(vellum-ios-auv3-proof PRIVATE vellum-ios-auv3-integration
     "-framework CoreAudioKit" "-framework AudioToolbox" "-framework UIKit")
 
@@ -54,7 +54,7 @@ if(VELLUM_IOS_AUV3_LINK_TEST)
         OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED ON)
     target_compile_options(vellum-ios-auv3-controller-test PRIVATE -fno-objc-arc)
     target_include_directories(vellum-ios-auv3-controller-test PRIVATE
-        "${vellum_root}/framework" "${vellum_root}/integrations")
+        "${vellum_root}" "${vellum_root}/framework" "${vellum_root}/integrations")
     target_sources(vellum-ios-auv3-controller-test PRIVATE
         "${vellum_root}/integrations/vellum-auv3-ios/ios_au_editor_controller.mm"
         "${view_root}/platform/ios/ios_au_editor_controller.mm")
