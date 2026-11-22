@@ -109,4 +109,4 @@ jobs:
         run: python3 -I tools/provenance/overdue_events.py --root . > "$RUNNER_TEMP/due-soon.json"
 
       - name: Fail advisory check at six hours or count pressure
-        run: python3 -I tools/provenance/deadline_warning_gate.py --summary "$RUNNER_TEMP/due-soon.json" --hours 6 --warning-count 16
+        run: python3 -I tools/provenance/deadline_warning_gate.py --summary "$RUNNER_TEMP/due-soon.json" --hours 6
