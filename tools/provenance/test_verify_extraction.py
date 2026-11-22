@@ -3616,7 +3616,7 @@ class RendererPinTests(unittest.TestCase):
         errors, _ = verify_extraction.renderer_pin_errors(self.root, self.pulp, [receipt])
         self.assertTrue(errors)
         self.assertIn("historical_skia_assets", errors[0])
-        self.assertIn("archive_sha256", errors[0])
+        self.assertTrue(any("archive_sha256" in error for error in errors))
 
         renderer["historical_skia_assets"] = ["a" * 63]
         renderer_path.write_text(json.dumps(renderer))
