@@ -114,6 +114,43 @@ test('decodes a generic Figma plugin export into deterministic DesignIR input', 
     ));
 });
 
+test('lowers Figma layer blend modes into native compositing', () => {
+    const input = genericExport();
+    input.root.children[1].style.mix_blend_mode = 'multiply';
+    const document = normalizeImport(decodeFigmaPluginExport(input, {
+        sourceHash: `sha256:${'c'.repeat(64)}`,
+        sourceKey: 'main',
+    }));
+    const button = document.root.children[1];
+    assert.deepEqual(button.compositing, { blendMode: 'multiply' });
+    assert.equal(document.diagnostics.some((diagnostic) =>
+        diagnostic.property === 'mix_blend_mode'), false);
+});
+
+test('retains flex wrapping and grid placement in the native style contract', () => {
+    const input = genericExport();
+    input.root.layout = {
+        display: 'grid',
+        direction: 'row',
+        gridTemplateColumns: '1fr 1fr 1fr 1fr',
+        gridTemplateRows: 'auto auto',
+        gridColumn: '2',
+        gridRow: '1',
+        columnGap: 8,
+        rowGap: 12,
+        wrap: true,
+    };
+    const document = normalizeImport(decodeFigmaPluginExport(input, {
+        sourceHash: `sha256:${'f'.repeat(64)}`,
+        sourceKey: 'main',
+    }));
+    assert.equal(document.root.properties.layout.display, 'grid');
+    assert.equal(document.root.properties.layout.wrap, true);
+    assert.equal(document.root.properties.layout.gridTemplateColumns, '1fr 1fr 1fr 1fr');
+    assert.equal(document.root.properties.layout.columnGap, 8);
+    assert.equal(document.root.properties.layout.rowGap, 12);
+});
+
 test('fails closed on audio-widget kinds, fields, and binding attributes', () => {
     for (const mutation of [
         (input) => { input.root.type = 'knob'; },
@@ -220,9 +257,10 @@ test('checked-in proof is byte-produced by the pinned Pulp serializer and asset 
         diagnostic.detail.sourceKind === 'image' &&
         diagnostic.disposition === 'unsupported',
     ));
-    assert.ok(document.diagnostics.some((diagnostic) =>
-        diagnostic.property === 'font_family' && diagnostic.disposition === 'unsupported',
-    ));
+    assert.equal(
+        document.root.children[0].properties.text.fontFamily,
+        envelope.root.children[0].style.font_family,
+    );
 });
 
 test("neutral audio_widget:'none' mask wrappers lower without accepting audio behavior", () => {
@@ -317,3 +355,53 @@ test('rejects synthetic multi-selection roots explicitly', () => {
 function sha256(bytes) {
     return createHash('sha256').update(bytes).digest('hex');
 }
+
+test('lowers baked glyph outlines to filled path geometry', () => {
+    const input = genericExport();
+    const [label] = input.root.children;
+    const outline = 'M1 2 L7 2 L7 10 Z';
+    Object.assign(label, {
+        type: 'vector',
+        path_data: outline,
+        viewBox: '0 0 12 14',
+        fill: '#ffffff',
+        style: { width: 12, height: 14, left: 4, top: 8 },
+    });
+    delete label.content;
+    const document = normalizeImport(decodeFigmaPluginExport(input, {
+        sourceHash: `sha256:${'a'.repeat(64)}`, sourceKey: 'main',
+    }));
+    const glyph = document.root.children[0];
+    assert.equal(glyph.kind, 'path');
+    assert.equal(glyph.properties.path.d, outline);
+    assert.equal(glyph.properties.paint.fill, '#ffffff');
+    assert.equal(glyph.properties.layout.x, 4);
+    assert.equal(glyph.text, undefined);
+});
+
+test('lowers a compound outline with even-odd fill and gradient paint', () => {
+    const input = genericExport();
+    const vector = input.root.children[0];
+    Object.assign(vector, {
+        type: 'vector',
+        path_data: 'M0 0 H20 V20 Z M2 2 H8 V8 Z',
+        fillRule: 'evenodd',
+        fill: '#808080',
+        fillGradient: 'linear-gradient(90deg, #ffffff 0%, #000000 100%)',
+        stroke: '#ff0000',
+        strokeWidth: 1,
+        style: { width: 20, height: 20 },
+    });
+    delete vector.content;
+    const document = normalizeImport(decodeFigmaPluginExport(input, {
+        sourceHash: `sha256:${'a'.repeat(64)}`, sourceKey: 'main',
+    }));
+    const path = document.root.children[0];
+    assert.equal(path.kind, 'path');
+    assert.equal(path.properties.path.fillRule, 'evenodd');
+    assert.deepEqual(path.properties.paint.fill, {
+        angle: 90, stops: [{ color: '#ffffff', position: 0 }, { color: '#000000', position: 1 }],
+    });
+    assert.equal(path.properties.paint.stroke, '#ff0000');
+    assert.equal(path.properties.paint.strokeWidth, 1);
+});

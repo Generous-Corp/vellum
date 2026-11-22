@@ -51,6 +51,44 @@ endif()
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
+set(VELLUM_RMLUI_RENDERER "" CACHE STRING
+    "RmlUi renderer to enable (vellum, metal or cpu)")
+set_property(CACHE VELLUM_RMLUI_RENDERER PROPERTY STRINGS
+    vellum metal cpu dx11 dx12 gl2 gl3 vk sdl sdl_gpu)
+if(VELLUM_RMLUI_RENDERER)
+    set(_vellum_rmlui_renderer_ids vellum metal cpu dx11 dx12 gl2 gl3 vk sdl sdl_gpu)
+    set(_vellum_rmlui_implemented_renderer_ids vellum metal cpu)
+    if(NOT VELLUM_RMLUI_RENDERER IN_LIST _vellum_rmlui_renderer_ids)
+        message(FATAL_ERROR
+            "Unknown VELLUM_RMLUI_RENDERER '${VELLUM_RMLUI_RENDERER}'. "
+            "Choose one of: ${_vellum_rmlui_renderer_ids}")
+    endif()
+    if(VELLUM_RMLUI_RENDERER STREQUAL "metal" AND NOT APPLE)
+        message(FATAL_ERROR "VELLUM_RMLUI_RENDERER=metal is unsupported on this platform")
+    elseif(VELLUM_RMLUI_RENDERER IN_LIST _vellum_rmlui_renderer_ids AND
+           VELLUM_RMLUI_RENDERER MATCHES "^(dx11|dx12)$" AND NOT WIN32)
+        message(FATAL_ERROR
+            "VELLUM_RMLUI_RENDERER=${VELLUM_RMLUI_RENDERER} is unsupported on this platform")
+    elseif(VELLUM_RMLUI_RENDERER IN_LIST _vellum_rmlui_renderer_ids AND
+           VELLUM_RMLUI_RENDERER MATCHES "^(gl2|gl3|vk|sdl|sdl_gpu)$" AND
+           NOT (WIN32 OR UNIX))
+        message(FATAL_ERROR
+            "VELLUM_RMLUI_RENDERER=${VELLUM_RMLUI_RENDERER} is unsupported on this platform")
+    elseif(NOT VELLUM_RMLUI_RENDERER IN_LIST _vellum_rmlui_implemented_renderer_ids)
+        message(FATAL_ERROR
+            "VELLUM_RMLUI_RENDERER=${VELLUM_RMLUI_RENDERER} is not yet implemented; "
+            "the upstream MIT backend is cataloged for future consumer tests")
+    elseif(VELLUM_RMLUI_RENDERER STREQUAL "vellum")
+        set(VELLUM_RMLUI_VELLUM_RENDERER ON CACHE BOOL "" FORCE)
+    elseif(VELLUM_RMLUI_RENDERER STREQUAL "metal")
+        set(VELLUM_RMLUI_NATIVE ON CACHE BOOL "" FORCE)
+        set(VELLUM_RMLUI_METAL ON CACHE BOOL "" FORCE)
+    elseif(VELLUM_RMLUI_RENDERER STREQUAL "cpu")
+        set(VELLUM_RMLUI_NATIVE ON CACHE BOOL "" FORCE)
+        set(VELLUM_RMLUI_CPU ON CACHE BOOL "" FORCE)
+    endif()
+endif()
+
 option(VELLUM_RMLUI_FONTS
     "Build RmlUi's FreeType font engine from the pinned FreeType source" OFF)
 option(VELLUM_RMLUI_LUA

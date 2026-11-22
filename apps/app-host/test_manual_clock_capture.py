@@ -5,6 +5,7 @@ manual clock alone, and that without it they depend on the wall clock."""
 from __future__ import annotations
 
 from pathlib import Path
+import struct
 import subprocess
 import sys
 import tempfile
@@ -57,8 +58,10 @@ BUNDLE = r"""
 TIMES = (50, 70, 100)  # cumulative 50, 120, 220 ms
 
 
-def run(host: str, bundle: Path, out: Path, manual: bool) -> list[bytes]:
+def run(host: str, bundle: Path, out: Path, manual: bool, scale: int = 1) -> list[bytes]:
     arguments = [host, "--bundle", str(bundle), "--capture-dir", str(out)]
+    if scale != 1:
+        arguments += ["--capture-scale", str(scale)]
     if manual:
         arguments.append("--manual-clock")
     for index, amount in enumerate(TIMES):
@@ -82,6 +85,10 @@ def main() -> int:
         bundle.write_text(BUNDLE, encoding="utf-8")
         first = run(host, bundle, root / "m1", True)
         second = run(host, bundle, root / "m2", True)
+        doubled = run(host, bundle, root / "m2x", True, scale=2)
+        if any(struct.unpack(">II", frame[16:24]) != (480, 240) for frame in doubled):
+            sys.stderr.write("2x captures must double the pixel dimensions\n")
+            return 1
         if first != second:
             sys.stderr.write("manual-clock captures differ between runs\n")
             return 1

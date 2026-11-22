@@ -56,6 +56,10 @@ else()
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES canvas_raster_parity_test.cpp)
 endif()
 
+vellum_add_framework_test(react-materialization
+    SOURCES react_materialization_test.cpp
+    UNITS Vellum::MirrorView_script)
+
 vellum_add_framework_test(param-model-binding
     SOURCES param_model_binding_test.cpp
     UNITS Vellum::MirrorView_core Vellum::Value)
