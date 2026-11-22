@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-8ce2c6967fc3546fd6c9839d5a5758a163f12458",
+  "kind": "resolution",
+  "created_at": "2026-11-22T15:02:08Z",
+  "resolves": "vellum-8ce2c6967fc3546fd6c9839d5a5758a163f12458",
+  "disposition": "framework-only",
+  "rationale": "Repair of a Vellum merge: re-applies the branch's boxShadow-array and border-object parsing to authoring/src/rendered_tree_materializer.mm that an origin/main merge dropped. Vellum-native authoring materializer; Pulp has no counterpart. Pulp search at origin/main a4921f08e632 (git grep -w over core tools test examples apple ship inspect packages) for RenderedTreeMaterializer, rendered_tree_materializer and append_box_border returns 0; control SkiaSurface on the same search returns 288 in 64 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-09, 'Classify the pending Vellum observatory events instead of raising the budget'); no schema or API delta recorded on the event. Any later resolution overrides this.",
+  "owner": "@danielraffel",
+  "linked_commits": [
+    "8ce2c6967fc3546fd6c9839d5a5758a163f12458"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}
