@@ -16,7 +16,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Vellum-native observation; every mapped path is absent from Pulp main and the event declares no schema/API delta or shared-contract release blocker. Owner-approved framework-only classification.",
+  "rationale": "Vellum-native observation; every mapped path is absent from Pulp main and the event declares no schema/API delta or shared-contract release blocker. Framework-only classification by the Vellum lead based on the recorded path and contract evidence.",
   "resolves": "vellum-85288912d4b233c85094a9118fec3a8691290843",
   "schema_version": 1,
   "shared_contract_release_blocker": false
