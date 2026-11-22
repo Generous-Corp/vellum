@@ -384,6 +384,8 @@ void Backend::set_dimensions(std::uint32_t width, std::uint32_t height) {
     runtime_->context->SetDimensions({static_cast<int>(width), static_cast<int>(height)});
     width_ = width;
     height_ = height;
+    // A resize always needs one new frame, whether or not RmlUi dirtied layout.
+    content_changed_.store(true, std::memory_order_release);
 }
 
 Status Backend::set_density_ratio(float ratio) {
