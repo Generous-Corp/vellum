@@ -957,16 +957,6 @@
       "reason": "Pulp's Three.js web-compat shim, with its print markers renamed from PULP_THREE_SHIM / PULP_THREEJS to VELLUM_THREE_SHIM / VELLUM_THREEJS to match Vellum's smoke tests. The bytes are Pulp's file put through the transfer rename plus those markers."
     },
     {
-      "framework_path": "framework/core/render/src/graphite_raster_options.hpp",
-      "change": "added",
-      "target": null,
-      "origin": "native",
-      "pulp_path": null,
-      "pulp_commits": [],
-      "framework_blob": null,
-      "reason": "Centralizes the Graphite raster options used by the plug-in editor surface and its regression test."
-    },
-    {
       "framework_path": "framework/core/view/platform/win/gpu_plugin_editor_host_win.cpp",
       "change": "added",
       "target": "pulp-view-core",
@@ -979,6 +969,16 @@
         "windows-x64",
         "windows-arm64"
       ]
+    },
+    {
+      "framework_path": "framework/core/render/src/graphite_raster_options.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Centralizes the Graphite raster options used by the plug-in editor surface and its regression test."
     }
   ]
 }
