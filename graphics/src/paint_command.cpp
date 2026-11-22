@@ -163,19 +163,23 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
             .fill = node.fill,
             .fill_gradients = node.fill_gradients,
             .box_shadows = node.box_shadows,
+            .border_width = node.border_width,
+            .border_color = node.border_color,
             .corner_radius = node.corner_radius,
             .transform = transform,
             .corner_radii = radii,
         });
     } else if (node.kind == SceneNode::Kind::text &&
                (!node.text.empty() || !node.text_runs.empty())) {
-        if (!node.fill_gradients.empty() || !node.box_shadows.empty()) {
+        if (!node.fill_gradients.empty() || !node.box_shadows.empty() || node.border_width > 0.0F) {
             output.push_back({
                 .kind = PaintCommand::Kind::rectangle,
                 .node_id = node.id + "/background",
                 .bounds = absolute,
                 .fill_gradients = node.fill_gradients,
                 .box_shadows = node.box_shadows,
+                .border_width = node.border_width,
+                .border_color = node.border_color,
                 .corner_radius = node.corner_radius,
                 .transform = transform,
                 .corner_radii = radii,
