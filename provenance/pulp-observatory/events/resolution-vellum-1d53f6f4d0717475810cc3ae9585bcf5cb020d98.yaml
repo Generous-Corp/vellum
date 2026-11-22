@@ -1,0 +1,20 @@
+{
+  "contract_tests": [
+    "vellum.capture-stats",
+    "vellum.gpu-native"
+  ],
+  "created_at": "2026-11-22T08:24:30Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-1d53f6f4d0717475810cc3ae9585bcf5cb020d98",
+  "kind": "resolution",
+  "linked_commits": [
+    "1d53f6f4d0717475810cc3ae9585bcf5cb020d98"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Vellum-native capture-primitives change in cli/vellum_native_backend.py; Pulp main has no corresponding cli/vellum_native_backend.py surface or consumer. Owner-approved framework-only classification.",
+  "resolves": "vellum-1d53f6f4d0717475810cc3ae9585bcf5cb020d98",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
