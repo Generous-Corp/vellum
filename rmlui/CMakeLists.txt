@@ -204,14 +204,20 @@ set(_vellum_rmlui_install_targets
 # the native child window, paint surface, and event dispatch on Windows and
 # Linux without a second windowing backend.
 # The view core never depends on RmlUi: this optional library depends on it.
-if(TARGET pulp-view-core)
+if(TARGET Vellum::MirrorView_core)
     add_library(vellum-rmlui-plugin-view STATIC src/plugin_view.cpp)
     add_library(VellumRmlUi::PluginView ALIAS vellum-rmlui-plugin-view)
     target_compile_features(vellum-rmlui-plugin-view PUBLIC cxx_std_20)
+    # The view core keeps its headers private; the mirror publishes them in
+    # one list, the same one the framework tests use.
     target_include_directories(vellum-rmlui-plugin-view PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${_vellum_mirror_public_includes}>
+        $<BUILD_INTERFACE:${VELLUM_MIRROR_BUILD_INFO_DIR}>
+        $<BUILD_INTERFACE:${VELLUM_MIRROR_CHOC_ROOT}>)
     target_link_libraries(vellum-rmlui-plugin-view
-        PUBLIC pulp-view-core vellum-rmlui-core vellum-rmlui-soft-renderer)
+        PUBLIC Vellum::MirrorView_core vellum-rmlui-core vellum-rmlui-soft-renderer
+        PRIVATE RmlUi::Core)
 endif()
 
 if(VELLUM_RMLUI_NATIVE_HOST)

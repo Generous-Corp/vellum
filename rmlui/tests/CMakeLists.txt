@@ -7,7 +7,7 @@ function(vellum_rmlui_add_test name source)
         VELLUM_RMLUI_TEST_FIXTURES="${_vellum_rmlui_fixtures}")
 endfunction()
 
-if(TARGET pulp-view-core)
+if(TARGET vellum-rmlui-plugin-view)
     vellum_rmlui_add_test(vellum-rmlui-plugin-view-test plugin_view_test.cpp vellum-rmlui-plugin-view)
     add_test(NAME vellum.rmlui.plugin-view COMMAND vellum-rmlui-plugin-view-test)
 endif()
