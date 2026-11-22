@@ -695,6 +695,10 @@ void Backend::render() {
     if (runtime_ && runtime_->context) {
         detail::AssetScope scope(&assets_, runtime_->scope_prefix, runtime_.get());
         runtime_->context->Update();
+        // Update itself dirties elements (a data-bound class, a restyle) and the
+        // Render below paints those changes, so they must not schedule a second
+        // frame. Anything notified after this point is genuinely new.
+        content_changed_.store(false, std::memory_order_release);
         runtime_->context->Render();
     }
     renderer_.end_frame();
