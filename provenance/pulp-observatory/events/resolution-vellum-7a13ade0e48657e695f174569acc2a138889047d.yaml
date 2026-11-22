@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-7a13ade0e48657e695f174569acc2a138889047d",
+  "kind": "resolution",
+  "created_at": "2026-11-22T09:30:00Z",
+  "resolves": "vellum-7a13ade0e48657e695f174569acc2a138889047d",
+  "disposition": "port-required",
+  "rationale": "Source commit 7a13ade0e48657e695f174569acc2a138889047d changes packages/vellum-design-ir/bin/backend-source.js, packages/vellum-design-ir/src/fig-file/import.js, packages/vellum-design-ir/test/fig-import.test.js; contract tests: vellum-design-ir, vellum-design-ir-sterile-consumer. It carries schema_api_deltas, so it is not framework-only and requires an honest Pulp-port decision.",
+  "owner": "@danielraffel",
+  "linked_commits": [
+    "7a13ade0e48657e695f174569acc2a138889047d"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}
