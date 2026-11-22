@@ -1,0 +1,31 @@
+{
+  "class": "rendering",
+  "contract_keys": ["design-schema-compiler"],
+  "contract_tests": ["vellum-design-ir", "vellum-design-ir-sterile-consumer"],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-22T10:45:00Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-6ccdbef1b97744210fd79e1f8e15fc5c494f7cde",
+  "include_dependency_deltas": [],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": ["https://github.com/Generous-Corp/vellum/pull/680"],
+  "mapped_contracts": ["design-schema-compiler"],
+  "mapped_paths": [
+    "packages/vellum-design-ir/src/fig-file/container.mjs",
+    "packages/vellum-design-ir/test/fig-decoder.test.js"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "6ccdbef1b97744210fd79e1f8e15fc5c494f7cde",
+  "rationale": "Framework-side parser hardening; Pulp follows in #12759. Kept pending so the contract-key repeated-generic-fix budget is not exceeded.",
+  "rename_candidates": [],
+  "scan_cursor": {"from_commit": "7ff3dff0a6fb270b5c0932446cce5b6eeb97ee89", "to_commit": "6ccdbef1b97744210fd79e1f8e15fc5c494f7cde"},
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "6ccdbef1b97744210fd79e1f8e15fc5c494f7cde",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}
