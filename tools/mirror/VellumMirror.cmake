@@ -374,6 +374,16 @@ if(TARGET pulp-view-core AND APPLE)
         "${PROJECT_SOURCE_DIR}/framework/core/view/include")
 endif()
 
+if(TARGET pulp-view-core AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(X11 REQUIRED)
+    target_sources(pulp-view-core PRIVATE
+        "${PROJECT_SOURCE_DIR}/framework/core/view/src/plugin_view_host.cpp"
+        "${PROJECT_SOURCE_DIR}/framework/core/view/platform/linux/gpu_plugin_editor_host_x11.cpp")
+    target_include_directories(pulp-view-core PRIVATE
+        "${PROJECT_SOURCE_DIR}/framework/core/view/include")
+    target_link_libraries(pulp-view-core PRIVATE X11::X11)
+endif()
+
 # Optional V8 (VELLUM_ENABLE_V8). The closures build view-script with QuickJS
 # only, so its V8 backend compiles as a stub. This is the one native addition
 # to that unit's compile: the backend's PULP_HAS_V8 switch, the provider
