@@ -212,6 +212,13 @@ if(GPU_RUNTIME_HAS_DEVICE)
         "${CMAKE_CURRENT_LIST_DIR}/include"
         "${GPU_RUNTIME_DAWN_DIR}/build/include")
     target_compile_definitions(gpu-runtime-skia-log-bridge PRIVATE SK_RELEASE)
+    # Keep the installed package contract: consumers that link only the
+    # bridge receive the Device implementation and its public API headers.
+    # In-tree mirror consumers use DeviceApi while the mirror closure filters
+    # the hidden Device archive from the exported provider.
+    target_link_libraries(gpu-runtime-skia-log-bridge INTERFACE
+        $<BUILD_INTERFACE:VellumGpuRuntime::DeviceApi>
+        $<INSTALL_INTERFACE:VellumGpuRuntime::Device>)
 endif()
 
 if(GPU_RUNTIME_BUILD_TESTS)
