@@ -1526,7 +1526,7 @@ def parser() -> argparse.ArgumentParser:
     backend_specs = {
         "import": [
             ("source", {"nargs": "+"}),
-            ("--source-type", {"choices": ["fig", "figma", "design-ir", "html", "claude-design"], "default": "figma"}),
+            ("--source-type", {"choices": ["fig", "figma", "design-ir", "html", "claude-design", "pencil", "designmd"], "default": "figma"}),
             ("--as", {"dest": "source_key", "default": "main"}),
             ("--interaction-plan", {}),
             ("--frame", {"help": "select a local Figma frame by GUID or name"}),
@@ -1597,29 +1597,34 @@ def main(argv: Iterable[str] | None = None) -> int:
         if args.command == "import" and isinstance(args.source, list):
             if len(args.source) == 2 and args.source[0] == "illustrator":
                 args.source, args.illustrator_input = args.source
+            elif len(args.source) == 2 and args.source[0] in {"pencil", "designmd"}:
+                args.source_type, args.source = args.source
             elif len(args.source) == 1:
                 args.source = args.source[0]
             else:
                 raise CliFailure(
-                    "import accepts one source path, or 'illustrator INPUT'.",
+                    "import accepts one source path, or 'illustrator INPUT', 'pencil FILE', or 'designmd FILE'.",
                     status="invalid_arguments", exit_code=EXIT_USAGE,
                 )
         if args.command == "import":
+            is_illustrator = args.source == "illustrator" and (
+                hasattr(args, "illustrator_input") or args.source_type not in {"pencil", "designmd"}
+            )
             is_fig = args.source_type == "fig" or (
                 args.source_type == "figma" and Path(args.source).suffix.lower() == ".fig"
             )
-            if args.frame is not None and (args.source == "illustrator" or not is_fig):
+            if args.frame is not None and (is_illustrator or not is_fig):
                 raise CliFailure(
                     "--frame requires a local Figma .fig source.",
                     status="invalid_fig_frame", exit_code=EXIT_USAGE,
                 )
-            if args.outline and (not is_fig or args.source == "illustrator" or
+            if args.outline and (not is_fig or is_illustrator or
                                  args.frame is not None or args.page is not None):
                 raise CliFailure(
                     "--outline requires a local Figma .fig source and takes no frame or page selector.",
                     status="invalid_fig_outline", exit_code=EXIT_USAGE,
                 )
-            if args.page is not None and args.source != "illustrator" and (not is_fig or args.frame is None):
+            if args.page is not None and not is_illustrator and (not is_fig or args.frame is None):
                 raise CliFailure(
                     "--page requires a local Figma .fig frame selector or an Illustrator input.",
                     status="invalid_arguments", exit_code=EXIT_USAGE,
@@ -1661,7 +1666,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             payload = design_command(args)
         elif args.command == "compare":
             payload = compare_command(args)
-        elif args.command == "import" and args.source == "illustrator":
+        elif args.command == "import" and is_illustrator:
             payload = illustrator_command(args)
         elif args.command == "import" and args.outline:
             sdk = load_sdk_metadata()

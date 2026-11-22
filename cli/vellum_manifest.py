@@ -249,6 +249,9 @@ def imported_materialized_design(project: Path) -> Path | None:
     source_key = next(iter(sources))
     if not isinstance(source_key, str) or not _COMPONENT_ID.fullmatch(source_key):
         raise ManifestError("design import lock contains an invalid source key")
+    source = sources[source_key]
+    if isinstance(source, dict) and source.get("adapter") == "designmd":
+        return None
     materialized = root / "ui/generated" / f"{source_key}.materialized.json"
     bindings = root / "ui/generated" / f"{source_key}.bindings.json"
     if not materialized.is_file() or not bindings.is_file():
