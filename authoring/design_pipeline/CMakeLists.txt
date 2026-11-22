@@ -85,6 +85,17 @@ if(VELLUM_BUILD_TESTS)
         VELLUM_REPO_ROOT="${PROJECT_SOURCE_DIR}")
     set_target_properties(vellum-design-emitter-conformance PROPERTIES
         BUILD_RPATH "$<TARGET_FILE_DIR:vellum-skia-dawn-provider>")
+    # spectr and kelvin build audio displays (createMeter, createWaveform,
+    # createSpectrum); the bridge reports "audio widget unavailable: link
+    # vellum::view-audio" unless the Pulp view-audio archive registers its
+    # display providers. Nothing references those registrars by symbol, so a
+    # plain archive link would drop them: force-load the whole archive. The GPU
+    # lane supplies it (scripts/ctest_classes.json classes this test as slow
+    # for that reason).
+    if(DEFINED VELLUM_VIEW_AUDIO_ARCHIVE AND NOT VELLUM_VIEW_AUDIO_ARCHIVE STREQUAL "")
+        target_link_options(vellum-design-emitter-conformance PRIVATE
+            "LINKER:-force_load,${VELLUM_VIEW_AUDIO_ARCHIVE}")
+    endif()
     add_test(NAME vellum.design-emitter-conformance
         COMMAND vellum-design-emitter-conformance)
 endif()
