@@ -412,10 +412,11 @@ function decodeProperties(node, path, diagnostics, imageAsset) {
 
 const CSS_COLOR = /#[0-9a-f]{6}(?:[0-9a-f]{2})?/i;
 const CSS_LENGTH = '-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?px';
+const CSS_NONNEGATIVE_LENGTH = '(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?px';
 
 function decodeBorder(value) {
     if (typeof value !== 'string') return null;
-    const match = new RegExp(`^(${CSS_LENGTH}) (solid) (${CSS_COLOR.source})$`, 'i').exec(value);
+    const match = new RegExp(`^(${CSS_NONNEGATIVE_LENGTH}) (solid) (${CSS_COLOR.source})$`, 'i').exec(value);
     return match ? { width: Number.parseFloat(match[1]), style: match[2], color: match[3] } : null;
 }
 
@@ -423,7 +424,7 @@ function decodeBoxShadow(value) {
     if (typeof value !== 'string' || value === '' || value === 'none') return null;
     const layers = value.split(/,\s*/);
     if (layers.length > 8) return null;
-    const layer = new RegExp(`^(${CSS_LENGTH}) (${CSS_LENGTH})(?: (${CSS_LENGTH}))?(?: (${CSS_LENGTH}))? (${CSS_COLOR.source})$`, 'i');
+    const layer = new RegExp(`^(${CSS_LENGTH}) (${CSS_LENGTH})(?: (${CSS_NONNEGATIVE_LENGTH}))?(?: (${CSS_NONNEGATIVE_LENGTH}))? (${CSS_COLOR.source})$`, 'i');
     const decoded = layers.map((item) => {
         const match = layer.exec(item);
         if (!match) return null;

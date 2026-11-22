@@ -172,6 +172,31 @@ test('materializes native paint and text fields with strict decoding', () => {
     }
 });
 
+test('keeps negative border widths, blur and spread unmaterialized', () => {
+    for (const [property, value] of [
+        ['border', '-1px solid #112233'],
+        ['box_shadow', '0px 2px -3px #000000'],
+        ['box_shadow', '0px 2px 3px -4px #000000'],
+    ]) {
+        const input = genericExport();
+        input.root.style = { [property]: value };
+        const document = normalizeImport(decodeFigmaPluginExport(input, {
+            sourceHash: `sha256:${'2'.repeat(64)}`,
+            sourceKey: 'main',
+        }));
+        const { paint } = document.root.properties;
+        assert.equal(paint?.border, undefined, value);
+        assert.equal(paint?.boxShadow, undefined, value);
+    }
+    const input = genericExport();
+    input.root.style = { box_shadow: '-2px -3px 4px 5px #000000' };
+    const document = normalizeImport(decodeFigmaPluginExport(input, {
+        sourceHash: `sha256:${'3'.repeat(64)}`,
+        sourceKey: 'main',
+    }));
+    assert.equal(document.root.properties.paint.boxShadow[0].offsetX, -2);
+});
+
 test('keeps malformed paint and text fields unmaterialized', () => {
     const cases = {
         border: '1px solid nope',
