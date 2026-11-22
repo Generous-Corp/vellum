@@ -129,6 +129,9 @@ int main() {
         VELLUM_RMLUI_CHECK(host.default_renderer()->pixels().size() == 32u * 32u * 4u);
         VELLUM_RMLUI_CHECK(child.layer.contents != nil);
         VELLUM_RMLUI_CHECK(rgb_at(host, 5, 5) == 0xff0000u);
+        id initial_contents = child.layer.contents;
+        host.idle();
+        VELLUM_RMLUI_CHECK(child.layer.contents == initial_contents);
 
         // A model change repaints the bound element.
         model->on = true;
