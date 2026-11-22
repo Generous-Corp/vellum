@@ -3610,13 +3610,19 @@ class RendererPinTests(unittest.TestCase):
         renderer = json.loads(renderer_path.read_text())
         renderer["historical_skia_assets"] = ""
         renderer_path.write_text(json.dumps(renderer))
-        receipt = self.receipt(self.pulp_commit(self.matching_pin))
+        empty_pin = json.loads(json.dumps(self.matching_pin))
+        empty_pin["release_assets"]["mac-universal"]["sha256"] = ""
+        receipt = self.receipt(self.pulp_commit(empty_pin))
         errors, _ = verify_extraction.renderer_pin_errors(self.root, self.pulp, [receipt])
         self.assertTrue(errors)
         self.assertIn("historical_skia_assets", errors[0])
+        self.assertIn("archive_sha256", errors[0])
 
         renderer["historical_skia_assets"] = ["a" * 63]
         renderer_path.write_text(json.dumps(renderer))
+        partial_pin = json.loads(json.dumps(self.matching_pin))
+        partial_pin["release_assets"]["mac-universal"]["sha256"] = "a" * 63
+        receipt = self.receipt(self.pulp_commit(partial_pin))
         errors, _ = verify_extraction.renderer_pin_errors(self.root, self.pulp, [receipt])
         self.assertTrue(errors)
         self.assertIn("historical_skia_assets", errors[0])
