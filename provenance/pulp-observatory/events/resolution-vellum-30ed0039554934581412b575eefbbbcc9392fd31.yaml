@@ -17,7 +17,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@claude-observatory-agent",
-  "rationale": "Fix to Vellum's design IR animation validation (easing boundaries, rejecting unsupported design data) in the vellum-design-ir schema and validator; Pulp does not use that package. Owner decision 2026-11-16 04:45Z, recorded in pulp-planning vellum-move/DECISIONS.md (framework-only for the 8 pending schema events, on the condition that each changes only API or schema Pulp consumers get from Vellum after the cutover), is the owner's sign-off for this schema-class observation; recorded here by an agent. Pulp search at origin/main ced536cbc56b (git grep -w over core tools test examples apple ship inspect) for vellum-design-ir and materialReference returns 0; control SkiaSurface on the same search returns 288 in 64 files. Any later resolution overrides this.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 30ed0039554934581412b575eefbbbcc9392fd31 maps graphics/src/animation.cpp, graphics/tests/animation_test.cpp, packages/vellum-design-ir/schema/design-ir-v1.schema.json, packages/vellum-design-ir/src/validate.js, packages/vellum-design-ir/test/animation.test.js, packages/vellum-ui/src/design.js, packages/vellum-ui/test/design.test.js; contract tests: vellum-design-ir, vellum-design-ir-sterile-consumer, vellum-ui, vellum.authoring, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-30ed0039554934581412b575eefbbbcc9392fd31",
   "schema_version": 1,
   "shared_contract_release_blocker": false

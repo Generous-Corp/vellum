@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Adds the retained offscreen surface and damage-driven partial redraw to Vellum's SkiaDawnSurface (render_incremental, DamageTracker). Pulp main has no SkiaDawnSurface, retained scene, DamageRegion or render caches, so there is nothing to port.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 13cd0535e523f19c49a98f535b6a80a613afdcff maps graphics/include/vellum/graphics/skia_dawn_surface.hpp, graphics/src/skia_dawn_surface.mm; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-13cd0535e523f19c49a98f535b6a80a613afdcff",
   "schema_version": 1,
   "shared_contract_release_blocker": false

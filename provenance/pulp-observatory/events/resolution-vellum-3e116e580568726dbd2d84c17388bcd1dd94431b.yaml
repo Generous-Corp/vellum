@@ -14,7 +14,7 @@
   "linked_commits": [],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Vellum-owned standalone framework behavior. Any later Pulp adoption must consume it through a pinned Vellum dependency and adapter tests, not synchronized source copies.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 3e116e580568726dbd2d84c17388bcd1dd94431b maps apps/app-host/CMakeLists.txt, apps/app-host/component_registry.cpp, apps/app-host/component_registry.hpp, apps/app-host/main.mm, apps/app-host/tests/component_registry_test.cpp, apps/app-host/tests/unterminated_component.cpp, apps/app-host/tests/unterminated_text_component.cpp, authoring/src/js_application.mm, authoring/tests/js_application_test.cpp, cli/vellum_native_backend.py, graphics/include/vellum/graphics/scene.hpp, packages/vellum-ui/README.md, packages/vellum-ui/src/index.d.ts, packages/vellum-ui/src/index.js, packages/vellum-ui/src/runtime.js, packages/vellum-ui/test/runtime.test.js, packages/vellum-ui/test/types/application.tsx; contract tests: vellum-ui, vellum.authoring, vellum.capture-stats, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-3e116e580568726dbd2d84c17388bcd1dd94431b",
   "schema_version": 1,
   "shared_contract_release_blocker": false

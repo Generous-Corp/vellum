@@ -14,7 +14,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@claude-observatory-agent",
-  "rationale": "Test-only: Vellum app-host end-to-end test of the design anchor through the node dump; the dump and the anchor are Vellum-native. Pulp search at origin/main ced536cbc56b (git grep -w over core tools test examples apple ship inspect) for design_anchor and source_dump returns 0; control SkiaSurface on the same search returns 288 in 64 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-10 and 2026-11-13); no schema or API delta. Any later resolution overrides it.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 34030544f46d09ebc6ecaa116b45cba588fc905e maps apps/app-host/CMakeLists.txt, apps/app-host/test_design_anchor_dump.py; contract tests: vellum.authoring, vellum.capture-stats, vellum.gpu-native. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-34030544f46d09ebc6ecaa116b45cba588fc905e",
   "schema_version": 1,
   "shared_contract_release_blocker": false

@@ -15,7 +15,7 @@
     "https://github.com/Generous-Corp/vellum/pull/295"
   ],
   "owner": "@danielraffel",
-  "rationale": "Vellum-native retained layer caching (Visage WI8): includes path geometry in the layer-cache identity, with a unit test. The files are Vellum's own graphics backend; Pulp's .github/vellum-ownership.json routes skia_dawn_surface.{hpp,mm} to owner Generous-Corp/vellum as vellum_future_implementation, and layer_cache/paint_command are Vellum-only. Pulp main has its own separate retained layer cache (CanvasCapability::retained_layer_cache in core/canvas and core/view) and no consumer of vellum::graphics, so no port is owed.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit da06a3941bcbae863e7c2a44690bde5367f978bf maps graphics/src/layer_cache.cpp, graphics/tests/layer_cache_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-da06a3941bcbae863e7c2a44690bde5367f978bf",
   "schema_version": 1,
   "shared_contract_release_blocker": false

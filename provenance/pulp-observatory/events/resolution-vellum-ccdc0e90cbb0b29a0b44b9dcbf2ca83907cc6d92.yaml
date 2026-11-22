@@ -17,7 +17,7 @@
     "https://github.com/Generous-Corp/vellum/pull/260"
   ],
   "owner": "@danielraffel",
-  "rationale": "Vellum-native graphics change with no Pulp consumer; owner-approved agent classification 2026-11-10",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit ccdc0e90cbb0b29a0b44b9dcbf2ca83907cc6d92 maps graphics/src/paint_command.cpp, graphics/tests/paint_command_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-ccdc0e90cbb0b29a0b44b9dcbf2ca83907cc6d92",
   "schema_version": 1,
   "shared_contract_release_blocker": false

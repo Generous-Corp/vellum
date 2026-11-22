@@ -17,7 +17,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Vellum-native graphics change with no Pulp consumer; owner-approved agent classification 2026-11-10",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 603601a6dab68fa6d146f5719ec09935714e22f0 maps authoring/src/rendered_tree_materializer.mm, authoring/tests/rendered_tree_materializer_test.cpp, graphics/CMakeLists.txt, graphics/include/vellum/graphics/animation.hpp, graphics/include/vellum/graphics/damage.hpp, graphics/include/vellum/graphics/scene.hpp, graphics/include/vellum/graphics/scene_acceptance.hpp, graphics/src/animation.cpp, graphics/src/animation_testing.hpp, graphics/src/damage.cpp, graphics/src/paint_command.cpp, graphics/src/scene_acceptance.cpp, graphics/src/skia_dawn_surface.mm, graphics/tests/CMakeLists.txt, graphics/tests/animation_gpu_test.cpp, graphics/tests/animation_test.cpp, graphics/tests/grouping_test.cpp, graphics/tests/paint_command_test.cpp, graphics/tests/partial_present_test.cpp, packages/vellum-design-ir/schema/design-ir-v1.schema.json, packages/vellum-design-ir/src/index.d.ts, packages/vellum-design-ir/src/normalize.js, packages/vellum-design-ir/src/validate.js, packages/vellum-design-ir/test/animation.test.js; contract tests: vellum-design-ir, vellum-design-ir-sterile-consumer, vellum-ui, vellum.authoring, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-603601a6dab68fa6d146f5719ec09935714e22f0",
   "schema_version": 1,
   "shared_contract_release_blocker": false

@@ -17,7 +17,7 @@
     "https://github.com/Generous-Corp/vellum/pull/156"
   ],
   "owner": "@danielraffel",
-  "rationale": "Folds Unicode normalization into the Illustrator adapter's destination name checks and reports a destination that turns into a directory as a conversion error. The same fix is in Pulp's copy of the helper (pulp#11449, merged as 0a7dcb81), so nothing remains to port.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit f62694f70fdc83d76bedce565b52de8da82efdb6 maps authoring/adapters/illustrator/illustrator_to_svg.py, authoring/adapters/illustrator/test_illustrator_to_svg.py; contract tests: vellum-ui, vellum.authoring. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-f62694f70fdc83d76bedce565b52de8da82efdb6",
   "schema_version": 1,
   "shared_contract_release_blocker": false

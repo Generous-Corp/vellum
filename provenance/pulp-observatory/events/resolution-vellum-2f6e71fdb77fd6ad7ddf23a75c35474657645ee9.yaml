@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Vellum-native observation; every mapped path is absent from Pulp main and the event declares no schema/API delta or shared-contract release blocker. Framework-only classification by the Vellum lead based on the recorded path and contract evidence.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 2f6e71fdb77fd6ad7ddf23a75c35474657645ee9 maps cli/vellum_native_backend.py; contract tests: vellum.capture-stats, vellum.gpu-native. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-2f6e71fdb77fd6ad7ddf23a75c35474657645ee9",
   "schema_version": 1,
   "shared_contract_release_blocker": false

@@ -17,7 +17,7 @@
     "https://github.com/Generous-Corp/vellum/pull/179"
   ],
   "owner": "@danielraffel",
-  "rationale": "Moves the Dawn bootstrap and Pulp's pulp-gpu-device sources into Vellum's gpu-runtime subproject (VellumGpuRuntime::Bootstrap, ::Device, ::SkiaLogBridge), Vellum-native code under a Vellum-authoritative contract. Pulp owes no port: it consumes gpu-runtime as a pinned dependency (pulp#11596, merged as be256970, forwards its macOS GPU device layer to it; tools/cmake/PulpGpuRuntime.cmake pins Vellum 14bd4c5e, which contains this commit), so the change reaches Pulp through that pin, not a copy.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit fb92eca58873c134899504d7498ef8f068939fc5 maps graphics/CMakeLists.txt, graphics/src/dawn_bootstrap.cpp, graphics/tests/test_dawn_bootstrap_source.py; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-fb92eca58873c134899504d7498ef8f068939fc5",
   "schema_version": 1,
   "shared_contract_release_blocker": false

@@ -15,7 +15,7 @@
     "https://github.com/Generous-Corp/vellum/pull/248"
   ],
   "owner": "@danielraffel",
-  "rationale": "Extends Vellum's scene capture harness to compare captures across processes and fail without a GPU. Vellum test infrastructure only; no Pulp counterpart and nothing to port.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 23ab1bae911fba86de95879a4f2b11471bbf5b67 maps graphics/CMakeLists.txt, graphics/tests/CMakeLists.txt, graphics/tests/fixtures/capture/.gitkeep, graphics/tests/scene_capture_harness_test.cpp, graphics/tests/support/scene_capture_harness.cpp, graphics/tests/support/scene_capture_harness.hpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-23ab1bae911fba86de95879a4f2b11471bbf5b67",
   "schema_version": 1,
   "shared_contract_release_blocker": false

@@ -15,7 +15,7 @@
     "https://github.com/Generous-Corp/vellum/pull/248"
   ],
   "owner": "@danielraffel",
-  "rationale": "Integration merge (Merge pull request #248 from Generous-Corp/feature/scene-capture-harness-20261108). It lands commits whose own observations are classified separately in this ledger, so it has no independent contract.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit ed19b60f3911baf1e2f58a8610db7ba71dc57e77 maps graphics/CMakeLists.txt, graphics/tests/CMakeLists.txt, graphics/tests/fixtures/capture/.gitkeep, graphics/tests/scene_capture_harness_test.cpp, graphics/tests/support/scene_capture_harness.cpp, graphics/tests/support/scene_capture_harness.hpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-ed19b60f3911baf1e2f58a8610db7ba71dc57e77",
   "schema_version": 1,
   "shared_contract_release_blocker": false

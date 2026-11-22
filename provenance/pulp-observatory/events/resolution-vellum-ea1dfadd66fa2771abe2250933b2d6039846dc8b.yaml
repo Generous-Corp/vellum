@@ -15,7 +15,7 @@
     "Generous-Corp/vellum#543"
   ],
   "owner": "@claude-observatory-agent",
-  "rationale": "Vellum-native graphics trace wiring (graphics/ frame_trace and native_trace_bridge) for the opt-in Perfetto lane; no Pulp counterpart or consumer. Classified by the Vellum lead.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit ea1dfadd66fa2771abe2250933b2d6039846dc8b maps graphics/src/native_trace_bridge.hpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-ea1dfadd66fa2771abe2250933b2d6039846dc8b",
   "schema_version": 1,
   "shared_contract_release_blocker": false

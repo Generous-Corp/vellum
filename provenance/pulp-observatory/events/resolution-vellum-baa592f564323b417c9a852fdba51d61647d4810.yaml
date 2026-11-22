@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Integration merge (Merge pull request #261 from Generous-Corp/test/capture-harness-golden-root-20261109). It carries no change beyond the commits it merges, whose own observations are classified separately in this ledger, so it has no independent contract.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit baa592f564323b417c9a852fdba51d61647d4810 maps graphics/tests/CMakeLists.txt, graphics/tests/scene_capture_harness_test.cpp, graphics/tests/support/scene_capture_harness.cpp, graphics/tests/support/scene_capture_harness.hpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-baa592f564323b417c9a852fdba51d61647d4810",
   "schema_version": 1,
   "shared_contract_release_blocker": false

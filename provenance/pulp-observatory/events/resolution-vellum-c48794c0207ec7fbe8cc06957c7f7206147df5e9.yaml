@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Integration merge (Merge main into claude/post102-followups-20261027). It carries no change beyond the commits it merges, whose own observations are classified separately in this ledger, so it has no independent contract.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit c48794c0207ec7fbe8cc06957c7f7206147df5e9 maps packages/vellum-design-ir/README.md, packages/vellum-design-ir/package.json, packages/vellum-design-ir/schema/audio-control-map-v1.schema.json, packages/vellum-design-ir/src/audio-control-map.js, packages/vellum-design-ir/src/index.d.ts, packages/vellum-design-ir/src/index.js, packages/vellum-design-ir/test/audio-control-map.test.js; contract tests: vellum-design-ir, vellum-design-ir-sterile-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-c48794c0207ec7fbe8cc06957c7f7206147df5e9",
   "schema_version": 1,
   "shared_contract_release_blocker": false

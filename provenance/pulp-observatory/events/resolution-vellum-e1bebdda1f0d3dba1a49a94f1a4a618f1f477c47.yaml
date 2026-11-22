@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@claude-observatory-agent",
-  "rationale": "Vellum-native retained scene graphics (scene groups, image nodes, damage model, layer cache, authoring materializer); Pulp has no counterpart. Pulp search at aa630815 (core tools test examples apple ship inspect) for LayerCache, NodeClip, clips_own_paint, SceneAcceptance, PaintCommand, damage_testing, RenderedTreeMaterializer, vellum::graphics returns 0; control SkiaSurface returns 43. Agent classification under the owner's delegation of Vellum-side calls; any later resolution overrides it.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit e1bebdda1f0d3dba1a49a94f1a4a618f1f477c47 maps graphics/include/vellum/graphics/damage.hpp, graphics/src/damage.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-e1bebdda1f0d3dba1a49a94f1a4a618f1f477c47",
   "schema_version": 1,
   "shared_contract_release_blocker": false

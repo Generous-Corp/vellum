@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Test-only. It runs Vellum's partial-present benchmark modes on fresh surfaces, rotates their order, reports median and spread, and tightens the native frame assertion. Vellum test infrastructure only.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 312bcf7075042abd44960168005b57ae2c2d3c2b maps graphics/tests/partial_present_bench.mm; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-312bcf7075042abd44960168005b57ae2c2d3c2b",
   "schema_version": 1,
   "shared_contract_release_blocker": false

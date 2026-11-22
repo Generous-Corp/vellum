@@ -13,7 +13,7 @@
   "linked_commits": [],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Vellum-owned standalone framework behavior. Any later Pulp adoption must consume it through a pinned Vellum dependency and adapter tests, not synchronized source copies.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 9ad31243ee3c732733635b9e8d7e35743a339e39 maps fixtures/design-ir/assets/232f99e462d7fca342dc8b89e403ec88ae947e8807428df25127beed1e166b6a.svg, fixtures/design-ir/figma-plugin-a.export.json, fixtures/design-ir/figma-plugin-b.export.json, fixtures/design-ir/pulp-emitter-generic.export.json, fixtures/design-ir/pulp-emitter-generic.input.json, fixtures/design-ir/pulp-emitter-generic.receipt.json, fixtures/design-ir/revision-a.source.json, fixtures/design-ir/revision-b.source.json, packages/vellum-design-ir/README.md, packages/vellum-design-ir/bin/vellum-backend.js, packages/vellum-design-ir/src/assets.js, packages/vellum-design-ir/src/figma-plugin.js, packages/vellum-design-ir/src/index.d.ts, packages/vellum-design-ir/src/index.js, packages/vellum-design-ir/src/normalize.js, packages/vellum-design-ir/src/validate.js, packages/vellum-design-ir/test/figma-plugin.test.js, packages/vellum-ui/test/design.test.js; contract tests: vellum-design-ir, vellum-design-ir-sterile-consumer, vellum-ui, vellum.authoring. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-9ad31243ee3c732733635b9e8d7e35743a339e39",
   "schema_version": 1,
   "shared_contract_release_blocker": false

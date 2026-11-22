@@ -15,7 +15,7 @@
     "https://github.com/Generous-Corp/vellum/pull/300"
   ],
   "owner": "@danielraffel",
-  "rationale": "Vellum-native graphics change with no Pulp consumer; owner-approved agent classification 2026-11-10",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 4baced50ca291e59623cceabeb5e079943d52546 maps graphics/src/render_cache.hpp, graphics/src/render_telemetry.cpp, graphics/src/skia_dawn_surface.mm, graphics/tests/render_cache_gpu_test.cpp, graphics/tests/render_cache_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-4baced50ca291e59623cceabeb5e079943d52546",
   "schema_version": 1,
   "shared_contract_release_blocker": false

@@ -17,7 +17,7 @@
     "Generous-Corp/vellum#546"
   ],
   "owner": "@graphics-lead-gfxtext",
-  "rationale": "Plain merge of origin/main into the text layout branch by the repair lane; it carries only main's own changes, already observed on main, and no schema or API delta. Classified like merge 563102f7e.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit dd745ad287183e2c30637e7807de038d215a0c77 maps authoring/CMakeLists.txt, authoring/design_pipeline/CMakeLists.txt, authoring/design_pipeline/include/vellum/authoring/design_pipeline.hpp, authoring/design_pipeline/src/design_pipeline.cpp, authoring/design_pipeline/tests/design_pipeline_test.cpp, authoring/tests/rendered_tree_materializer_test.cpp, graphics/include/vellum/graphics/render_telemetry.hpp, graphics/include/vellum/graphics/skia_dawn_surface.hpp, graphics/src/render_telemetry.cpp, graphics/src/skia_dawn_surface.mm, graphics/src/skia_dawn_surface_testing.hpp, graphics/tests/CMakeLists.txt, graphics/tests/device_recovery_gpu_test.cpp, graphics/tests/frame_debug_test.mm, graphics/tests/layer_cache_gpu_test.cpp, graphics/tests/partial_present_bench.mm, graphics/tests/partial_present_test.cpp, graphics/tests/render_cache_gpu_test.cpp, graphics/tests/render_cache_test.cpp, packages/vellum-ui/src/design.js, packages/vellum-ui/test/vector-assets.test.js; contract tests: vellum-ui, vellum.authoring, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-dd745ad287183e2c30637e7807de038d215a0c77",
   "schema_version": 1,
   "shared_contract_release_blocker": false

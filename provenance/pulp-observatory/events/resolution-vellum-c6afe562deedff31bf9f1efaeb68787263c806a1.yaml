@@ -17,7 +17,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@claude-observatory-agent",
-  "rationale": "Vellum-native shared limits header (graphics/limits.hpp) with generated JS limits for vellum-design-ir and vellum-ui and a drift test. The recorded schema/API deltas are vellum-design-ir's validator reading the same numeric limits from the generated module; the values are unchanged (the drift test fails on any edit), with no DesignIR version bump and no behaviour change. Pulp consumers receive this package from Vellum, so this meets the owner's 2026-11-16 04:45Z criterion for framework-only schema events. Classified by the Vellum lead.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit c6afe562deedff31bf9f1efaeb68787263c806a1 maps authoring/src/rendered_tree_materializer.mm, graphics/include/vellum/graphics/animation.hpp, graphics/include/vellum/graphics/limits.hpp, graphics/include/vellum/graphics/path_geometry.hpp, graphics/include/vellum/graphics/scene.hpp, packages/vellum-design-ir/src/limits.generated.js, packages/vellum-design-ir/src/validate.js, packages/vellum-design-ir/test/limits-drift.test.js, packages/vellum-ui/src/design.js, packages/vellum-ui/src/limits.generated.js, packages/vellum-ui/src/runtime.js; contract tests: vellum-design-ir, vellum-design-ir-sterile-consumer, vellum-ui, vellum.authoring, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-c6afe562deedff31bf9f1efaeb68787263c806a1",
   "schema_version": 1,
   "shared_contract_release_blocker": false

@@ -15,7 +15,7 @@
     "Generous-Corp/vellum#549"
   ],
   "owner": "@claude-observatory-agent",
-  "rationale": "Merge of the PR's remote head into the branch; its mapped paths are exactly those of f16fda196, which carries its own event and resolution. Superseded by that event. Classified by the Vellum lead.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 87abc26e57b522bbb29d6b29d28a4ba94aac2134 maps graphics/src/skia_dawn_surface.mm, graphics/src/skia_dawn_surface_testing.hpp, graphics/tests/plot_gpu_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-87abc26e57b522bbb29d6b29d28a4ba94aac2134",
   "schema_version": 1,
   "shared_contract_release_blocker": false

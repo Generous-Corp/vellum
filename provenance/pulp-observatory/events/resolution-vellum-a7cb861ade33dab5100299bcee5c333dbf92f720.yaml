@@ -13,7 +13,7 @@
   "linked_commits": [],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Vellum-owned text input, composition, focus, and accessibility semantics for the standalone application framework. Any later Pulp adoption must consume the released Vellum behavior through adapter and contract tests, not synchronized source copies.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit a7cb861ade33dab5100299bcee5c333dbf92f720 maps apps/app-host/CMakeLists.txt, apps/app-host/macos_accessibility.hpp, apps/app-host/macos_accessibility.mm, apps/app-host/main.mm, apps/app-host/options.cpp, apps/app-host/options.hpp, apps/app-host/test_text_semantics.py, apps/app-host/tests/macos_accessibility_test.mm, apps/app-host/text_semantics.hpp, apps/app-host/text_semantics.mm, authoring/include/vellum/authoring/js_application.hpp, authoring/schema/events-v2.schema.json, authoring/src/js_application.mm, authoring/tests/js_application_test.cpp, cli/vellum_native_backend.py, packages/vellum-ui/src/index.d.ts, packages/vellum-ui/src/runtime.js, packages/vellum-ui/test/fixtures/native-app.jsx, packages/vellum-ui/test/runtime.test.js; contract tests: vellum-ui, vellum.authoring, vellum.capture-stats, vellum.gpu-native. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-a7cb861ade33dab5100299bcee5c333dbf92f720",
   "schema_version": 1,
   "shared_contract_release_blocker": false

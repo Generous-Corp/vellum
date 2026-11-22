@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@claude-observatory-agent",
-  "rationale": "Fix to the Vellum-native @vellum/ui useCommand runtime (measure a command's effect from the tree it starts from); follows the useCommand API already resolved framework-only under the owner decision of 2026-11-15. Pulp has no counterpart. Pulp search at origin/main ced536cbc56b (git grep -w over core tools test examples apple ship inspect) for useCommand and invokeCommand returns 0; control SkiaSurface on the same search returns 288 in 64 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-10 and 2026-11-13); no schema or API delta. Any later resolution overrides it.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 01a021d0d961200e3a6bfd532c8926ccd3c9f245 maps packages/vellum-ui/src/runtime.js, packages/vellum-ui/test/runtime.test.js; contract tests: vellum-ui, vellum.authoring. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-01a021d0d961200e3a6bfd532c8926ccd3c9f245",
   "schema_version": 1,
   "shared_contract_release_blocker": false

@@ -14,7 +14,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@claude-observatory-agent",
-  "rationale": "Test-only: Vellum end-to-end test of the agent workflow on a native app and its HTML twin; Vellum-native CLI and app host. Pulp search at origin/main ced536cbc56b (git grep -w over core tools test examples apple ship inspect) for scenario_contract and vellum_native_backend returns 0; control SkiaSurface on the same search returns 288 in 64 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-10 and 2026-11-13); no schema or API delta. Any later resolution overrides it.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 83f18e8076adcc33017582fb400047ef0dea1c54 maps apps/app-host/CMakeLists.txt, apps/app-host/test_agent_workflow.py; contract tests: vellum.authoring, vellum.capture-stats, vellum.gpu-native. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-83f18e8076adcc33017582fb400047ef0dea1c54",
   "schema_version": 1,
   "shared_contract_release_blocker": false

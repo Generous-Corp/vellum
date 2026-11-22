@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Fixes Vellum's new render caches: textures from a frame that fails before submit are dropped, the post-resize trim keeps every entry used since the resize, and a capture's redraw no longer counts toward settle telemetry. The caches exist only in Vellum's SkiaDawnSurface.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 5457a318a2673de7c832ff89d9490dd97d861302 maps graphics/include/vellum/graphics/render_telemetry.hpp, graphics/include/vellum/graphics/skia_dawn_surface.hpp, graphics/src/render_cache.hpp, graphics/src/skia_dawn_surface.mm, graphics/src/skia_resource_caches.hpp, graphics/tests/render_cache_gpu_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-5457a318a2673de7c832ff89d9490dd97d861302",
   "schema_version": 1,
   "shared_contract_release_blocker": false

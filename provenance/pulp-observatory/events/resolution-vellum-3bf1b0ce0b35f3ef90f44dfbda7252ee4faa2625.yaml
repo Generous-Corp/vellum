@@ -15,7 +15,7 @@
   "linked_commits": [],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Vellum-owned standalone framework behavior. Any later Pulp adoption must consume it through a pinned Vellum dependency and adapter tests, not synchronized source copies.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 3bf1b0ce0b35f3ef90f44dfbda7252ee4faa2625 maps cli/vellum_native_backend.py, packages/vellum-design-ir/bin/import-operation-lock.js, packages/vellum-design-ir/bin/vellum-backend.js, packages/vellum-ui/src/design.js, packages/vellum-ui/src/runtime.js, packages/vellum-ui/test/design.test.js; contract tests: vellum-design-ir, vellum-design-ir-sterile-consumer, vellum-ui, vellum.authoring, vellum.capture-stats, vellum.gpu-native. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-3bf1b0ce0b35f3ef90f44dfbda7252ee4faa2625",
   "schema_version": 1,
   "shared_contract_release_blocker": false

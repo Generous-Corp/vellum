@@ -19,7 +19,7 @@
     "Generous-Corp/vellum#568"
   ],
   "owner": "@claude-observatory-agent",
-  "rationale": "Splits the shared limits change into the rule only. It keeps the limits generator, its committed fixture and the drift tests, and removes the production limits.hpp, its generated JS tables and their consumers; those follow in a separate data change. No limit value, schema or DesignIR version reaches a release from this commit. Pulp consumes these packages from Vellum (the owner's 2026-11-16 04:45Z criterion for schema-class events). Classified by the Vellum lead.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit b4f18c7c14b4ca1de2b3f2dbf03b9f7d5306ce6a maps authoring/src/rendered_tree_materializer.mm, graphics/include/vellum/graphics/animation.hpp, graphics/include/vellum/graphics/limits.hpp, graphics/include/vellum/graphics/path_geometry.hpp, packages/vellum-design-ir/src/limits.generated.js, packages/vellum-design-ir/src/validate.js, packages/vellum-design-ir/test/limits-drift.test.js, packages/vellum-ui/src/limits.generated.js, packages/vellum-ui/src/runtime.js; contract tests: vellum-design-ir, vellum-design-ir-sterile-consumer, vellum-ui, vellum.authoring, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-b4f18c7c14b4ca1de2b3f2dbf03b9f7d5306ce6a",
   "schema_version": 1,
   "shared_contract_release_blocker": false

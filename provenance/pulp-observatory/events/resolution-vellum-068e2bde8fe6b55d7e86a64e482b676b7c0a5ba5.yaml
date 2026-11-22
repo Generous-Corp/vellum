@@ -15,7 +15,7 @@
     "Generous-Corp/vellum#102"
   ],
   "owner": "@danielraffel",
-  "rationale": "The native backend requires libvellum-mirror-state-core.dylib, which the provider loads at launch, so an SDK without it fails as invalid_sdk instead of building an app that aborts. Vellum SDK readiness only; no Pulp change follows.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 068e2bde8fe6b55d7e86a64e482b676b7c0a5ba5 maps cli/vellum_native_backend.py; contract tests: vellum.capture-stats, vellum.gpu-native. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-068e2bde8fe6b55d7e86a64e482b676b7c0a5ba5",
   "schema_version": 1,
   "shared_contract_release_blocker": false

@@ -14,7 +14,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "The clean-checkout Pulp/Vellum router classified this as Vellum-owned generic work with a framework-only observatory disposition and no affected Pulp counterpart. It is retained with its Vellum contract proofs; any future Pulp use must adopt a pinned Vellum SDK through an adapter rather than copy framework source.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 3438787f8bd7556c28877a3a09828dcfbe79ad39 maps graphics/include/vellum/graphics/capture_stats.hpp, graphics/src/capture_stats.cpp, graphics/src/skia_dawn_surface.mm, graphics/tests/capture_stats_test.cpp; contract tests: vellum.capture-stats, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-3438787f8bd7556c28877a3a09828dcfbe79ad39",
   "schema_version": 1,
   "shared_contract_release_blocker": false

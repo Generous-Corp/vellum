@@ -15,7 +15,7 @@
     "https://github.com/Generous-Corp/vellum/pull/126"
   ],
   "owner": "@danielraffel",
-  "rationale": "Vellum-native SDK link fix: the Skia/Dawn provider is the single owner of the libm symbols it links, so the installed GPU frontend has one definition. It changes Vellum's provider packaging only; Pulp links its own renderer and has no counterpart to port.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 7b3a243f8e444eb6e45d09dc7a1354dba57f7cdb maps graphics/tests/test_dawn_provider_topology.py; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-7b3a243f8e444eb6e45d09dc7a1354dba57f7cdb",
   "schema_version": 1,
   "shared_contract_release_blocker": false

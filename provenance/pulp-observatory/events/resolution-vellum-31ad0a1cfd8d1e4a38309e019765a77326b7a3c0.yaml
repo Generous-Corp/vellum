@@ -15,7 +15,7 @@
     "Generous-Corp/vellum#88"
   ],
   "owner": "@danielraffel",
-  "rationale": "Test-only follow-up to 2cfb7250a4 in packages/vellum-ui (single cleanup across back-to-back effect commits). Vellum-owned coverage; Pulp delegates effects to React (react-reconciler) and has no counterpart to test.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 31ad0a1cfd8d1e4a38309e019765a77326b7a3c0 maps packages/vellum-ui/test/runtime.test.js; contract tests: vellum-ui, vellum.authoring. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-31ad0a1cfd8d1e4a38309e019765a77326b7a3c0",
   "schema_version": 1,
   "shared_contract_release_blocker": false

@@ -16,7 +16,7 @@
     "Generous-Corp/vellum#103"
   ],
   "owner": "@danielraffel",
-  "rationale": "Merge of origin/main into the #103 carry branch. Its mapped paths equal the merged-in main parent, and the contributing commits carry their own dispositions, so the merge adds no Pulp obligation. Same disposition as the earlier merges of main resolved as framework-only.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 339878e389cb268ec83073d1ca0edd63f5968d21 maps cli/vellum_native_backend.py, graphics/CMakeLists.txt, graphics/src/gpu_frontend_anchor.cpp, graphics/src/skia_dawn_surface.mm, graphics/tests/test_dawn_bootstrap_source.py, graphics/tests/test_dawn_provider_topology.py; contract tests: vellum.capture-stats, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-339878e389cb268ec83073d1ca0edd63f5968d21",
   "schema_version": 1,
   "shared_contract_release_blocker": false

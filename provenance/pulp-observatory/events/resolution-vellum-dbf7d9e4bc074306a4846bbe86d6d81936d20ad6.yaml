@@ -17,7 +17,7 @@
     "https://github.com/Generous-Corp/vellum/pull/252"
   ],
   "owner": "@danielraffel",
-  "rationale": "Adds kSceneVersion to Vellum's Scene and PaintCommand, makes consumers fail closed on an unknown version or node kind, and reports dropped style and content from the authoring materializer. These are Vellum-authoritative contracts (canvas-kernel, render-skia-dawn, retained-ui-kernel are vellum-authoritative-transferred); Pulp main has no consumer of vellum::graphics::Scene or the rendered-tree materializer, so nothing is owed to Pulp. Pulp picks the behavior up only by consuming a newer Vellum.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit dbf7d9e4bc074306a4846bbe86d6d81936d20ad6 maps authoring/include/vellum/authoring/js_application.hpp, authoring/src/rendered_tree_materializer.hpp, authoring/src/rendered_tree_materializer.mm, authoring/tests/rendered_tree_materializer_test.cpp, graphics/include/vellum/graphics/lowering_diagnostic.hpp, graphics/include/vellum/graphics/paint_command.hpp, graphics/include/vellum/graphics/scene.hpp, graphics/src/paint_command.cpp, graphics/src/skia_dawn_surface.mm, graphics/tests/paint_command_test.cpp; contract tests: vellum-ui, vellum.authoring, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-dbf7d9e4bc074306a4846bbe86d6d81936d20ad6",
   "schema_version": 1,
   "shared_contract_release_blocker": false

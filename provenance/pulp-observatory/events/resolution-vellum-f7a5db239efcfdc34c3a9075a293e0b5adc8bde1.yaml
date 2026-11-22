@@ -11,7 +11,7 @@
   "linked_commits": [],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "The defect was confined to Vellum's installed web SDK bundler and relocatability guard. The clean-checkout router found no Pulp destination, and Pulp does not contain or consume this build path; any future Pulp adoption must use a pinned Vellum SDK rather than duplicate the fix.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit f7a5db239efcfdc34c3a9075a293e0b5adc8bde1 maps packages/vellum-ui/scripts/build-project.mjs, packages/vellum-ui/test/bundle.test.js; contract tests: vellum-ui, vellum.authoring. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-f7a5db239efcfdc34c3a9075a293e0b5adc8bde1",
   "schema_version": 1,
   "shared_contract_release_blocker": false

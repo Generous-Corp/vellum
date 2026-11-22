@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@claude-observatory-agent",
-  "rationale": "Vellum-native image decode queue (off-render-thread decode within a per-frame budget) for the retained scene graphics; Pulp has no counterpart. Pulp search at origin/main ced536cbc56b (git grep -w over core tools test examples apple ship inspect) for ImageDecodeQueue, image_decode_queue and decode_queue returns 0; control SkiaSurface on the same search returns 288 in 64 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-10 and 2026-11-13); no schema or API delta. Any later resolution overrides it.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 3a55fcd7a4f4df908c66bfde258ba490ea894132 maps graphics/CMakeLists.txt, graphics/include/vellum/graphics/image_decode_queue.hpp, graphics/src/image_decode_queue.cpp, graphics/tests/image_decode_queue_test.cpp, graphics/tests/image_gpu_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-3a55fcd7a4f4df908c66bfde258ba490ea894132",
   "schema_version": 1,
   "shared_contract_release_blocker": false

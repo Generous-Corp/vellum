@@ -15,7 +15,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Adds node transforms, group opacity and per-corner radii to Vellum's retained scene, its Skia lowering, damage and the authoring materializer and vellum-ui types (re-landed from PR 255). Vellum-native scene and authoring surfaces; Pulp main has neither the retained scene nor the materializer.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 345b05361dfeab3916584ae5706aa98cd1d36831 maps authoring/src/rendered_tree_materializer.hpp, authoring/src/rendered_tree_materializer.mm, authoring/tests/rendered_tree_materializer_test.cpp, graphics/include/vellum/graphics/core_graphics_canvas.hpp, graphics/include/vellum/graphics/paint_command.hpp, graphics/include/vellum/graphics/scene.hpp, graphics/src/paint_command.cpp, graphics/src/skia_dawn_surface.mm, graphics/tests/gpu_style_test.cpp, graphics/tests/paint_command_test.cpp, graphics/tests/support/scene_capture_harness.cpp, graphics/tests/support/scene_capture_harness.hpp, packages/vellum-ui/src/index.d.ts; contract tests: vellum-ui, vellum.authoring, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-345b05361dfeab3916584ae5706aa98cd1d36831",
   "schema_version": 1,
   "shared_contract_release_blocker": false

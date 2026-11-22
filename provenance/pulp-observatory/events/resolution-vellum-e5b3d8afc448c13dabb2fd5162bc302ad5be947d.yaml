@@ -17,7 +17,7 @@
     "https://github.com/Generous-Corp/vellum/pull/488"
   ],
   "owner": "@danielraffel",
-  "rationale": "Vellum-native graphics change with no Pulp consumer; owner-approved agent classification 2026-11-10",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit e5b3d8afc448c13dabb2fd5162bc302ad5be947d maps authoring/src/rendered_tree_materializer.mm, authoring/tests/rendered_tree_materializer_test.cpp, graphics/include/vellum/graphics/token_receipts.hpp, graphics/src/token_receipts.cpp, graphics/tests/token_receipts_test.cpp, packages/vellum-ui/src/design.js, packages/vellum-ui/test/design.test.js; contract tests: vellum-ui, vellum.authoring, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-e5b3d8afc448c13dabb2fd5162bc302ad5be947d",
   "schema_version": 1,
   "shared_contract_release_blocker": false

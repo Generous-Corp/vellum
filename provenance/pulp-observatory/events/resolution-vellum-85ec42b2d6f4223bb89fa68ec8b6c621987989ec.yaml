@@ -17,7 +17,7 @@
     "https://github.com/Generous-Corp/vellum/pull/252"
   ],
   "owner": "@danielraffel",
-  "rationale": "Hardens the same Vellum-native scene contract: the Skia surface refuses an unknown scene version or node kind and keeps its previous frame, and the materializer uses public lowering-code constants checked against the runtime's intrinsic list. Vellum-authoritative code with no Pulp consumer on Pulp main; nothing to port.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 85ec42b2d6f4223bb89fa68ec8b6c621987989ec maps authoring/src/rendered_tree_materializer.mm, authoring/tests/rendered_tree_materializer_test.cpp, authoring/tests/test_phase3_contracts.py, graphics/include/vellum/graphics/lowering_diagnostic.hpp, graphics/include/vellum/graphics/paint_command.hpp, graphics/include/vellum/graphics/scene.hpp, graphics/include/vellum/graphics/skia_dawn_surface.hpp, graphics/src/paint_command.cpp, graphics/src/skia_dawn_surface.mm, graphics/tests/gpu_style_test.cpp, graphics/tests/paint_command_test.cpp; contract tests: vellum-ui, vellum.authoring, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-85ec42b2d6f4223bb89fa68ec8b6c621987989ec",
   "schema_version": 1,
   "shared_contract_release_blocker": false

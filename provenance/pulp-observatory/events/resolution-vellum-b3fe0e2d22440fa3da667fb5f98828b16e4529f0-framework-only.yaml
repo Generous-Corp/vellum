@@ -17,7 +17,7 @@
     "https://github.com/Generous-Corp/vellum/pull/156"
   ],
   "owner": "@danielraffel",
-  "rationale": "Reclassified from ported. This commit hardens Vellum's own Illustrator adapter, the route the owner assigned to Vellum on 2026-11-01, and leaves no obligation for Pulp. Pulp's separate copy of the helper, which stays only until the Pulp CLI forwards to Vellum, was hardened in Pulp by https://github.com/Generous-Corp/pulp/pull/11443 (merged as 87797002) under Pulp's own review; that is not a port of this commit, so it is not counted as a repeated generic fix.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit b3fe0e2d22440fa3da667fb5f98828b16e4529f0 maps authoring/adapters/illustrator/illustrator_to_svg.py, authoring/adapters/illustrator/test_illustrator_to_svg.py; contract tests: vellum-ui, vellum.authoring. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-b3fe0e2d22440fa3da667fb5f98828b16e4529f0",
   "schema_version": 1,
   "shared_contract_release_blocker": false

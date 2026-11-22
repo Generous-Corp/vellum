@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Makes Vellum's renderer refuse path nodes without geometry, and treats them as unbounded for paint_extent and as whole-frame damage. Tests cover non-finite paths, arc and cap reach, and web-shell loss. Vellum's retained path node only.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit e3768c9551c6bfdc31737bac19fdd2a2a2dadb96 maps graphics/include/vellum/graphics/damage.hpp, graphics/include/vellum/graphics/paint_command.hpp, graphics/include/vellum/graphics/scene.hpp, graphics/src/damage.cpp, graphics/src/paint_command.cpp, graphics/src/skia_dawn_surface.mm, graphics/tests/damage_test.cpp, graphics/tests/gpu_style_test.cpp, graphics/tests/paint_command_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-e3768c9551c6bfdc31737bac19fdd2a2a2dadb96",
   "schema_version": 1,
   "shared_contract_release_blocker": false

@@ -11,7 +11,7 @@
   "linked_commits": [],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Vellum-owned standalone framework behavior. Any later Pulp adoption must consume it through a pinned Vellum dependency and adapter tests, not synchronized source copies.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit de7b7a3c516ab8ee0567386023d4da5d48a56b78 maps graphics/CMakeLists.txt, graphics/include/vellum/graphics/paint_command.hpp, graphics/src/paint_command.cpp, graphics/src/skia_dawn_surface.mm, graphics/tests/paint_command_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-de7b7a3c516ab8ee0567386023d4da5d48a56b78",
   "schema_version": 1,
   "shared_contract_release_blocker": false

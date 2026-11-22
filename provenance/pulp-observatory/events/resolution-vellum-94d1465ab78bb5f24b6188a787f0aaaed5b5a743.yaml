@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Integration merge (Merge pull request #262 from Generous-Corp/feat/scene-damage-model-v2-20261109). It carries no change beyond the commits it merges, whose own observations are classified separately in this ledger, so it has no independent contract.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 94d1465ab78bb5f24b6188a787f0aaaed5b5a743 maps graphics/CMakeLists.txt, graphics/include/vellum/graphics/damage.hpp, graphics/src/damage.cpp, graphics/tests/damage_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-94d1465ab78bb5f24b6188a787f0aaaed5b5a743",
   "schema_version": 1,
   "shared_contract_release_blocker": false

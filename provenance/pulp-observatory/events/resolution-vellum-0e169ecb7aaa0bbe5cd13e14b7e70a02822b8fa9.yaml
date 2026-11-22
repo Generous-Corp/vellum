@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@claude-observatory-agent",
-  "rationale": "Vellum-native effect-group painter fix (offscreen filter input extent, single group fade over a backdrop) in graphics/src/skia_dawn_surface.mm. Pulp composites its own backdrop and effects in core/canvas and shares none of this code. Pulp search at origin/main ced536cbc56b (git grep -w over core tools test examples apple ship inspect) for effect_input_rect, effect_chain_cost, layer_extent and PaintCommand returns 0; control SkiaSurface on the same search returns 288 in 64 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-10 and 2026-11-13); no schema or API delta. Any later resolution overrides it.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 0e169ecb7aaa0bbe5cd13e14b7e70a02822b8fa9 maps graphics/src/skia_dawn_surface.mm, graphics/tests/effect_gpu_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-0e169ecb7aaa0bbe5cd13e14b7e70a02822b8fa9",
   "schema_version": 1,
   "shared_contract_release_blocker": false

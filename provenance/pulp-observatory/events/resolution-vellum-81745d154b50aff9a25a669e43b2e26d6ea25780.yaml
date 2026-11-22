@@ -17,7 +17,7 @@
     "https://github.com/Generous-Corp/vellum/pull/28"
   ],
   "owner": "@danielraffel",
-  "rationale": "The clean-checkout Pulp/Vellum router classified this as Vellum-owned generic work with a framework-only observatory disposition and no affected Pulp counterpart. It is retained with its Vellum contract proofs; any future Pulp use must adopt a pinned Vellum SDK through an adapter rather than copy framework source.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit 81745d154b50aff9a25a669e43b2e26d6ea25780 maps apps/app-host/main.mm, apps/gpu-native/main.mm, apps/minimal-scene/main.cpp, graphics/include/vellum/graphics/dawn_bootstrap.hpp, graphics/include/vellum/graphics/dawn_native_bootstrap.hpp, graphics/include/vellum/graphics/skia_dawn_surface.hpp, graphics/src/dawn_bootstrap.cpp, graphics/src/skia_dawn_surface.mm, graphics/tests/dawn_bootstrap_test.cpp, graphics/tests/dawn_provider_topology_test.cpp, graphics/tests/gpu_style_test.cpp, graphics/tests/legacy_config_caller_test.cpp, graphics/tests/legacy_include/vellum/graphics/skia_dawn_surface.hpp, graphics/tests/legacy_install_consumer/CMakeLists.txt, graphics/tests/legacy_install_consumer/legacy_include/vellum/graphics/skia_dawn_surface.hpp, graphics/tests/legacy_install_consumer/main.cpp, graphics/tests/test_dawn_provider_topology.py; contract tests: vellum.authoring, vellum.capture-stats, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-81745d154b50aff9a25a669e43b2e26d6ea25780",
   "schema_version": 1,
   "shared_contract_release_blocker": false

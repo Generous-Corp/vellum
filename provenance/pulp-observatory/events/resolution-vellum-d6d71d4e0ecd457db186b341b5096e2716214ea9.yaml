@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Keeps Vellum's partial redraw fail-closed: a capture after a failed frame re-baselines the damage tracker, caller damage keeps pending host invalidations, and culling uses each paint command's own bounds. Fixes code that exists only in Vellum's retained surface. Pulp main has no SkiaDawnSurface, retained scene, DamageRegion or render caches.",
+  "rationale": "Framework-only classification by the Vellum lead. Source commit d6d71d4e0ecd457db186b341b5096e2716214ea9 maps graphics/include/vellum/graphics/damage.hpp, graphics/include/vellum/graphics/skia_dawn_surface.hpp, graphics/src/skia_dawn_surface.mm, graphics/tests/partial_present_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
   "resolves": "vellum-d6d71d4e0ecd457db186b341b5096e2716214ea9",
   "schema_version": 1,
   "shared_contract_release_blocker": false
