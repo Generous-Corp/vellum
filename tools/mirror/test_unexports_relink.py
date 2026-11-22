@@ -28,6 +28,35 @@ class UnexportsRelinkTest(unittest.TestCase):
             'set_property(TARGET vellum-skia-dawn-provider APPEND PROPERTY LINK_DEPENDS\n'
             '    "${_vellum_provider_exports}")', cmake)
 
+    def test_weak_choc_definition_is_hidden_by_mirror_patterns(self) -> None:
+        repo = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory(dir=repo) as directory:
+            root = Path(directory)
+            (root / "mirror.cpp").write_text(
+                "namespace choc { namespace javascript { namespace quickjs { "
+                "__attribute__((weak)) void planted() {} }}}\n", encoding="utf-8")
+            (root / "patterns.list").write_text("__ZN4choc*\n", encoding="utf-8")
+            (root / "CMakeLists.txt").write_text(
+                """cmake_minimum_required(VERSION 3.24)
+project(unexports-choc LANGUAGES CXX)
+set(GENERATED "${CMAKE_BINARY_DIR}/unexports.list")
+add_custom_command(OUTPUT "${GENERATED}"
+    COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_SOURCE_DIR}/patterns.list" "${GENERATED}"
+    DEPENDS "${CMAKE_SOURCE_DIR}/patterns.list")
+add_custom_target(unexports DEPENDS "${GENERATED}")
+add_library(mirror SHARED mirror.cpp)
+target_link_options(mirror PRIVATE "LINKER:-unexported_symbols_list,${GENERATED}")
+add_dependencies(mirror unexports)
+set_property(TARGET mirror APPEND PROPERTY LINK_DEPENDS "${GENERATED}")
+""", encoding="utf-8")
+            build = root / "build"
+            subprocess.run(["cmake", "-S", str(root), "-B", str(build), "-G", "Ninja"],
+                           check=True, capture_output=True, text=True)
+            subprocess.run(["ninja", "-C", str(build), "mirror"], check=True, capture_output=True, text=True)
+            image = build / "libmirror.dylib"
+            exported = subprocess.run(["nm", "-gU", str(image)], check=True, capture_output=True, text=True).stdout
+            self.assertNotIn("choc", exported)
+
     def test_pattern_only_change_relinks_and_changes_exports(self) -> None:
         repo = Path(__file__).resolve().parents[2]
         with tempfile.TemporaryDirectory(dir=repo) as directory:
