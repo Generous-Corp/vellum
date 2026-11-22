@@ -1,0 +1,35 @@
+# Vellum and its in-tree GPU runtime. Match the owning namespace in the
+# Itanium name, including qualified members, RTTI, vtables and thunks.
+__ZN6vellum*
+__ZN[KRVO]6vellum*
+__ZNK[RO]6vellum*
+__ZZN6vellum*
+__ZZNK6vellum*
+__ZGVZN6vellum*
+__ZGVZNK6vellum*
+__ZTHN6vellum*
+__ZTWN6vellum*
+__ZT[IVS]N6vellum*
+__ZTTN6vellum*
+__ZT[hv]*_N6vellum*
+__ZT[hv]*_NK6vellum*
+__ZTc*_N6vellum*
+__ZTc*_NK6vellum*
+__ZN11gpu_runtime*
+__ZN[KRVO]11gpu_runtime*
+__ZZN11gpu_runtime*
+__ZZNK11gpu_runtime*
+__ZGVZN11gpu_runtime*
+__ZGVZNK11gpu_runtime*
+__ZTHN11gpu_runtime*
+__ZTWN11gpu_runtime*
+__ZT[IVS]N11gpu_runtime*
+__ZT[hv]*_N11gpu_runtime*
+__ZT[hv]*_NK11gpu_runtime*
+_vellum_*
+_OBJC_CLASS_$_VellumMirror*
+_OBJC_METACLASS_$_VellumMirror*
+_OBJC_IVAR_$_VellumMirror*
+
+# Public WebGPU C entry points used by hosts with Vellum::DawnHeaders.
+_wgpu[A-Z]*

@@ -174,6 +174,27 @@ function isSvgLineType(type: string): boolean {
     return type === 'SvgLine' || type === 'line';
 }
 
+function isSvgCircleType(type: string): boolean {
+    return type === 'circle';
+}
+
+function circleNumber(value: unknown): number {
+    const n = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(n) ? n : 0;
+}
+
+/// Re-synthesize a lowercase `<circle>`'s path from cx/cy/r (the same two-arc
+/// construction host-config uses at creation). A nonpositive radius clears
+/// the path so the old circle does not stay painted.
+function emitSvgCircleGeometry(id: string, props: Record<string, unknown>): void {
+    const cx = circleNumber(props.cx);
+    const cy = circleNumber(props.cy);
+    const r = circleNumber(props.r);
+    if (!(r > 0)) { call('setSvgPath', id, ''); return; }
+    call('setSvgPath', id,
+        `M ${cx - r} ${cy} a ${r} ${r} 0 1 0 ${2 * r} 0 a ${r} ${r} 0 1 0 ${-2 * r} 0 Z`);
+}
+
 function hasProp(props: Record<string, unknown>, key: string): boolean {
     return Object.prototype.hasOwnProperty.call(props, key)
         && props[key] !== undefined && props[key] !== null;
@@ -469,21 +490,26 @@ function applyEventHandler(id: string, key: string, value: unknown): void {
 /// back to zero. Reads current values from `props` (the live React
 /// props snapshot) and falls back to 0 for unset axes, matching SVG
 /// `<rect>` defaults.
+function finiteNum(v: unknown): number {
+    const n = typeof v === 'number' ? v : (typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN);
+    return Number.isFinite(n) ? n : 0;
+}
+
 function emitSvgRectGeometry(id: string, props: Record<string, unknown>): void {
-    const x = typeof props.x === 'number' ? props.x as number : 0;
-    const y = typeof props.y === 'number' ? props.y as number : 0;
-    const w = typeof props.width === 'number' ? props.width as number : 0;
-    const h = typeof props.height === 'number' ? props.height as number : 0;
+    const x = finiteNum(props.x);
+    const y = finiteNum(props.y);
+    const w = finiteNum(props.width);
+    const h = finiteNum(props.height);
     call('setSvgRect', id, x, y, w, h);
 }
 
 /// Emit one setSvgLine call carrying the full geometry (x1, y1, x2,
 /// y2). Same partial-update guard as emitSvgRectGeometry.
 function emitSvgLineGeometry(id: string, props: Record<string, unknown>): void {
-    const x1 = typeof props.x1 === 'number' ? props.x1 as number : 0;
-    const y1 = typeof props.y1 === 'number' ? props.y1 as number : 0;
-    const x2 = typeof props.x2 === 'number' ? props.x2 as number : 0;
-    const y2 = typeof props.y2 === 'number' ? props.y2 as number : 0;
+    const x1 = finiteNum(props.x1);
+    const y1 = finiteNum(props.y1);
+    const x2 = finiteNum(props.x2);
+    const y2 = finiteNum(props.y2);
     call('setSvgLine', id, x1, y1, x2, y2);
 }
 
@@ -753,6 +779,10 @@ function applyOne(id: string, type: string, key: string, value: unknown, props?:
         case 'stroke':       return call('setSvgStroke', id, value as string);
         case 'strokeGradient': return call('setSvgStrokeGradient', id, value as string);
         case 'strokeWidth':  return call('setSvgStrokeWidth', id, value as number);
+        // ModalProps.open drives the native modal's visibility.
+        case 'open':
+            if (type === 'Modal') return call('setVisible', id, Boolean(value));
+            return;
 
         default:
             // Unknown prop, silently ignore. We could warn here in DEV
@@ -1007,6 +1037,15 @@ export function applyChangedProps(
         emitSvgLineGeometry(id, newProps);
         mutated = true;
     }
+    const svgCircleGeoChanged = isSvgCircleType(type) && (
+        oldProps.cx !== newProps.cx ||
+        oldProps.cy !== newProps.cy ||
+        oldProps.r !== newProps.r
+    );
+    if (svgCircleGeoChanged) {
+        emitSvgCircleGeometry(id, newProps);
+        mutated = true;
+    }
 
     // Walk new props, set anything that changed value
     for (const key of orderedPropKeys(type, newProps)) {
@@ -1021,6 +1060,7 @@ export function applyChangedProps(
         // per-prop dispatch so we don't double-fire bridge calls.
         if (svgRectGeoChanged && isSvgRectType(type) && (key === 'x' || key === 'y' || key === 'width' || key === 'height')) continue;
         if (svgLineGeoChanged && isSvgLineType(type) && (key === 'x1' || key === 'y1' || key === 'x2' || key === 'y2')) continue;
+        if (isSvgCircleType(type) && (key === 'cx' || key === 'cy' || key === 'r')) continue;
         if (oldProps[key] !== newProps[key]) {
             if (isEventHandler(key)) {
                 applyEventHandler(id, key, newProps[key]);
@@ -1068,6 +1108,7 @@ export function applyChangedProps(
         if (scrollOffsetsApplied && type === 'ScrollView'
             && (key === 'scrollTop' || key === 'scrollLeft')) continue;
         if (svgPathStrokeChanged && (key === 'stroke' || key === 'strokeGradient')) continue;
+        if (svgCircleGeoChanged && (key === 'cx' || key === 'cy' || key === 'r')) continue;
         if (derivedShapeChanged && isDerivedKey(oldProps, key)) continue;
         if (isEventHandler(key)) {
             if (key in newProps) continue;

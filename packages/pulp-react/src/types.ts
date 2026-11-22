@@ -134,6 +134,7 @@ export interface FlexProps {
 // ── Visual style ────────────────────────────────────────────────────
 export interface StyleProps {
     background?: string;            // hex; maps to setBackground
+    backgroundColor?: string;       // hex or var(); maps to setBackground
     backgroundGradient?: string;    // CSS-string; maps to setBackgroundGradient
     /// CSS background sub-properties. Stored on the View for
     /// round-tripping; paint impact is partial today.

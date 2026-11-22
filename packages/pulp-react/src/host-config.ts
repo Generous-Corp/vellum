@@ -375,7 +375,14 @@ function createWidget(type: Type, id: string, parentId: string, props: Props, ca
             }
             return;
         }
-        case 'TextEditor':  call('createTextEditor', id, parentId); return;
+        case 'TextEditor': {
+            call('createTextEditor', id, parentId);
+            // TEXT_BEARING keeps React from mounting a text child, so initial
+            // text children must reach the editor here.
+            const initial = asText(props.children) ?? (props.text as string | undefined);
+            if (initial) call('setText', id, initial);
+            return;
+        }
         case 'ScrollView':  call('createScrollView', id, parentId); return;
         case 'Modal':       call('createModal', id, parentId); return;
         case 'Knob':        call('createKnob', id, parentId); return;
@@ -507,7 +514,12 @@ function createWidget(type: Type, id: string, parentId: string, props: Props, ca
                     }
                     return;
                 }
-                case 'textarea': call('createTextEditor', id, parentId); return;
+                case 'textarea': {
+                    call('createTextEditor', id, parentId);
+                    const initial = asText(props.children) ?? (props.text as string | undefined);
+                    if (initial) call('setText', id, initial);
+                    return;
+                }
                 case 'select':   call('createCombo', id, parentId); return;
                 case 'progress': call('createProgress', id, parentId); return;
                 case 'img':      call('createImage', id, parentId); return;
@@ -548,7 +560,7 @@ function createWidget(type: Type, id: string, parentId: string, props: Props, ca
                     // Mirrors web-compat-element.js __replaySvgCircleAttributes__.
                     // Render at construction time using whatever cx/cy/r
                     // the JSX commits in this pass; subsequent prop updates
-                    // re-synth via the cx/cy/r handlers in prop-applier.
+                    // re-synth via emitSvgCircleGeometry in prop-applier.
                     call('createSvgPath', id, parentId);
                     const cx = typeof props.cx === 'number' ? props.cx as number : Number(props.cx) || 0;
                     const cy = typeof props.cy === 'number' ? props.cy as number : Number(props.cy) || 0;
@@ -659,7 +671,7 @@ function syncDomSemanticProps(
 /// React from materializing an extra synthetic Label child on top of the
 /// Label created by createWidget for pure text content.
 const TEXT_BEARING: Set<Type> = new Set([
-    'Label', 'Button', 'TextEditor',
+    'Label', 'Button', 'TextEditor', 'Badge', 'badge', 'textarea',
     'b', 'button', 'code', 'desc', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
     'i', 'label', 'li', 'p', 'pre', 'span', 'strong', 'td', 'text', 'th',
     'title', 'tspan',

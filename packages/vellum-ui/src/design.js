@@ -186,7 +186,7 @@ function retainedGradient(context, refs, prefix, gradient) {
     return output;
 }
 
-const PATH_PAINT_FIELDS = new Set(['fill', 'stroke', ...PATH_STROKE_FIELDS]);
+const PATH_PAINT_FIELDS = new Set(['fill', 'stroke', ...PATH_STROKE_FIELDS, ...VECTOR_PAINT_KEYS]);
 const PATH_GEOMETRY_FIELDS = new Set(['d', 'fillRule']);
 
 function requirePathFields(node, name, value, allowed) {
@@ -213,7 +213,11 @@ function pathPaint(context, node, refs) {
             ? retainedGradient(context, refs, 'fill', paint.fill)
             : colorSlot(context, refs, 'fill', paint.fill);
     }
-    if (paint.stroke !== undefined) output.stroke = colorSlot(context, refs, 'stroke', paint.stroke);
+    if (paint.stroke !== undefined) {
+        output.stroke = paint.stroke && typeof paint.stroke === 'object'
+            ? retainedGradient(context, refs, 'stroke', paint.stroke)
+            : colorSlot(context, refs, 'stroke', paint.stroke);
+    }
     for (const field of PATH_STROKE_FIELDS) {
         const value = paint[field];
         if (value === undefined) continue;
@@ -235,40 +239,93 @@ function retainedStyle(context, node, viewport, root) {
     const typography = properties.text && typeof properties.text === 'object'
         ? properties.text : {};
     const style = Object.create(null);
-    for (const property of ['x', 'y', 'width', 'height', 'padding', 'gap']) {
+    for (const property of [
+        'x', 'y', 'width', 'height', 'padding', 'gap', 'columnGap', 'rowGap', 'flexGrow',
+    ]) {
         if (typeof layout[property] === 'number' && Number.isFinite(layout[property])) {
             style[property] = layout[property];
         }
     }
     if (layout.direction === 'row') style.direction = 'horizontal';
     else if (layout.direction === 'column') style.direction = 'vertical';
+    if (layout.display === 'grid') {
+        style.direction = 'horizontal';
+        style.wrap = true;
+        style.display = 'grid';
+        if (style.gap === undefined && typeof layout.columnGap === 'number') {
+            style.gap = layout.columnGap;
+        }
+    }
+    for (const property of [
+        'align', 'alignContent', 'alignSelf', 'gridColumn', 'gridRow',
+        'gridTemplateColumns', 'gridTemplateRows', 'justify', 'wrap',
+    ]) {
+        if (typeof layout[property] === 'string' || typeof layout[property] === 'boolean') {
+            style[property] = layout[property];
+        }
+    }
     const drawsBox = node.kind !== 'path' && node.kind !== 'text-run';
     if (drawsBox && typeof paint.backgroundColor === 'string') {
         style.backgroundColor = colorSlot(context, refs, 'backgroundColor', paint.backgroundColor);
     }
     if (drawsBox && paint.boxShadow !== undefined) {
-        const shadow = paint.boxShadow;
-        if (!shadow || typeof shadow !== 'object') {
+        const shadows = Array.isArray(paint.boxShadow) ? paint.boxShadow : [paint.boxShadow];
+        if (shadows.some((shadow) => !shadow || typeof shadow !== 'object')) {
             throw new TypeError(`design node ${node.id} paint.boxShadow must be an object`);
         }
-        style.boxShadow = {
+        const retainedShadows = shadows.map((shadow) => ({
             ...paintNumbers(shadow, ['offsetX', 'offsetY', 'blurRadius', 'spreadRadius']),
             color: colorSlot(context, refs, 'boxShadow', shadow.color),
-        };
+        }));
+        if (retainedShadows.length > 1 && refs.boxShadow !== undefined) {
+            throw new TypeError(`design node ${node.id} paint.boxShadow cannot use color tokens with multiple shadows`);
+        }
+        style.boxShadow = retainedShadows.length === 1 ? retainedShadows[0] : retainedShadows;
     }
     if (drawsBox && paint.backgroundLinearGradient !== undefined) {
         style.backgroundLinearGradient = retainedGradient(
             context, refs, 'backgroundLinearGradient', paint.backgroundLinearGradient);
     }
-    if (typeof paint.borderRadius === 'number' || typeof paint.borderRadius === 'string') {
-        const radius = tokenValue(tokens, paint.borderRadius, [], context.tokenLayers);
-        if (typeof radius === 'number' && Number.isFinite(radius)) style.borderRadius = radius;
+    if (drawsBox && paint.backgroundGradient !== undefined) {
+        style.backgroundGradient = retainedGradient(
+            context, refs, 'backgroundGradient', paint.backgroundGradient);
+    }
+    if (drawsBox && paint.border && typeof paint.border === 'object') {
+        style.border = paint.border;
+    }
+    if (drawsBox && Array.isArray(paint.backgroundGradients)) {
+        style.backgroundGradients = paint.backgroundGradients.map((gradient, index) =>
+            retainedGradient(context, refs, `backgroundGradients.${index}`, gradient));
+    }
+    for (const property of [
+        'borderRadius', 'borderTopLeftRadius', 'borderTopRightRadius',
+        'borderBottomRightRadius', 'borderBottomLeftRadius',
+        'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
+    ]) {
+        const value = tokenValue(tokens, paint[property], [], context.tokenLayers);
+        if (typeof value === 'number' && Number.isFinite(value)) style[property] = value;
+    }
+    for (const property of [
+        'borderTopColor', 'borderRightColor', 'borderBottomColor', 'borderLeftColor',
+    ]) {
+        if (typeof paint[property] === 'string') {
+            style[property] = canonicalColor(tokenValue(
+                tokens, paint[property], [], context.tokenLayers));
+        }
+    }
+    for (const property of ['borderTopLeftRadius', 'borderTopRightRadius',
+        'borderBottomRightRadius', 'borderBottomLeftRadius']) {
+        if (typeof paint[property] === 'number' && Number.isFinite(paint[property])) {
+            style[property] = paint[property];
+        }
     }
     if (typeof typography.color === 'string' && node.kind !== 'path') {
         style.color = colorSlot(context, refs, 'color', typography.color);
     }
-    if (typeof typography.fontSize === 'number' && Number.isFinite(typography.fontSize)) {
-        style.fontSize = typography.fontSize;
+    Object.assign(style, paintNumbers(typography, ['fontSize', 'fontWeight', 'letterSpacing']));
+    if (typeof typography.fontFamily === 'string') style.fontFamily = typography.fontFamily;
+    for (const property of ['fontStyle', 'textAlign', 'verticalAlign']) {
+        if (typeof typography[property] === 'string') style[property] = typography[property];
     }
     for (const property of VECTOR_PAINT_KEYS) {
         if (typeof paint[property] === 'string') style[property] = paint[property];

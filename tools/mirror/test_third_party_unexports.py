@@ -43,6 +43,17 @@ class ThirdPartyUnexportsTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             tpu.build([Path("a.a")], "_mz_*\n", nm=lambda p: "")
 
+    def test_mirror_patterns_cover_weak_choc_and_graphite_definitions(self) -> None:
+        patterns = (HERE / "third_party_unexports.txt").read_text(encoding="utf-8")
+        self.assertIn("__ZN4choc*", patterns)
+        self.assertIn("__ZN5skgpu8graphite*", patterns)
+        # A function-local static in a const member function has a guard variable
+        # spelled __ZGVZNK..., which the non-const __ZGVZN... pattern does not match.
+        lines = set(patterns.splitlines())
+        for namespace in ("7httplib", "4choc", "5skgpu8graphite"):
+            self.assertIn(f"__ZGVZN{namespace}*", lines)
+            self.assertIn(f"__ZGVZNK{namespace}*", lines)
+
     def test_main_writes_the_list_and_fails_without_symbols(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "list"

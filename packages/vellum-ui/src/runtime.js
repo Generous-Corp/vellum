@@ -381,6 +381,16 @@ function validateLinearGradient(value, path, { coincidentStops = false } = {}) {
 }
 
 function validateBoxShadow(value, path) {
+    if (Array.isArray(value)) {
+        if (value.length === 0 || value.length > 8) {
+            throw new TypeError(`${path} must contain between 1 and 8 shadows`);
+        }
+        return value.map((shadow, index) => validateBoxShadowEntry(shadow, `${path}[${index}]`));
+    }
+    return validateBoxShadowEntry(value, path);
+}
+
+function validateBoxShadowEntry(value, path) {
     const shadow = paintStyleObject(
         value, path, ['offsetX', 'offsetY', 'blurRadius', 'spreadRadius', 'color']);
     for (const name of ['offsetX', 'offsetY']) {
@@ -395,6 +405,19 @@ function validateBoxShadow(value, path) {
         throw new TypeError(`${path}.color must be a hex color`);
     }
     return cloneJson(shadow, path);
+}
+
+function validateBorder(value, path) {
+    const border = paintStyleObject(value, path, ['width', 'style', 'color']);
+    finitePaintNumber(border.width, `${path}.width`, { optional: true, nonNegative: true });
+    if (border.style !== undefined && border.style !== 'solid') {
+        throw new TypeError(`${path}.style must be solid`);
+    }
+    if (typeof border.color !== 'string' ||
+        !/^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$/.test(border.color)) {
+        throw new TypeError(`${path}.color must be a hex color`);
+    }
+    return cloneJson(border, path);
 }
 
 function pathKeyword(value, path, names) {
@@ -735,8 +758,20 @@ function validateStyle(style, path) {
             result[name] = validateLinearGradient(value, `${path}.style.${name}`);
             continue;
         }
+        if (name === 'backgroundGradients') {
+            if (!Array.isArray(value) || value.length > 8) {
+                throw new TypeError(`${path}.style.backgroundGradients requires up to eight layers`);
+            }
+            result[name] = value.map((layer, index) => validateLinearGradient(
+                layer, `${path}.style.backgroundGradients.${index}`, { coincidentStops: true }));
+            continue;
+        }
         if (name === 'boxShadow') {
             result[name] = validateBoxShadow(value, `${path}.style.${name}`);
+            continue;
+        }
+        if (name === 'border') {
+            result[name] = validateBorder(value, `${path}.style.${name}`);
             continue;
         }
         if (!['string', 'number', 'boolean'].includes(typeof value)) {
@@ -762,24 +797,32 @@ function canonicalTokenColor(value) {
 // The colour each token slot names, by element type: `[property, colour]`, or
 // undefined when the slot does not exist on that element.
 function tokenSlotColor(slot, type, style, pathProperties) {
-    const stop = /^(backgroundLinearGradient|fill)\.stops\.(0|[1-9][0-9]*)$/.exec(slot);
+    const stop = /^(backgroundLinearGradient|backgroundGradients\.([0-7]))\.stops\.(0|[1-9][0-9]*)$/.exec(slot);
+    const pathStop = /^fill\.stops\.(0|[1-9][0-9]*)$/.exec(slot);
     if (type === 'path') {
         if (slot === 'fill' && typeof pathProperties?.fill === 'string') {
             return ['fill', pathProperties.fill];
         }
         if (slot === 'stroke') return ['stroke', pathProperties?.stroke];
-        if (stop && stop[1] === 'fill' && typeof pathProperties?.fill === 'object') {
-            return [slot, pathProperties.fill.stops?.[Number(stop[2])]?.color];
+        if (pathStop && typeof pathProperties?.fill === 'object') {
+            return [slot, pathProperties.fill.stops?.[Number(pathStop[1])]?.color];
         }
         return undefined;
     }
     if (slot === 'color') return ['style.color', style?.color];
     if (type === 'text-run') return undefined;
     if (slot === 'backgroundColor') return ['style.backgroundColor', style?.backgroundColor];
-    if (slot === 'boxShadow') return ['style.boxShadow.color', style?.boxShadow?.color];
-    if (stop && stop[1] === 'backgroundLinearGradient') {
-        return [`style.${slot}`,
-            style?.backgroundLinearGradient?.stops?.[Number(stop[2])]?.color];
+    if (slot === 'boxShadow') {
+        const shadows = style?.boxShadow;
+        if (Array.isArray(shadows) && shadows.length !== 1) return undefined;
+        const shadow = Array.isArray(shadows) ? shadows[0] : shadows;
+        return ['style.boxShadow.color', shadow?.color];
+    }
+    if (stop) {
+        const layer = stop[1] === 'backgroundLinearGradient'
+            ? style?.backgroundLinearGradient
+            : style?.backgroundGradients?.[Number(stop[2])];
+        return [`style.${slot}`, layer?.stops?.[Number(stop[3] ?? stop[2])]?.color];
     }
     return undefined;
 }

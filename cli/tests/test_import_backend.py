@@ -87,11 +87,54 @@ class ImportBackendTests(unittest.TestCase):
 
         self.assertEqual(result, (9, Path("/tmp/index.html")))
 
+    def test_dispatcher_recognizes_fig_frame_option(self) -> None:
+        arguments = ["--frame", "0:10", "/tmp/source.fig", "--source-type", "fig"]
+        self.assertEqual(source_argument(arguments, "import"), (2, Path("/tmp/source.fig")))
+
     def create(self, parent: Path, directory: str = "app") -> Path:
         app = parent / directory
         completed = invoke("create", "Import App", "--directory", str(app), cwd=parent)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         return app
+
+    @unittest.skipUnless(shutil.which("node"), "requires Node")
+    def test_fig_frame_selection_survives_reimport_and_design_check(self) -> None:
+        fixture = REPO / "packages/vellum-design-ir/test/fixtures/synthetic.fig"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = self.create(root)
+            imported = invoke("import", "--frame", "0:10", str(fixture), cwd=app)
+            self.assertEqual(imported.returncode, 0, imported.stdout)
+            design_path = app / "ui/generated/main.materialized.json"
+            design = json.loads(design_path.read_text(encoding="utf-8"))
+            self.assertEqual(design["root"]["name"], "Paint Lab")
+
+            assets = list((app / "assets/generated/main").rglob("*.png"))
+            self.assertEqual(len(assets), 1)
+            self.assertTrue(assets[0].read_bytes().startswith(b"\x89PNG"))
+
+            checked = invoke("design", "check", cwd=app)
+            self.assertEqual(checked.returncode, 0, checked.stdout)
+            reimported = invoke("reimport", "--source", str(fixture), cwd=app)
+            self.assertEqual(json.loads(reimported.stdout)["status"], "reimport_unchanged")
+
+    @unittest.skipUnless(shutil.which("node"), "requires Node")
+    def test_fig_uses_archive_size_limit(self) -> None:
+        generator = REPO / "packages/vellum-design-ir/test/support/make_synthetic_fig.mjs"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = self.create(root)
+            source = root / "large.fig"
+            subprocess.run(
+                ["node", "--input-type=module", "-e",
+                 "import {writeFileSync} from 'node:fs';"
+                 "const {makeSyntheticFig} = await import(process.argv[1]);"
+                 "writeFileSync(process.argv[2], makeSyntheticFig({paddingBytes: 16 * 1024 * 1024}));",
+                 generator.as_uri(), str(source)],
+                check=True,
+            )
+            imported = invoke("import", "--source-type", "fig", str(source), cwd=app)
+            self.assertEqual(imported.returncode, 0, imported.stdout)
 
     def test_public_cli_import_and_reimport_preserve_authored_files(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

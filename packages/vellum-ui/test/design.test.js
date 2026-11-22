@@ -541,6 +541,82 @@ test('Design produces a receipt for every token slot', () => {
     assert.equal(tree.tokens.filter((receipt) => receipt.path === 'c.fill').length, 1);
 });
 
+test('Design forwards a distinct radius for each corner', () => {
+    const document = fixture();
+    const radii = {
+        borderTopLeftRadius: 2, borderTopRightRadius: 4,
+        borderBottomRightRadius: 6, borderBottomLeftRadius: 8,
+    };
+    Object.assign(document.root.properties.paint, radii);
+    const { style } = renderTree(document);
+    for (const [corner, radius] of Object.entries(radii)) {
+        assert.equal(style[corner], radius, corner);
+    }
+});
+
+test('Design forwards font style and both text alignments', () => {
+    const document = fixture();
+    const text = { fontStyle: 'italic', textAlign: 'center', verticalAlign: 'middle' };
+    document.root.children = [{
+        id: 'main/title', kind: 'text', text: 'Title', properties: { text }, children: [],
+    }];
+    assert.deepEqual(renderTree(document).children[0].style, text);
+});
+
+test('Design forwards a single background gradient', () => {
+    const document = fixture();
+    const stops = [{ position: 0, color: '#112233' }, { position: 1, color: '#445566' }];
+    for (const gradient of [
+        { kind: 'linear', angle: 45, stops },
+        { kind: 'radial', centerX: 0.25, centerY: 0.75, radiusX: 0.5, radiusY: 1, stops },
+    ]) {
+        document.root.properties.paint.backgroundGradient = gradient;
+        assert.deepEqual(renderTree(document).style.backgroundGradient, gradient);
+    }
+});
+
+test('Design forwards a border object', () => {
+    const document = fixture();
+    const border = { width: 3, style: 'solid', color: '#123456' };
+    document.root.properties.paint.border = border;
+    assert.deepEqual(renderTree(document).style.border, border);
+});
+
+test('Design rejects a color token on a later shadow', () => {
+    const document = fixture();
+    document.root.properties.paint.boxShadow = [
+        { offsetX: 1, color: '#000000' },
+        { offsetX: 2, color: '{main.color.accent}' },
+    ];
+    assert.throws(() => materializeDesign(document),
+        /paint\.boxShadow cannot use color tokens with multiple shadows/);
+});
+
+test('Design preserves token receipts in layered background gradients', () => {
+    const tree = renderTree({
+        tokens: {
+            'c.layerStop': { $type: 'color', $value: '#f97316' },
+        },
+        root: {
+            id: 'root', kind: 'view', properties: { layout: { width: 80, height: 60 } },
+            children: [{
+                id: 'layered', kind: 'view', children: [],
+                properties: { layout: { width: 80, height: 60 }, paint: {
+                    backgroundGradients: [{
+                        kind: 'linear', angle: 90,
+                        stops: [{ position: 0, color: '{c.layerStop}' },
+                            { position: 1, color: '#ffffff' }],
+                    }],
+                } },
+            }],
+        },
+    });
+    const layered = flatten(tree).find((node) => node.id === 'layered');
+    assert.deepEqual(Object.keys(layered.tokenRefs), ['backgroundGradients.0.stops.0']);
+    assert.equal(layered.style.backgroundGradients[0].stops[0].color, '#f97316');
+    assert.equal(receiptOf(tree, layered, 'backgroundGradients.0.stops.0').path, 'c.layerStop');
+});
+
 test('Design keeps every supported gradient field and refuses unknown ones', () => {
     const gradient = {
         kind: 'two-circle-radial', spread: 'reflect', interpolation: 'oklab',
