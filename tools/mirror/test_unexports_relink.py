@@ -67,3 +67,21 @@ set_property(TARGET mirror APPEND PROPERTY LINK_DEPENDS "${GENERATED}")
 
 if __name__ == "__main__":
     unittest.main()
+
+class GpuRuntimePinnedInterfaceTest(unittest.TestCase):
+    """Provider visibility must stay outside the mirror-bound header tree."""
+
+    def test_provider_visibility_contract_is_outside_pinned_headers(self) -> None:
+        repo = Path(__file__).resolve().parents[2]
+        include = repo / "gpu-runtime/include/gpu_runtime"
+        self.assertFalse((include / "export.h").exists())
+        for name in ("dawn_native_bootstrap.hpp", "gpu_surface.hpp"):
+            text = (include / name).read_text(encoding="utf-8")
+            self.assertNotIn("GPU_RUNTIME_API", text)
+
+        cmake = (repo / "gpu-runtime/CMakeLists.txt").read_text(encoding="utf-8")
+        provider = cmake[cmake.index("gpu-runtime-device-provider"):]
+        self.assertIn("CXX_VISIBILITY_PRESET default", provider)
+        self.assertIn("VISIBILITY_INLINES_HIDDEN OFF", provider)
+        exports = (repo / "cmake/skia_dawn_provider.exports").read_text(encoding="utf-8")
+        self.assertIn("_register_native_dawn_bootstrap", exports)
