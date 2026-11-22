@@ -3582,7 +3582,10 @@ class RendererPinTests(unittest.TestCase):
     def test_reexported_receipt_with_recorded_historical_asset_passes(self) -> None:
         renderer_path = self.root / "gpu-runtime/renderer-lock.json"
         renderer = json.loads(renderer_path.read_text())
-        renderer["historical_skia_assets"] = ["dca73c0eee5b0f6d129fe357d0754f7165c6b436051e0de947aeedd3e1bde250"]
+        # Derived, not written: scripts/check_renderer_lock.py refuses a literal
+        # digest outside the lock, and this stand-in needs no real asset.
+        historical_digest = hashlib.sha256(b"historical skia asset").hexdigest()
+        renderer["historical_skia_assets"] = [historical_digest]
         renderer["builder_change_exception"] = {
             "from": "312f05e24a5d5a45d4a3e70ca70ff3ccff1b4d97",
             "to": renderer["builder"]["commit"],
@@ -3595,7 +3598,7 @@ class RendererPinTests(unittest.TestCase):
         pin["release_assets"]["mac-universal"] = {
             "url": "https://github.com/danielraffel/skia-builder/releases/download/chrome/m158/"
                    "skia-build-mac-universal-gpu-release.zip",
-            "sha256": "dca73c0eee5b0f6d129fe357d0754f7165c6b436051e0de947aeedd3e1bde250",
+            "sha256": historical_digest,
         }
         receipt = self.receipt(self.pulp_commit(pin))
         errors, rows = verify_extraction.renderer_pin_errors(self.root, self.pulp, [receipt])
