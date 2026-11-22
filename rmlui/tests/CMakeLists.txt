@@ -11,6 +11,10 @@ endfunction()
 if(TARGET vellum-rmlui-plugin-view)
     vellum_rmlui_add_test(vellum-rmlui-plugin-view-test ../plugin_view/tests/plugin_view_test.cpp vellum-rmlui-plugin-view)
     add_test(NAME vellum.rmlui.plugin-view COMMAND vellum-rmlui-plugin-view-test)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        set_tests_properties(vellum.rmlui.plugin-view PROPERTIES
+            LABELS "framework;linux-host" TIMEOUT 90)
+    endif()
 endif()
 
 vellum_rmlui_add_test(vellum-rmlui-backend-test backend_test.cpp VellumRmlUi::Core)

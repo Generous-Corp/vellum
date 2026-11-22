@@ -400,6 +400,7 @@ if(TARGET pulp-view-core AND WIN32)
         "${PROJECT_SOURCE_DIR}/framework/core/view/platform/win/gpu_plugin_editor_host_win.cpp")
     target_include_directories(pulp-view-core PRIVATE
         "${PROJECT_SOURCE_DIR}/framework/core/view/include")
+    target_link_libraries(pulp-view-core PRIVATE user32 gdi32)
 endif()
 
 # Optional V8 (VELLUM_ENABLE_V8). The closures build view-script with QuickJS
@@ -453,8 +454,29 @@ if(TARGET pulp-view-core)
         "$<TARGET_PROPERTY:pulp-view-core,COMPILE_DEFINITIONS>")
 endif()
 
-# Everything below packages and links with Apple-only rules.
+# Everything below packages and links the mirror unit libraries.
 vellum_mirror_require_packaging()
+
+function(vellum_mirror_link_system_libraries target)
+    if(APPLE)
+        target_link_libraries("${target}" PRIVATE
+            "-framework Accelerate"
+            "-framework AppKit"
+            "-framework CoreFoundation"
+            "-framework CoreGraphics"
+            "-framework CoreServices"
+            "-framework CoreText"
+            "-framework Foundation"
+            "-framework IOKit"
+            "-framework Security"
+            "-framework SystemConfiguration"
+            "-framework UniformTypeIdentifiers"
+            "-framework UserNotifications"
+            bsm)
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_libraries("${target}" PRIVATE dl pthread)
+    endif()
+endfunction()
 
 # ── Package libraries ──────────────────────────────────────────────────────
 # One shared library per unit, each holding every object of its mirrored
@@ -473,11 +495,19 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
     add_library("Vellum::Mirror${_first}${_rest}" ALIAS "${_library}")
     set_target_properties("${_library}" PROPERTIES
         EXPORT_NAME "Mirror${_first}${_rest}"
-        MACOSX_RPATH ON
-        BUILD_WITH_INSTALL_RPATH ON
-        INSTALL_RPATH "@loader_path;@loader_path/../../${CMAKE_INSTALL_LIBDIR}"
-        OSX_ARCHITECTURES arm64
-        MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
+        BUILD_WITH_INSTALL_RPATH ON)
+    if(APPLE)
+        set_target_properties("${_library}" PROPERTIES
+            MACOSX_RPATH ON
+            INSTALL_RPATH "@loader_path;@loader_path/../../${CMAKE_INSTALL_LIBDIR}"
+            OSX_ARCHITECTURES arm64
+            MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
+    elseif(UNIX)
+        set_target_properties("${_library}" PROPERTIES
+            INSTALL_RPATH "$ORIGIN;$ORIGIN/../../${CMAKE_INSTALL_LIBDIR}")
+    elseif(WIN32)
+        set_target_properties("${_library}" PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+    endif()
     set(_whole)
     set(_external)
     set(_skia OFF)
@@ -556,16 +586,8 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
             target_link_libraries(vellum-skia-dawn-provider PRIVATE
                 ${_provider_unit_links})
         endif()
-        target_link_libraries(vellum-skia-dawn-provider PRIVATE
-            ${_third_party}
-            "-framework Accelerate"
-            "-framework AppKit"
-            "-framework CoreServices"
-            "-framework Security"
-            "-framework SystemConfiguration"
-            "-framework UniformTypeIdentifiers"
-            "-framework UserNotifications"
-            bsm)
+        target_link_libraries(vellum-skia-dawn-provider PRIVATE ${_third_party})
+        vellum_mirror_link_system_libraries(vellum-skia-dawn-provider)
         # Retain a concrete provider binding in this otherwise empty frontend.
         # Loading the frontend must also load its re-exported provider.
         target_sources("${_library}" PRIVATE
@@ -577,8 +599,12 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         # provider while retaining a standalone direct-link contract.
         target_link_libraries("${_library}" PUBLIC
             Vellum::SkiaDawnProvider ${_unit_links})
-        target_link_options("${_library}" PRIVATE
-            "LINKER:-reexport_library,$<TARGET_FILE:vellum-skia-dawn-provider>")
+        if(APPLE)
+            target_link_options("${_library}" PRIVATE
+                "LINKER:-reexport_library,$<TARGET_FILE:vellum-skia-dawn-provider>")
+        else()
+            target_link_libraries("${_library}" PUBLIC vellum-skia-dawn-provider)
+        endif()
     else()
         target_link_libraries("${_library}" PRIVATE
             "$<LINK_LIBRARY:WHOLE_ARCHIVE,${_whole}>"
@@ -596,21 +622,8 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
     endif()
     set_target_properties("${_library}" PROPERTIES
         VELLUM_MIRROR_CARRIED_ARCHIVES "${_third_party}")
-    target_link_libraries("${_library}" PRIVATE
-        "-framework Accelerate"
-        "-framework AppKit"
-        "-framework CoreFoundation"
-        "-framework CoreGraphics"
-        "-framework CoreServices"
-        "-framework CoreText"
-        "-framework Foundation"
-        "-framework IOKit"
-        "-framework Security"
-        "-framework SystemConfiguration"
-        "-framework UniformTypeIdentifiers"
-        "-framework UserNotifications"
-        bsm)
-    if(_skia)
+    vellum_mirror_link_system_libraries("${_library}")
+    if(_skia AND APPLE)
         # Export only the mirrored namespaces this unit defines.
         set(_exports "${CMAKE_CURRENT_BINARY_DIR}/vellum-mirror-${_vellum_mirror_unit}.exports")
         # The units' root namespace comes from the plan: pulp before the
@@ -629,7 +642,7 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         target_link_options("${_library}" PRIVATE
             "LINKER:-exported_symbols_list,${_exports}")
         set_property(TARGET "${_library}" APPEND PROPERTY LINK_DEPENDS "${_exports}")
-    else()
+    elseif(APPLE)
         # ld takes an export list or an unexport list, not both: the units
         # that have no export list leave the third-party names out.
         target_link_options("${_library}" PRIVATE
@@ -638,7 +651,9 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
             "${VELLUM_MIRROR_UNEXPORTS}")
         add_dependencies("${_library}" vellum-mirror-third-party-unexports)
     endif()
-    target_link_options("${_library}" PRIVATE "LINKER:-dead_strip_dylibs")
+    if(APPLE)
+        target_link_options("${_library}" PRIVATE "LINKER:-dead_strip_dylibs")
+    endif()
     target_compile_definitions("${_library}" INTERFACE
         ${VELLUM_MIRROR_UNIT_${_ukey}_DEFINITIONS})
     target_compile_features("${_library}" INTERFACE cxx_std_20)
@@ -753,7 +768,9 @@ endforeach()
 
 install(TARGETS ${_vellum_mirror_unit_libraries}
     EXPORT VellumMirrorTargets
-    LIBRARY DESTINATION "${VELLUM_MIRROR_INSTALL_DIR}/lib")
+    LIBRARY DESTINATION "${VELLUM_MIRROR_INSTALL_DIR}/lib"
+    RUNTIME DESTINATION "${VELLUM_MIRROR_INSTALL_DIR}/bin"
+    ARCHIVE DESTINATION "${VELLUM_MIRROR_INSTALL_DIR}/lib")
 install(EXPORT VellumMirrorTargets
     NAMESPACE Vellum::
     DESTINATION "${VELLUM_MIRROR_INSTALL_DIR}/lib/cmake/VellumMirror")
