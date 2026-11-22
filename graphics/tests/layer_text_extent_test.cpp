@@ -35,6 +35,21 @@ int main(int argc, char** argv) {
                    std::abs(extent->height - (metrics.ascent + metrics.descent + 32.0F)) < 0.01F,
                "the extent includes shaped overflow and font overhang");
     }
+    const auto width = [&](const char* text, const char* family) {
+        TextMetrics result;
+        const bool shaped = SkiaDawnSurface::measure_text(
+            {{.text = text, .style = {.font_family = family, .font_size = 16.0F}}},
+            result, directory, &error);
+        expect(shaped, "font family shapes without a GPU surface");
+        return result.width;
+    };
+    const float sans_wide = width("WWWW", "Inter");
+    const float sans_narrow = width("iiii", "Inter");
+    const float mono_wide = width("WWWW", "Unavailable, ui-monospace, monospace");
+    const float mono_narrow = width("iiii", "JetBrains Mono");
+    expect(sans_wide > sans_narrow && mono_wide > 0.0F &&
+               std::abs(mono_wide - mono_narrow) < 0.01F,
+           "CSS font stacks resolve the packaged monospace face");
     // A regular font file cannot be a directory, so this fails deterministically.
     error.clear();
     const auto failed = SkiaDawnSurfaceTestAccess::measure_layer_text_extent(

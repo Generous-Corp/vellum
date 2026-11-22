@@ -1480,6 +1480,7 @@ def parser() -> argparse.ArgumentParser:
             ("--source-type", {"choices": ["fig", "figma", "design-ir", "html", "claude-design"], "default": "figma"}),
             ("--as", {"dest": "source_key", "default": "main"}),
             ("--interaction-plan", {}),
+            ("--frame", {"help": "select a local Figma frame by GUID"}),
             ("--out", {"dest": "output", "metavar": "SVG"}),
             ("--provenance", {}),
             ("--page", {"type": int, "default": 1}),
@@ -1552,6 +1553,15 @@ def main(argv: Iterable[str] | None = None) -> int:
                 raise CliFailure(
                     "import accepts one source path, or 'illustrator INPUT'.",
                     status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
+        if args.command == "import" and args.frame is not None:
+            is_fig = args.source_type == "fig" or (
+                args.source_type == "figma" and Path(args.source).suffix.lower() == ".fig"
+            )
+            if args.source == "illustrator" or not is_fig:
+                raise CliFailure(
+                    "--frame requires a local Figma .fig source.",
+                    status="invalid_fig_frame", exit_code=EXIT_USAGE,
                 )
         if args.command == "create":
             payload = create_project(args)

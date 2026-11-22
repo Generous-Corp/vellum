@@ -5,6 +5,7 @@
 #include <vellum/graphics/plot.hpp>
 #include <vellum/graphics/scene_acceptance.hpp>
 #include <vellum/graphics/token_receipts.hpp>
+#include <vellum/graphics/hit_test.hpp>
 
 #include <algorithm>
 #include <clocale>
@@ -28,6 +29,129 @@ std::string wrap_tree(std::string_view children) {
     return std::string(R"JSON({"protocol":"vellum.authoring-host.v2","kind":"render-result",
       "tree":{"type":"stack","id":"compositing-root","style":{"width":200,"height":200},
       "children":[)JSON") + std::string(children) + "]}}";
+}
+
+bool box_material() {
+    using namespace vellum::graphics;
+    constexpr std::string_view content = R"JSON(
+      {"type":"view","id":"material","style":{"width":80,"height":40,
+        "backgroundColor":"#101928","borderRadius":6,
+        "borderTopWidth":1,"borderTopColor":"#112233",
+        "backgroundGradients":[
+          {"kind":"radial","radiusX":0.8,"radiusY":0.6,
+           "stops":[{"position":0,"color":"#00000000"},{"position":1,"color":"#ff0000"}]},
+          {"kind":"linear","angle":180,
+           "stops":[{"position":0,"color":"#00000000"},{"position":1,"color":"#0000ff"}]}]},
+        "children":[]},
+      {"type":"view","id":"control","style":{"width":80,"height":40},"children":[]}
+      ,{"type":"view","id":"sides","style":{"width":80,"height":40,
+        "borderRadius":12,
+        "borderTopWidth":2,"borderTopColor":"#ff0000",
+        "borderRightWidth":4,"borderRightColor":"#00ff00",
+        "borderBottomWidth":3,"borderBottomColor":"#0000ff",
+        "borderLeftWidth":8,"borderLeftColor":"#ffff00"},"children":[]}
+      ,{"type":"view","id":"uniform-sides","style":{"width":80,"height":40,
+        "borderRadius":12,
+        "borderTopWidth":2,"borderTopColor":"#ff0000",
+        "borderRightWidth":2,"borderRightColor":"#00ff00",
+        "borderBottomWidth":2,"borderBottomColor":"#0000ff",
+        "borderLeftWidth":2,"borderLeftColor":"#ffff00"},"children":[]}
+    )JSON";
+    vellum::authoring::RenderedApplication rendered;
+    std::string error;
+    if (!vellum::authoring::materialize_rendered_tree(wrap_tree(content), rendered, &error)) {
+        std::cerr << "box material: " << error << '\n';
+        return false;
+    }
+    const auto& box = rendered.scene.root.children[0];
+    const auto& control = rendered.scene.root.children[1];
+    const auto& sides = rendered.scene.root.children[2];
+    const auto& uniform_sides = rendered.scene.root.children[3];
+    const auto has_elliptical_arc = [](const auto& child) {
+        std::size_t offset = 0;
+        for (const auto verb : child.path->verbs) {
+            if (verb == PathVerb::arc && !near(child.path->values[offset], child.path->values[offset + 1])) {
+                return true;
+            }
+            offset += path_verb_arity(verb);
+        }
+        return false;
+    };
+    const bool valid = box.kind == SceneNode::Kind::rectangle && box.fill.blue8() == 0x28 &&
+        box.corner_radius == 6.0F && box.fill_gradients.size() == 2U &&
+        box.fill_gradients[0].kind == GradientKind::radial &&
+        box.fill_gradients[1].kind == GradientKind::linear &&
+        box.children.size() == 1U && box.children[0].kind == SceneNode::Kind::path &&
+        box.children[0].fill.blue8() == 0x33 && box.children[0].clip.has_value() &&
+        control.kind == SceneNode::Kind::group && control.children.empty() &&
+        control.fill_gradients.empty() && sides.children.size() == 4U &&
+        std::all_of(sides.children.begin(), sides.children.end(), [](const auto& child) {
+            return child.kind == SceneNode::Kind::path && child.path != nullptr &&
+                std::count(child.path->verbs.begin(), child.path->verbs.end(), PathVerb::arc) >= 2;
+        }) && has_elliptical_arc(sides.children[0]) && uniform_sides.children.size() == 4U;
+    if (!valid) std::cerr << "box material: scene dropped a gradient or border\n";
+    if (!valid) return false;
+    const auto corner = Point{sides.bounds.x + 5.0F, sides.bounds.y + 3.0F};
+    const auto hit = pick(rendered.scene, corner);
+    if (!hit || hit->rfind("sides/border-", 0) != 0) {
+        std::cerr << "box material: a rounded border corner was left unpainted\n";
+        return false;
+    }
+    for (int y = 1; y <= 12; ++y) {
+        for (int x = 1; x <= 12; ++x) {
+            const float outer_dx = static_cast<float>(x) - 12.0F;
+            const float outer_dy = static_cast<float>(y) - 12.0F;
+            const float inner_dx = outer_dx / 4.0F;
+            const float inner_dy = outer_dy / 10.0F;
+            if (outer_dx * outer_dx + outer_dy * outer_dy > 144.0F ||
+                inner_dx * inner_dx + inner_dy * inner_dy < 1.0F) {
+                continue;
+            }
+            const auto sample = Point{sides.bounds.x + static_cast<float>(x),
+                                      sides.bounds.y + static_cast<float>(y)};
+            const auto sample_hit = pick(rendered.scene, sample);
+            if (!sample_hit || sample_hit->rfind("sides/border-", 0) != 0) {
+                std::cerr << "box material: rounded border hole at " << x << ',' << y << '\n';
+                return false;
+            }
+        }
+    }
+    const auto uniform_corner = Point{uniform_sides.bounds.x + 5.0F,
+                                      uniform_sides.bounds.y + 3.0F};
+    const auto uniform_hit = pick(rendered.scene, uniform_corner);
+    if (!uniform_hit || uniform_hit->rfind("uniform-sides/border-", 0) != 0) {
+        std::cerr << "box material: the equal-width rounded corner was left unpainted\n";
+        return false;
+    }
+    return true;
+}
+
+// A nonuniform border must paint the rounded ring at this exact corner pixel:
+// with an 80x40 box, radius 12 and four 2px side colours, (5,3) is inside the
+// outer curve and outside the inner curve.  The old straight side polygons
+// left it unpainted.
+bool rounded_border_corner_pixel_regression() {
+    constexpr std::string_view tree = R"JSON(
+      {"type":"view","id":"corner","style":{"width":80,"height":40,
+        "borderRadius":12,
+        "borderTopWidth":2,"borderTopColor":"#ff0000",
+        "borderRightWidth":2,"borderRightColor":"#00ff00",
+        "borderBottomWidth":2,"borderBottomColor":"#0000ff",
+        "borderLeftWidth":2,"borderLeftColor":"#ffff00"},"children":[]}
+    )JSON";
+    vellum::authoring::RenderedApplication rendered;
+    std::string error;
+    if (!vellum::authoring::materialize_rendered_tree(wrap_tree(tree), rendered, &error)) {
+        std::cerr << "rounded border regression: " << error << '\n';
+        return false;
+    }
+    const auto& corner = rendered.scene.root.children[0];
+    const auto hit = pick(rendered.scene, {corner.bounds.x + 5.0F, corner.bounds.y + 3.0F});
+    if (!hit || hit->rfind("corner/border-", 0) != 0) {
+        std::cerr << "rounded border regression: (5,3) is unpainted\n";
+        return false;
+    }
+    return true;
 }
 
 // rotate(90deg) on a 40 by 20 box at (10, 20) inside a parent at (30, 40):
@@ -2483,7 +2607,8 @@ int main() {
 
 
 
-    return compositing_keys() && transform_pivots_once() && transform_ignores_locale() &&
+    return box_material() && rounded_border_corner_pixel_regression() && compositing_keys() &&
+           transform_pivots_once() && transform_ignores_locale() &&
            image_nodes() && path_nodes() && plot_nodes() && grouping_keys() &&
            animation_tracks() && blend_mode_key() && token_receipts() && token_slots() &&
            scene_version_protocol() && protocol_numbers() && root_background_receipts() &&

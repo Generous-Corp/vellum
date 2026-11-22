@@ -218,6 +218,7 @@ def copy_frameworks(sdk: Path, destination: Path) -> list[str]:
 
 PACKAGED_FONT_NAMES = (
     "Inter-Regular.ttf",
+    "JetBrainsMono-Regular.ttf",
     "Jost-Regular.ttf",
     "Jost-Medium.ttf",
     "Jost-SemiBold.ttf",

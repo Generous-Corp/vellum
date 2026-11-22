@@ -1,0 +1,694 @@
+import { inflateSync } from 'node:zlib';
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PulpHostConfig } from '../src/host-config.js';
+import { applyAllProps, applyChangedProps } from '../src/prop-applier.js';
+import { applyTransformProp } from '../src/prop-applier-transform.js';
+import * as widgets from '../src/intrinsics.js';
+import { createElement } from 'react';
+import { createRoot, createPortal, render, unmount } from '../src/index.js';
+import type { PulpContainer, PulpInstance } from '../src/types.js';
+
+// Exercise host mutations with a stateful native tree, including native append
+// semantics. Counting calls alone would miss a reorder that recreated widgets.
+const host = PulpHostConfig as any;
+let tree: Map<string, string[]>;
+let captions: Map<string, string>;
+let listeners: Map<string, (...args: unknown[]) => unknown>;
+function remove(id: string) {
+    for (const children of tree.values()) {
+        const index = children.indexOf(id);
+        if (index >= 0) children.splice(index, 1);
+    }
+}
+function insert(parent: string, id: string, index?: number) {
+    remove(id);
+    const children = tree.get(parent) ?? [];
+    children.splice(index ?? children.length, 0, id);
+    tree.set(parent, children);
+}
+function instance(type: string, props: Record<string, unknown>, container: PulpContainer): PulpInstance {
+    return host.createInstance(type, props, container, {}, {});
+}
+function update(node: PulpInstance, props: Record<string, unknown>) {
+    host.commitUpdate(node, true, node.type, node.props, props, {});
+}
+beforeEach(() => {
+    tree = new Map(); captions = new Map(); listeners = new Map();
+    vi.stubGlobal('createLabel', (id: string, text: string, parent: string) => {
+        insert(parent, id); captions.set(id, text);
+    });
+    vi.stubGlobal('createPanel', (id: string, parent: string) => insert(parent, id));
+    vi.stubGlobal('createCol', (id: string, parent: string) => insert(parent, id));
+    vi.stubGlobal('createRow', (id: string, parent: string) => insert(parent, id));
+    vi.stubGlobal('createButton', undefined);
+    vi.stubGlobal('insertChild', (parent: string, id: string, index: number) => insert(parent, id, index));
+    vi.stubGlobal('moveWidget', (id: string, parent: string, index: number) => insert(parent, id, index));
+    vi.stubGlobal('removeWidget', remove);
+    vi.stubGlobal('setText', (id: string, text: string) => captions.set(id, text));
+    for (const name of ['setPosition', 'setTop', 'setRight', 'setBottom', 'setLeft']) {
+        vi.stubGlobal(name, () => {});
+    }
+    vi.stubGlobal('on', (id: string, event: string, fn: (...args: unknown[]) => unknown) => listeners.set(`${id}:${event}`, fn));
+});
+afterEach(() => vi.unstubAllGlobals());
+
+it('loads the standalone public entrypoint and its generated safe mock bridge', async () => {
+    const { createMockBridge } = await import('../src/index.js');
+    const bridge = createMockBridge();
+    bridge.install();
+    try {
+        (globalThis as any).setText('caption', 'ready');
+        expect(bridge.calls).toContainEqual({ fn: 'setText', args: ['caption', 'ready'] });
+    } finally { bridge.uninstall(); }
+});
+
+describe('root child ordering', () => {
+    it('inserts, reorders in both directions, appends an existing child and removes without stale indices', () => {
+        const root = { rootId: 'root', nextId: 0 };
+        const [a, b, c, d] = ['a', 'b', 'c', 'd'].map(id => instance('Label', { id, text: id }, root));
+        for (const child of [a, b, c]) host.appendChildToContainer(root, child);
+        host.insertInContainerBefore(root, c, a);
+        expect(tree.get('root')).toEqual(['c', 'a', 'b']);
+        host.insertInContainerBefore(root, c, b);
+        expect(tree.get('root')).toEqual(['a', 'c', 'b']);
+        host.insertInContainerBefore(root, d, c);
+        expect(tree.get('root')).toEqual(['a', 'd', 'c', 'b']);
+        host.appendChildToContainer(root, a);
+        expect(tree.get('root')).toEqual(['d', 'c', 'b', 'a']);
+        host.removeChildFromContainer(root, c);
+        host.insertInContainerBefore(root, b, a);
+        expect(tree.get('root')).toEqual(['d', 'b', 'a']);
+    });
+    it('clears only the requested container and can mount again', () => {
+        const root = { rootId: 'root', nextId: 0 };
+        const other = { rootId: 'other', nextId: 0 };
+        host.appendChildToContainer(root, instance('Label', { id: 'a' }, root));
+        host.appendChildToContainer(other, instance('Label', { id: 'b' }, other));
+        host.clearContainer(root);
+        expect(tree.get('root')).toEqual([]);
+        expect(tree.get('other')).toEqual(['b']);
+        host.appendChildToContainer(root, instance('Label', { id: 'c' }, root));
+        expect(tree.get('root')).toEqual(['c']);
+    });
+});
+
+it.each(['text', 'children'])('clears removed %s from native and public captions', key => {
+    const root = { rootId: '', nextId: 0 };
+    const node = instance('Label', { id: 'caption', [key]: 'old' }, root);
+    node._dom = { _textContent: 'old' };
+    host.appendChildToContainer(root, node);
+    update(node, { id: 'caption' });
+    expect(captions.get('caption')).toBe('');
+    expect((node._dom as any)._textContent).toBe('');
+});
+
+it('replaces every transform component and resets an empty array to identity', () => {
+    const state = { translate: [0, 0], rotation: 0, scale: 1, skew: [0, 0] };
+    vi.stubGlobal('setTranslate', (_: string, x: number, y: number) => state.translate = [x, y]);
+    vi.stubGlobal('setRotation', (_: string, degrees: number) => state.rotation = degrees);
+    vi.stubGlobal('setScale', (_: string, value: number) => state.scale = value);
+    vi.stubGlobal('setSkew', (_: string, x: number, y: number) => state.skew = [x, y]);
+    applyTransformProp('a', 'transform', [{ translateX: 10 }, { scale: 2 }, { skewY: '20deg' }]);
+    applyTransformProp('a', 'transform', [{ rotate: '45deg' }]);
+    expect(state).toEqual({ translate: [0, 0], rotation: 45, scale: 1, skew: [0, 0] });
+    applyTransformProp('a', 'transform', []);
+    expect(state).toEqual({ translate: [0, 0], rotation: 0, scale: 1, skew: [0, 0] });
+});
+
+it.each([
+    ['Knob', [0.5]], ['Fader', [0.3]], ['TextEditor', ['hello']],
+    ['Checkbox', [1]], ['Toggle', [0]], ['XYPad', [0.2, 0.8]],
+    ['Combo', [2]], ['Stepper', [3]], ['Pan', [-0.4]], ['ListBox', [1]],
+])('adapts injected %s event payloads through initial and replacement handlers', (type, args) => {
+    const root = { rootId: '', nextId: 0 };
+    const first = vi.fn(); const second = vi.fn();
+    const facade = (widgets as any)[type as string];
+    const initialProps = facade({ id: 'control', onChange: first }).props;
+    const node = instance(type as string, initialProps, root);
+    const nativeEvent = type === 'Toggle' ? 'toggle' : ['Combo', 'ListBox'].includes(type as string) ? 'select' : 'change';
+    const expected = ['Checkbox', 'Toggle'].includes(type as string) ? [Boolean((args as unknown[])[0])] : args;
+    applyAllProps(node);
+    listeners.get(`control:${nativeEvent}`)!(...(args as unknown[]));
+    expect(first).toHaveBeenCalledWith(...(expected as unknown[]));
+    applyChangedProps(node, node.props, facade({ id: 'control', onChange: second }).props);
+    listeners.get(`control:${nativeEvent}`)!(...(args as unknown[]));
+    expect(second).toHaveBeenCalledWith(...(expected as unknown[]));
+});
+
+it('preserves synthetic change events for HTML controls', () => {
+    const root = { rootId: '', nextId: 0 };
+    const handler = vi.fn();
+    const node = instance('input', { id: 'input', onChange: handler }, root);
+    applyAllProps(node);
+    listeners.get('input:change')!('text');
+    expect(handler.mock.calls[0][0]).toMatchObject({ type: 'change' });
+});
+
+it('preserves VirtualList selection and activation adapters through the public facade', () => {
+    vi.stubGlobal('createVirtualList', (id: string, parent: string) => insert(parent, id));
+    const onChange = vi.fn(); const onActivate = vi.fn();
+    const root = createRoot();
+    render(createElement(widgets.VirtualList, {
+        id: 'list', rowCount: 0, rowHeight: 20, renderRow: () => null, onChange, onActivate,
+    }), root);
+    listeners.get('list:change')!([1, 3]);
+    listeners.get('list:activate')!(3);
+    expect(onChange).toHaveBeenCalledWith([1, 3]);
+    expect(onActivate).toHaveBeenCalledWith(3);
+    unmount(root);
+});
+
+it('updates and clears the capital Button fallback caption', () => {
+    const root = { rootId: '', nextId: 0 };
+    const node = instance('Button', { id: 'button', children: 'old' }, root);
+    host.appendChildToContainer(root, node);
+    update(node, { id: 'button', children: 'new' });
+    expect(captions.get(node.textTargetId!)).toBe('new');
+    update(node, { id: 'button' });
+    expect(captions.get(node.textTargetId!)).toBe('');
+});
+
+it('keeps a caption target when an HTML container changes from nested markup to text', () => {
+    const root = { rootId: '', nextId: 0 };
+    const node = instance('div', { id: 'container', children: { type: 'span' } }, root);
+    host.appendChildToContainer(root, node);
+    expect(captions.has(node.textTargetId!)).toBe(true);
+    update(node, { id: 'container', children: 'ready' });
+    expect(captions.get(node.textTargetId!)).toBe('ready');
+});
+
+it('uses moveWidget when the indexed insert function is unavailable', () => {
+    vi.stubGlobal('insertChild', undefined);
+    const root = { rootId: 'root', nextId: 0 };
+    const a = instance('Label', { id: 'a' }, root);
+    const b = instance('Label', { id: 'b' }, root);
+    const c = instance('Label', { id: 'c' }, root);
+    host.appendChildToContainer(root, a);
+    host.appendChildToContainer(root, b);
+    host.insertInContainerBefore(root, b, a);
+    host.insertInContainerBefore(root, c, a);
+    expect(tree.get('root')).toEqual(['b', 'c', 'a']);
+});
+
+it('inserts before a later nested sibling using its index after removal', () => {
+    const root = { rootId: '', nextId: 0 };
+    const parent = instance('Panel', { id: 'parent' }, root);
+    host.appendChildToContainer(root, parent);
+    const [a, b, c] = ['a', 'b', 'c'].map(id => instance('Label', { id }, root));
+    for (const child of [a, b, c]) host.appendChild(parent, child);
+    host.insertBefore(parent, a, c);
+    expect(tree.get('parent')).toEqual(['b', 'a', 'c']);
+    expect(parent.childIds).toEqual(['b', 'a', 'c']);
+});
+
+it('keeps native Button text on the widget when createButton exists', () => {
+    vi.stubGlobal('createButton', (id: string, text: string, parent: string) => {
+        insert(parent, id); captions.set(id, text);
+    });
+    const root = { rootId: '', nextId: 0 };
+    const button = instance('Button', { id: 'button', text: 'old' }, root);
+    host.appendChildToContainer(root, button);
+    update(button, { id: 'button', text: 'new' });
+    expect(captions.get('button')).toBe('new');
+    expect(captions.has('button_l')).toBe(false);
+});
+
+it('moves an existing nested child to the end without duplicate bookkeeping', () => {
+    const root = { rootId: '', nextId: 0 };
+    const parent = instance('Panel', { id: 'parent' }, root);
+    host.appendChildToContainer(root, parent);
+    const [a, b, c] = ['a', 'b', 'c'].map(id => instance('Label', { id }, root));
+    for (const child of [a, b, c]) host.appendChild(parent, child);
+    host.appendChild(parent, a);
+    expect(tree.get('parent')).toEqual(['b', 'c', 'a']);
+    expect(parent.childIds).toEqual(['b', 'c', 'a']);
+    host.insertBefore(parent, a, c);
+    expect(tree.get('parent')).toEqual(['b', 'a', 'c']);
+});
+
+it('reorders deferred children without duplicating their pending entries', () => {
+    const root = { rootId: '', nextId: 0 };
+    const parent = instance('Panel', { id: 'parent' }, root);
+    const [a, b, c] = ['a', 'b', 'c'].map(id => instance('Label', { id }, root));
+    for (const child of [a, b, c]) host.appendInitialChild(parent, child);
+    host.appendChild(parent, a);
+    host.insertBefore(parent, b, a);
+    host.appendChildToContainer(root, parent);
+    expect(tree.get('parent')).toEqual(['c', 'b', 'a']);
+    expect(parent.childIds).toEqual(['c', 'b', 'a']);
+});
+
+it('commits synthetic text to native captions and anonymous-text metadata', () => {
+    const root = { rootId: '', nextId: 0 };
+    const parent = instance('Panel', { id: 'parent' }, root);
+    parent._dom = { _children: [] };
+    const text = host.createTextInstance('one', root, {}, {});
+    host.appendInitialChild(parent, text);
+    host.appendChildToContainer(root, parent);
+    (globalThis as any).__pulpReactDomRegistry__.set('parent', parent._dom);
+    host.commitTextUpdate(text, 'one', 'two');
+    expect(captions.get(text.id)).toBe('two');
+    expect(text.props).toMatchObject({ text: 'two', children: 'two' });
+    expect((parent._dom as any).__pulpAnonymousTextTargets).toEqual([{ id: text.id, text: 'two' }]);
+    host.commitTextUpdate(text, 'two', '');
+    expect(captions.get(text.id)).toBe('');
+    expect((parent._dom as any).__pulpAnonymousTextTargets[0].text).toBe('');
+});
+
+it('gives anonymous widgets distinct bridge IDs across default roots', () => {
+    const first = createRoot('first');
+    const second = createRoot('second');
+    const a = instance('Label', {}, first);
+    const b = instance('Label', {}, second);
+    const text = host.createTextInstance('caption', createRoot('third'), {}, {});
+    expect(new Set([a.id, b.id, text.id]).size).toBe(3);
+    host.appendChildToContainer(first, a);
+    host.appendChildToContainer(second, b);
+    update(a, { text: 'first' });
+    update(b, { text: 'second' });
+    expect(captions.get(a.id)).toBe('first');
+    expect(captions.get(b.id)).toBe('second');
+    const explicit = instance('Label', {}, createRoot('custom', 'app_'));
+    expect(explicit.id).toBe('app_1');
+});
+
+it('keeps nested DOM children in native order after insertBefore', () => {
+    const root = { rootId: '', nextId: 0 };
+    const parent = instance('Panel', { id: 'parent' }, root);
+    parent._dom = { _children: [] };
+    host.appendChildToContainer(root, parent);
+    const [a, b, c] = ['a', 'b', 'c'].map(id => instance('Label', { id }, root));
+    for (const child of [a, b, c]) {
+        child._dom = { id: child.id };
+        host.appendChild(parent, child);
+    }
+    host.insertBefore(parent, a, c);
+    expect(tree.get('parent')).toEqual(['b', 'a', 'c']);
+    expect((parent._dom as any)._children.map((child: any) => child.id)).toEqual(['b', 'a', 'c']);
+});
+
+it.each(['Combo', 'ListBox'])('applies %s options before selection and resets removed props', type => {
+    const state = { options: [] as string[], selected: -1 };
+    vi.stubGlobal(type === 'Combo' ? 'setItems' : 'setListItems', (_: string, values: string[]) => {
+        state.options = values; state.selected = -1;
+    });
+    vi.stubGlobal(type === 'Combo' ? 'setSelected' : 'setListSelected', (_: string, value: number) => state.selected = value);
+    const root = createRoot();
+    const initial = { id: 'select', selected: 1, options: ['A', 'B'] };
+    const node = instance(type, initial, root);
+    applyAllProps(node);
+    expect(state).toEqual({ options: ['A', 'B'], selected: 1 });
+    const changed = { ...initial, options: ['C', 'D'] };
+    applyChangedProps(node, initial, changed);
+    expect(state).toEqual({ options: ['C', 'D'], selected: 1 });
+    applyChangedProps(node, changed, { id: 'select' });
+    expect(state).toEqual({ options: [], selected: type === 'Combo' ? 0 : -1 });
+});
+
+it('updates XYPad coordinates together and restores removed axes to native defaults', () => {
+    const setXY = vi.fn();
+    vi.stubGlobal('setXY', setXY);
+    const root = createRoot();
+    const initial = { id: 'xy', x: 0.2, y: 0.8 };
+    const node = instance('XYPad', initial, root);
+    applyAllProps(node);
+    expect(setXY).toHaveBeenCalledExactlyOnceWith('xy', 0.2, 0.8);
+    setXY.mockClear();
+    applyChangedProps(node, initial, { id: 'xy', y: 0.7 });
+    expect(setXY).toHaveBeenCalledExactlyOnceWith('xy', 0.5, 0.7);
+    setXY.mockClear();
+    applyChangedProps(node, { id: 'xy', y: 0.7 }, { id: 'xy' });
+    expect(setXY).toHaveBeenCalledExactlyOnceWith('xy', 0.5, 0.5);
+});
+
+it('recalculates font-relative typography when fontSize changes or is removed', () => {
+    const setLineHeight = vi.fn();
+    const setLetterSpacing = vi.fn();
+    vi.stubGlobal('setLineHeight', setLineHeight);
+    vi.stubGlobal('setLetterSpacing', setLetterSpacing);
+    const root = createRoot();
+    const initial = { id: 'type', fontSize: 10, lineHeight: 1.5, letterSpacing: '0.1em' };
+    const node = instance('Label', initial, root);
+    applyAllProps(node);
+    setLineHeight.mockClear(); setLetterSpacing.mockClear();
+    applyChangedProps(node, initial, { ...initial, fontSize: 20 });
+    expect(setLineHeight).toHaveBeenCalledWith('type', 30);
+    expect(setLetterSpacing).toHaveBeenCalledWith('type', 2);
+    setLineHeight.mockClear(); setLetterSpacing.mockClear();
+    applyChangedProps(node, { ...initial, fontSize: 20 }, {
+        id: 'type', lineHeight: 1.5, letterSpacing: '0.1em',
+    });
+    expect(setLineHeight).toHaveBeenCalledWith('type', 21);
+    expect(setLetterSpacing).toHaveBeenCalledWith('type', 1.4000000000000001);
+});
+
+it('coalesces controlled ScrollView offsets using authored values, without native readback', () => {
+    const scrollTo = vi.fn();
+    vi.stubGlobal('scrollTo', scrollTo);
+    const root = createRoot();
+    const initial = { id: 'scroll', scrollTop: 10, scrollLeft: 20 };
+    const node = instance('ScrollView', initial, root);
+    applyAllProps(node);
+    expect(scrollTo).toHaveBeenCalledExactlyOnceWith('scroll', 20, 10);
+    scrollTo.mockClear();
+    applyChangedProps(node, initial, { ...initial, scrollTop: 30 });
+    expect(scrollTo).toHaveBeenCalledExactlyOnceWith('scroll', 20, 30);
+});
+
+it('documents DOM scroll offsets as zero-valued stubs with ignored assignments', () => {
+    class Element {}
+    const context = { Element };
+    const shim = readFileSync(new URL('../../../framework/core/view/js/web-compat-observers.js', import.meta.url), 'utf8');
+    runInNewContext(shim, context);
+    const element = new Element() as Element & { scrollTop: number; scrollLeft: number };
+    element.scrollTop = 123;
+    element.scrollLeft = 456;
+    expect(element.scrollTop).toBe(0);
+    expect(element.scrollLeft).toBe(0);
+});
+
+it('does not claim to preserve native wheel movement on an uncontrolled scroll axis', () => {
+    let native = { x: 0, y: 0 };
+    vi.stubGlobal('scrollTo', (_id: string, x: number, y: number) => { native = { x, y }; });
+    const initial = { id: 'uncontrolled-scroll', scrollTop: 10 };
+    const node = instance('ScrollView', initial, createRoot());
+    applyAllProps(node);
+    native.x = 99; // Native wheel movement is not observable through the bridge.
+    applyChangedProps(node, initial, { ...initial, scrollTop: 30 });
+    expect(native).toEqual({ x: 0, y: 30 });
+});
+
+it.each(['remount', 'reparent'])('creates new native subtrees for a React %s', (mode) => {
+    // Deleted host instances are terminal in React 18. Keyed reuse searches
+    // siblings of the same parent; moving across parents creates a new subtree.
+    const createLabel = vi.fn((id: string, text: string, parent: string) => {
+        insert(parent, id); captions.set(id, text);
+    });
+    vi.stubGlobal('createLabel', createLabel);
+    vi.stubGlobal('moveWidget', undefined);
+    const root = createRoot();
+    const child = () => createElement(widgets.Col, { id: 'moving', key: 'same-key' },
+        createElement(widgets.Label, { id: 'moving-caption' }, 'caption'));
+    const view = (side: 'left' | 'right' | 'none') => createElement(widgets.Col, { id: 'outer' },
+        createElement(widgets.Col, { id: 'left' }, side === 'left' ? child() : null),
+        createElement(widgets.Col, { id: 'right' }, side === 'right' ? child() : null));
+    render(view('left'), root);
+    expect(createLabel).toHaveBeenCalledTimes(1);
+    if (mode === 'remount') render(view('none'), root);
+    render(view(mode === 'remount' ? 'left' : 'right'), root);
+    expect(createLabel).toHaveBeenCalledTimes(2);
+    expect(tree.get(mode === 'remount' ? 'left' : 'right')).toEqual(['moving']);
+    expect(tree.get('moving')).toEqual(['moving-caption']);
+    expect(captions.get('moving-caption')).toBe('caption');
+    unmount(root);
+});
+
+it('retires a same-ID native predecessor before right-to-left placement', () => {
+    type Native = { id: string; children: Native[]; parent?: Native };
+    const widgets = new Map<string, Native>();
+    const make = (id: string, parentId: string) => {
+        const node: Native = { id, children: [], parent: widgets.get(parentId) };
+        node.parent?.children.push(node);
+        widgets.set(id, node); // Native factories overwrite lookup, not old ownership.
+    };
+    vi.stubGlobal('createCol', make);
+    vi.stubGlobal('createLabel', (id: string, _text: string, parent: string) => make(id, parent));
+    vi.stubGlobal('removeWidget', (id: string) => {
+        const node = widgets.get(id);
+        if (!node) return;
+        if (node.parent) node.parent.children = node.parent.children.filter(n => n !== node);
+        const erase = (n: Native) => { for (const c of n.children) erase(c); widgets.delete(n.id); };
+        erase(node);
+    });
+    const root = createRoot();
+    const child = () => createElement('div', { id: 'replacement', key: 'same' }, 'caption');
+    const view = (side: 'left' | 'right') => createElement('div', { id: 'replacement-root' },
+        createElement('div', { id: 'replacement-left' }, side === 'left' ? child() : null),
+        createElement('div', { id: 'replacement-right' }, side === 'right' ? child() : null));
+    render(view('right'), root);
+    render(view('left'), root);
+    expect(widgets.get('replacement')?.parent?.id).toBe('replacement-left');
+    expect(widgets.get('replacement-right')?.children.map(n => n.id)).not.toContain('replacement');
+    expect(widgets.get('replacement-left')?.children.map(n => n.id)).toContain('replacement');
+    unmount(root);
+});
+
+it('publishes a replacement DOM shim after deleting its keyed predecessor', () => {
+    class Element {
+        _children: unknown[] = [];
+        constructor(public tagName: string, public _id: string) {}
+    }
+    vi.stubGlobal('Element', Element);
+    const root = createRoot();
+    render(createElement('span', { id: 'same-dom-id', key: 'old' }, 'old'), root);
+    const registry = (globalThis as any).__pulpReactDomRegistry__ as Map<string, unknown>;
+    const previous = registry.get('same-dom-id');
+    render(createElement('span', { id: 'same-dom-id', key: 'new' }, 'new'), root);
+    expect(registry.get('same-dom-id')).toBeDefined();
+    expect(registry.get('same-dom-id')).not.toBe(previous);
+    unmount(root);
+});
+
+it.each(['div', 'span'])('updates an initially empty %s at its real caption target', tag => {
+    const root = createRoot();
+    render(createElement(tag, { id: 'empty-caption' }, ''), root);
+    render(createElement(tag, { id: 'empty-caption' }, 'Ready'), root);
+    expect(captions.get(tag === 'div' ? tree.get('empty-caption')![0] : 'empty-caption')).toBe('Ready');
+    unmount(root);
+});
+
+it('accounts for the generated button caption when reordering keyed children', () => {
+    for (const name of ['setPointerEvents', 'setAccessibilityRole', 'setAccessibilityLabel']) vi.stubGlobal(name, vi.fn());
+    const root = createRoot();
+    const view = (ids: string[]) => createElement('button', { id: 'caption-order' },
+        ...ids.map(id => createElement('span', { id, key: id }, id)));
+    render(view(['caption-a', 'caption-b']), root);
+    render(view(['caption-b', 'caption-a']), root);
+    expect(tree.get('caption-order')?.slice(1)).toEqual(['caption-b', 'caption-a']);
+    unmount(root);
+});
+
+it.each(['input', 'INPUT', 'Input'])('rejects %s password controls instead of exposing plaintext', tag => {
+    const createTextEditor = vi.fn();
+    vi.stubGlobal('createTextEditor', createTextEditor);
+    const root = createRoot();
+    expect(() => instance(tag, { id: 'secret', type: 'password', value: 'secret' }, root))
+        .toThrow(/secure native control/);
+    const node = instance('input', { id: 'plain', type: 'text' }, root);
+    expect(() => update(node, { id: 'plain', type: 'password' })).toThrow(/secure native control/);
+    expect(createTextEditor).not.toHaveBeenCalled();
+});
+
+it('resets omitted React styles from a complete host prop snapshot', () => {
+    const setOpacity = vi.fn();
+    vi.stubGlobal('setOpacity', setOpacity);
+    const root = createRoot();
+    render(createElement('div', { id: 'omitted-style', style: { opacity: 0.5 } }), root);
+    setOpacity.mockClear();
+    render(createElement('div', { id: 'omitted-style' }), root);
+    expect(setOpacity).toHaveBeenCalledWith('omitted-style', 1);
+    unmount(root);
+});
+
+it.each([undefined, null, ''])('clears an image with a supported transparent URI for src=%s', src => {
+    let image = 'old-image';
+    vi.stubGlobal('setImageSource', (_id: string, source: string) => { if (source) image = source; });
+    const root = createRoot();
+    const node = instance('Image', { id: 'clear-image', src: 'old-image' }, root);
+    applyChangedProps(node, { src: 'old-image' }, { src });
+    expect(image).toMatch(/^data:image\/png;base64,/);
+    const png = Buffer.from(image.split(',')[1], 'base64');
+    expect([...inflateSync(png.subarray(41, 52))]).toEqual([0, 0, 0, 0, 0]);
+});
+
+it.each(['input', 'textarea', 'TextEditor'])('routes controlled %s strings through setText', type => {
+    const setText = vi.fn(); const setValue = vi.fn();
+    vi.stubGlobal('setText', setText); vi.stubGlobal('setValue', setValue);
+    const node = instance(type, { id: 'controlled-text', value: 'hello' }, createRoot());
+    applyAllProps(node);
+    expect(setText).toHaveBeenCalledWith('controlled-text', 'hello');
+    expect(setValue).not.toHaveBeenCalled();
+    applyChangedProps(node, { value: 'hello' }, {});
+    expect(setText).toHaveBeenLastCalledWith('controlled-text', '');
+});
+
+it('gives nested inline markup a caption target for later direct text', () => {
+    const root = createRoot();
+    render(createElement('span', { id: 'inline-caption' }, createElement('em', {}, 'before')), root);
+    render(createElement('span', { id: 'inline-caption' }, 'after'), root);
+    expect(captions.get(tree.get('inline-caption')![0])).toBe('after');
+    unmount(root);
+});
+
+it('commits semantic class changes even without any class-rule provider', () => {
+    class Element {
+        _children: unknown[] = []; attributes = new Map<string, unknown>();
+        constructor(public tagName: string, public _id: string) {}
+        setAttribute(name: string, value: unknown) { this.attributes.set(name, value); }
+    }
+    vi.stubGlobal('Element', Element);
+    const root = createRoot();
+    render(createElement('div', { id: 'class-toggle', className: 'closed' }), root);
+    render(createElement('div', { id: 'class-toggle', className: 'open' }), root);
+    expect((globalThis as any).__pulpReactDomRegistry__.get('class-toggle').attributes.get('class')).toBe('open');
+    unmount(root);
+});
+
+it('releases only the last modal claim and honors explicit overlay false', () => {
+    const releaseOverlay = vi.fn(); const claimOverlay = vi.fn();
+    vi.stubGlobal('releaseOverlay', releaseOverlay); vi.stubGlobal('claimOverlay', claimOverlay);
+    const node = instance('View', { id: 'modal-role' }, createRoot());
+    applyChangedProps(node, { role: 'dialog' }, { role: 'region' });
+    expect(releaseOverlay).toHaveBeenCalledWith('modal-role');
+    releaseOverlay.mockClear();
+    applyChangedProps(node, { role: 'dialog', 'aria-modal': true }, { role: 'region', 'aria-modal': true });
+    expect(releaseOverlay).not.toHaveBeenCalled();
+    applyAllProps(instance('View', { id: 'not-modal', overlay: false, role: 'dialog' }, createRoot()));
+    expect(claimOverlay).not.toHaveBeenCalled();
+});
+
+it('does not delete callback keys belonging to a colon-prefixed sibling ID', () => {
+    const handler = vi.fn(); const root = createRoot();
+    const view = (show: boolean) => createElement(widgets.Row, { id: 'callback-root' },
+        show ? createElement(widgets.Button, { key: 'menu', id: 'menu', onClick: () => {} }) : null,
+        createElement(widgets.Button, { key: 'item', id: 'menu:item', onClick: handler }));
+    render(view(true), root); render(view(false), root);
+    listeners.get('menu:item:click')!();
+    expect(handler).toHaveBeenCalledOnce();
+    unmount(root);
+});
+
+it('clears native-only descendant callbacks when their container unmounts', () => {
+    vi.stubGlobal('Element', undefined);
+    const root = createRoot();
+    render(createElement(widgets.Col, { id: 'native-only-parent' },
+        createElement(widgets.Button, { id: 'native-only-child', onClick: () => {} })), root);
+    const registry = (globalThis as any).__pulpReactEventCallbacks__ as Map<string, unknown>;
+    expect(registry.has('native-only-child:click')).toBe(true);
+    unmount(root);
+    expect(registry.has('native-only-child:click')).toBe(false);
+});
+
+it('keeps element-only DOM ordering and anonymous metadata consistent with loose text', () => {
+    class Element { _children: unknown[] = []; constructor(public tagName: string, public _id: string) {} }
+    vi.stubGlobal('Element', Element);
+    const root = createRoot();
+    const view = (text: boolean, a: boolean) => createElement(widgets.Row, { id: 'loose-parent' },
+        text ? 'status' : null,
+        a ? createElement(widgets.Label, { id: 'loose-a', key: 'a' }, 'a') : null,
+        createElement(widgets.Label, { id: 'loose-b', key: 'b' }, 'b'));
+    render(view(true, false), root); render(view(true, true), root);
+    const parent = (globalThis as any).__pulpReactDomRegistry__.get('loose-parent');
+    expect(parent._children.map((n: any) => n.__pulpId)).toEqual(['loose-a', 'loose-b']);
+    expect(parent.__pulpAnonymousTextTargets).toHaveLength(1);
+    render(view(false, true), root);
+    expect(parent.__pulpAnonymousTextTargets).toHaveLength(0);
+    unmount(root);
+});
+
+it('initializes shader uniforms on each new native widget lifetime', () => {
+    const uniforms = vi.fn(); vi.stubGlobal('setWidgetShaderUniforms', uniforms);
+    vi.stubGlobal('setWidgetShader', vi.fn());
+    const props = { id: 'shader-remount', shader: { sksl: 'shader', uniforms: { gain: 0.5 } } };
+    applyAllProps(instance('Knob', props, createRoot()));
+    applyAllProps(instance('Knob', props, createRoot()));
+    expect(uniforms).toHaveBeenCalledTimes(2);
+});
+
+it('omits user content from both bridge diagnostic paths', async () => {
+    vi.resetModules();
+    const log = vi.fn(); vi.stubGlobal('__spectrLog', log);
+    const fresh = await import('../src/host-config.js');
+    const plumbing = await import('../src/prop-applier-internal.js');
+    const container = { rootId: 'log-root', nextId: 0 };
+    const node = (fresh.PulpHostConfig as any).createInstance('Label', { id: 'log-label', children: 'private-content' }, container, {}, {});
+    (fresh.PulpHostConfig as any).appendChildToContainer(container, node);
+    plumbing.call('setText', 'log-label', 'private-content');
+    expect(log).toHaveBeenCalled();
+    expect(log.mock.calls.some(args => String(args[0]).includes('createLabel'))).toBe(true);
+    expect(log.mock.calls.some(args => String(args[0]).includes('private-content'))).toBe(false);
+    (fresh.PulpHostConfig as any).clearContainer(container);
+});
+
+it('keeps pre-existing native siblings ahead of a root or portal tail group', () => {
+    const root = createRoot();
+    tree.set(root.rootId, ['foreign-native']);
+    const a = instance('Label', { id: 'portal-a' }, root);
+    const b = instance('Label', { id: 'portal-b' }, root);
+    host.appendChildToContainer(root, a); host.appendChildToContainer(root, b);
+    expect(tree.get(root.rootId)).toEqual(['foreign-native', 'portal-a', 'portal-b']);
+    host.insertInContainerBefore(root, b, a);
+    expect(tree.get(root.rootId)).toEqual(['foreign-native', 'portal-b', 'portal-a']);
+    host.clearContainer(root);
+});
+
+it('restores initial ScrollView offsets after layout establishes content overflow', () => {
+    let sized = false; let offset = { x: 0, y: 0 };
+    vi.stubGlobal('createScrollView', (id: string, parent: string) => insert(parent, id));
+    vi.stubGlobal('layout', () => { sized = true; });
+    vi.stubGlobal('scrollTo', (_id: string, x: number, y: number) => {
+        offset = { x: Math.min(x, sized ? 100 : 0), y: Math.min(y, sized ? 100 : 0) };
+    });
+    const root = createRoot();
+    render(createElement(widgets.ScrollView, { id: 'saved-scroll', scrollTop: 40, scrollLeft: 30 },
+        createElement(widgets.Label, { id: 'scroll-content' }, 'content')), root);
+    expect(offset).toEqual({ x: 30, y: 40 });
+    unmount(root);
+});
+
+it('suppresses synchronous native change notifications from controlled text writes', () => {
+    const handler = vi.fn(); const root = createRoot();
+    vi.stubGlobal('createTextEditor', (id: string, parent: string) => insert(parent, id));
+    vi.stubGlobal('setText', (id: string, text: string) => listeners.get(`${id}:change`)?.(text));
+    render(createElement('input', { id: 'silent-text', value: 'saved', onChange: handler }), root);
+    expect(handler).not.toHaveBeenCalled();
+    render(createElement('input', { id: 'silent-text', value: 'restored', onChange: handler }), root);
+    expect(handler).not.toHaveBeenCalled();
+    listeners.get('silent-text:change')!('user edit');
+    expect(handler).toHaveBeenCalledOnce();
+    unmount(root);
+});
+
+it('suppresses synchronous native selection notifications before replacing or removing handlers', () => {
+    const oldHandler = vi.fn(); const newHandler = vi.fn();
+    vi.stubGlobal('setListSelected', (id: string, selected: number) => listeners.get(`${id}:select`)?.(selected));
+    const initial = widgets.ListBox({ id: 'silent-list', selected: 1, onChange: oldHandler }).props;
+    const node = instance('ListBox', initial, createRoot());
+    applyAllProps(node);
+    const updated = widgets.ListBox({ id: 'silent-list', selected: 2, onChange: newHandler }).props;
+    applyChangedProps(node, initial, updated);
+    expect(oldHandler).not.toHaveBeenCalled(); expect(newHandler).not.toHaveBeenCalled();
+    listeners.get('silent-list:select')!(3);
+    expect(newHandler).toHaveBeenCalledWith(3);
+    applyChangedProps(node, updated, { id: 'silent-list', selected: 4 });
+    expect(newHandler).toHaveBeenCalledOnce();
+});
+
+it.each(['div', 'button', 'Button'])('keeps internal %s captions distinct from authored suffix IDs', tag => {
+    for (const name of ['setPointerEvents', 'setAccessibilityRole', 'setAccessibilityLabel']) vi.stubGlobal(name, vi.fn());
+    const authoredChildId = tag === 'Button' ? 'collision-card_l' : 'collision-card__text';
+    const root = createRoot();
+    render(createElement(tag, { id: 'collision-card' },
+        createElement('span', { id: authoredChildId }, 'Child')), root);
+    const generated = tree.get('collision-card')![0];
+    expect(generated).not.toBe(authoredChildId);
+    render(createElement(tag, { id: 'collision-card' }, 'Ready'), root);
+    expect(captions.get(generated)).toBe('Ready');
+    expect(() => instance('Label', { id: '__pulpReactCaption_reserved' }, root)).toThrow(/reserved/);
+    unmount(root);
+});
+
+it('preserves live portal children when their destination becomes a rendered root', () => {
+    const source = createRoot(); const target = createRoot('portal-destination');
+    tree.set('portal-destination', []);
+    render(createElement(widgets.Col, { id: 'portal-source' },
+        createPortal(createElement(widgets.Label, { id: 'live-portal' }, 'portal'), target)), source);
+    render(createElement(widgets.Label, { id: 'target-root-body' }, 'root'), target);
+    expect(tree.get('portal-destination')).toEqual(['live-portal', 'target-root-body']);
+    unmount(target);
+    expect(tree.get('portal-destination')).toEqual(['live-portal']);
+    unmount(source);
+    expect(tree.get('portal-destination')).toEqual([]);
+});

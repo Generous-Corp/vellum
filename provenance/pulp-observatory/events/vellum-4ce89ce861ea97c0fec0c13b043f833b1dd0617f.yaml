@@ -1,0 +1,59 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "design-schema-compiler"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-21T07:38:41Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-4ce89ce861ea97c0fec0c13b043f833b1dd0617f",
+  "include_dependency_deltas": [],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "design-schema-compiler"
+  ],
+  "mapped_paths": [
+    "cli/vellum_backend.py",
+    "packages/vellum-design-ir/bin/backend-commands.js",
+    "packages/vellum-design-ir/bin/backend-materialization.js",
+    "packages/vellum-design-ir/bin/backend-source.js",
+    "packages/vellum-design-ir/src/fig-file/import.js",
+    "packages/vellum-design-ir/test/fig-decoder.test.js",
+    "packages/vellum-design-ir/test/fig-import.test.js",
+    "packages/vellum-design-ir/test/fig-paths.test.js",
+    "packages/vellum-design-ir/test/fixtures/synthetic.fig",
+    "packages/vellum-design-ir/test/support/make_synthetic_fig.mjs"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "62c40285121e828b02ac648c4088fc49f6cad3f9",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "5e29b065b1275541a58a857f913d909cf54d213d",
+    "to_commit": "a73dcfaece68463c1b9b5534a0726d7ec8b3d127"
+  },
+  "schema_api_deltas": [
+    "packages/vellum-design-ir/bin/backend-commands.js",
+    "packages/vellum-design-ir/bin/backend-materialization.js",
+    "packages/vellum-design-ir/bin/backend-source.js",
+    "packages/vellum-design-ir/src/fig-file/import.js",
+    "packages/vellum-design-ir/test/fig-decoder.test.js",
+    "packages/vellum-design-ir/test/fig-import.test.js",
+    "packages/vellum-design-ir/test/fig-paths.test.js",
+    "packages/vellum-design-ir/test/fixtures/synthetic.fig",
+    "packages/vellum-design-ir/test/support/make_synthetic_fig.mjs"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "4ce89ce861ea97c0fec0c13b043f833b1dd0617f",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

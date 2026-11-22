@@ -264,13 +264,20 @@ vellum_add_framework_test(host-param-surface-model
     UNITS Vellum::MirrorView_core Vellum::Value)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    vellum_add_framework_test(main-thread-timer
+        SOURCES main_thread_timer_test.mm
+        UNITS Vellum::MirrorFoundation)
+    target_link_libraries(vellum-framework-main-thread-timer-test PRIVATE "-framework CoreFoundation")
+    set_tests_properties(vellum.framework.main-thread-timer PROPERTIES TIMEOUT 20)
+
     vellum_add_framework_test(native-dialog-delivery
         SOURCES native_dialog_delivery_test.cpp
         UNITS Vellum::MirrorFoundation)
     target_link_libraries(vellum-framework-native-dialog-delivery-test PRIVATE "-framework CoreFoundation")
     set_tests_properties(vellum.framework.native-dialog-delivery PROPERTIES TIMEOUT 15)
 else()
-    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES native_dialog_delivery_test.cpp)
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+        main_thread_timer_test.mm native_dialog_delivery_test.cpp)
 endif()
 
 # Every test file here must be registered above. A test file that no
