@@ -1420,7 +1420,9 @@ class FrameworkPortsPlanTest(unittest.TestCase):
         lock.parent.mkdir(parents=True)
         lock.write_text(json.dumps({"historical_skia_assets": [historical]}), encoding="utf-8")
         self.fixture.write_receipt()
-        self.fixture.plan()
+        with mock.patch.object(mp, "recorded_historical_skia_assets", wraps=mp.recorded_historical_skia_assets) as recorded:
+            self.fixture.plan()
+        recorded.assert_called_once_with(self.fixture.repo)
 
     def test_an_unrecorded_file_is_refused_until_a_ledger_row_adds_it(self) -> None:
         self.fixture.write(self.NEW, b"int ported() { return 2; }\n")
