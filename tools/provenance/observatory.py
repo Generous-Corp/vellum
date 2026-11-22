@@ -9,6 +9,7 @@ modules and remain re-exported here for compatibility with existing callers.
 from __future__ import annotations
 
 import argparse
+import ast
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
@@ -451,7 +452,9 @@ def coverage_gaps(
             require_event_coverage = tail_start != target
             if source == "vellum" and target != requested_target and not require_event_coverage:
                 if vellum_tail_policy == "reconciled":
-                    verify_vellum_observatory_tail(repo, target, requested_target)
+                    verify_vellum_observatory_tail(
+                        repo, target, requested_target, allow_product_merges=True
+                    )
                 else:
                     # Coverage policy: an exactly reconciled evidence tail still
                     # passes; otherwise every mapped commit ahead of the cursor
@@ -625,15 +628,14 @@ def is_event_file(path: str) -> bool:
     return bool(relative) and "/" not in relative and relative.endswith(".yaml")
 
 
-def verify_vellum_observatory_tail(repo: Path, cursor: str, target: str) -> None:
-    """Prove that commits after the reconciled source cursor contain evidence only."""
-    require_commit(repo, cursor, "cursor.vellum.last_scanned_commit")
-    require_commit(repo, target, "requested vellum target")
-    require_ancestor(repo, cursor, target, "requested vellum target")
+def vellum_observatory_tail_error(
+    repo: Path, cursor: str, target: str, allow_product_merges: bool = False
+) -> str | None:
+    """Return a tail-policy error, accepting product merges based on scanned history."""
     previous = cursor
-    for commit in commits_between(repo, cursor, target):
+    for commit in git(repo, "rev-list", "--first-parent", "--reverse", f"{cursor}..{target}").splitlines():
         parents = git(repo, "rev-list", "--parents", "-n", "1", commit).split()
-        if (
+        if allow_product_merges and (
             len(parents) == 3
             and previous in parents[1:]
             and git(repo, "rev-parse", f"{commit}^{{tree}}")
@@ -641,35 +643,150 @@ def verify_vellum_observatory_tail(repo: Path, cursor: str, target: str) -> None
         ):
             previous = commit
             continue
+        if allow_product_merges and (
+            len(parents) == 3
+            and parents[1] == previous
+            and _merge_parent_is_cursor_covered(repo, cursor, parents[2], commit)
+        ):
+            previous = commit
+            continue
+        if (
+            len(parents) == 3
+            and parents[1] == previous
+            and _merge_parent_is_evidence(repo, previous, parents[2], commit)
+        ):
+            previous = commit
+            continue
+        if allow_product_merges and (
+            len(parents) == 3
+            and parents[1] == previous
+            and _coalesced_evidence_merge(repo, cursor, previous, parents[2], commit)
+        ):
+            previous = commit
+            continue
         if len(parents) != 2:
-            raise ObservatoryError(
-                f"Vellum observatory evidence tail must be linear: {commit}"
-            )
+            if len(parents) == 3:
+                base = git(repo, "merge-base", previous, parents[2])
+                side_paths = git(
+                    repo, "diff-tree", "--no-commit-id", "-r", "--name-only", base, parents[2]
+                ).splitlines()
+                for path in side_paths:
+                    if path not in EVIDENCE_MODIFIED_PATHS and not is_event_file(path):
+                        return (
+                            f"Vellum observatory evidence tail contains non-evidence change at "
+                            f"{parents[2]}: M {path}"
+                        )
+                return f"Vellum observatory evidence tail is discontinuous: {commit}"
+            return f"Vellum observatory evidence tail must be linear: {commit}"
         if parents[1] != previous:
-            raise ObservatoryError(
-                f"Vellum observatory evidence tail is discontinuous: {commit}"
-            )
+            return f"Vellum observatory evidence tail is discontinuous: {commit}"
         entries = parse_diff_entries(repo, commit)
         if _is_exact_authority_reconciliation(repo, previous, commit, entries):
             previous = commit
             continue
+        if not entries:
+            return f"Vellum observatory evidence tail changes nothing at {commit}"
         for entry in entries:
             status = str(entry["status"])
             path = str(entry["path"])
             if "old_path" in entry:
-                raise ObservatoryError(
+                return (
                     f"Vellum observatory evidence tail forbids rename/copy at {commit}: "
-                    f"{entry['old_path']} -> {path}"
+                    f"{_display_path(str(entry['old_path']))} -> {_display_path(path)}"
                 )
             if path in EVIDENCE_MODIFIED_PATHS and status == "M":
                 continue
             if status == "A" and is_event_file(path):
                 continue
-            raise ObservatoryError(
+            return (
                 f"Vellum observatory evidence tail contains non-evidence change at "
-                f"{commit}: {status} {path}"
+                f"{commit}: {status} {_display_path(path)}"
             )
         previous = commit
+    return None
+
+
+def _display_path(path: str) -> str:
+    if path.startswith('"') and path.endswith('"'):
+        try:
+            value = ast.literal_eval(path)
+            if isinstance(value, str):
+                return value
+        except (SyntaxError, ValueError):
+            pass
+    return path
+
+
+def _merge_parent_is_cursor_covered(
+    repo: Path, cursor: str, side_parent: str, merge_commit: str
+) -> bool:
+    """A product branch is covered when it forked from history scanned by cursor."""
+    base = git(repo, "merge-base", cursor, side_parent)
+    if not is_ancestor(repo, base, cursor):
+        return False
+    parents = git(repo, "rev-list", "--parents", "-n", "1", side_parent).split()
+    if len(parents) not in (2, 3) or parents[1] != base or parents[1] == cursor:
+        return False
+    side_paths = set(git(repo, "diff-tree", "--no-commit-id", "-r", "--name-only", base, side_parent).splitlines())
+    merge_paths = set(git(repo, "diff-tree", "--no-commit-id", "-r", "--name-only", cursor, merge_commit).splitlines())
+    if not merge_paths.issubset(side_paths):
+        return False
+    return any(
+        path not in EVIDENCE_MODIFIED_PATHS and not is_event_file(path)
+        for path in side_paths
+    )
+
+
+def _merge_parent_is_evidence(
+    repo: Path, previous: str, side_parent: str, merge_commit: str
+) -> bool:
+    parents = git(repo, "rev-list", "--parents", "-n", "1", side_parent).split()
+    if len(parents) != 2 or parents[1] != previous:
+        return False
+    paths = git(repo, "diff-tree", "--no-commit-id", "-r", "--name-only", previous, side_parent).splitlines()
+    merge_paths = set(git(repo, "diff-tree", "--no-commit-id", "-r", "--name-only", previous, merge_commit).splitlines())
+    if not set(merge_paths).issubset(paths):
+        return False
+    return bool(paths) and all(
+        path in EVIDENCE_MODIFIED_PATHS or is_event_file(path) for path in paths
+    )
+
+
+def _coalesced_evidence_merge(
+    repo: Path, cursor: str, previous: str, side_parent: str, merge_commit: str
+) -> bool:
+    previous_parents = git(repo, "rev-list", "--parents", "-n", "1", previous).split()
+    if len(previous_parents) != 3 or previous_parents[1] != cursor:
+        return False
+    side_parents = git(repo, "rev-list", "--parents", "-n", "1", side_parent).split()
+    if len(side_parents) != 2 or side_parents[1] != cursor:
+        return False
+    prior_paths = set(
+        git(repo, "diff-tree", "--no-commit-id", "-r", "--name-only", cursor, previous).splitlines()
+    )
+    if not any(
+        path not in EVIDENCE_MODIFIED_PATHS and not is_event_file(path)
+        for path in prior_paths
+    ):
+        return False
+    merge_paths = set(
+        git(repo, "diff-tree", "--no-commit-id", "-r", "--name-only", previous, merge_commit).splitlines()
+    )
+    return bool(merge_paths) and all(
+        path in EVIDENCE_MODIFIED_PATHS or is_event_file(path) for path in merge_paths
+    )
+
+
+def verify_vellum_observatory_tail(
+    repo: Path, cursor: str, target: str, allow_product_merges: bool = False
+) -> None:
+    """Prove that commits after the reconciled source cursor contain evidence only."""
+    require_commit(repo, cursor, "cursor.vellum.last_scanned_commit")
+    require_commit(repo, target, "requested vellum target")
+    require_ancestor(repo, cursor, target, "requested vellum target")
+    error = vellum_observatory_tail_error(repo, cursor, target, allow_product_merges)
+    if error:
+        raise ObservatoryError(error)
 
 
 def verify_vellum_observatory_pr_tail(

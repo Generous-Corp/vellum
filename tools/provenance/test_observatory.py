@@ -546,13 +546,36 @@ class ObservatoryTests(unittest.TestCase):
             write(repo / "tracked.txt", "cursor\n")
             cursor = commit_all(repo, "reconcile cursor")
             run(repo, "git", "checkout", "-b", "product", base)
+            run(repo, "git", "checkout", "-b", "product-feature")
             write(repo / "product.txt", "product\n")
-            product = commit_all(repo, "product change")
+            commit_all(repo, "product change")
+            product_feature = run(repo, "git", "rev-parse", "HEAD")
+            run(repo, "git", "checkout", "product")
+            run(repo, "git", "merge", "--no-ff", product_feature, "-m", "merge product branch")
+            product = run(repo, "git", "rev-parse", "HEAD")
             run(repo, "git", "checkout", "main")
             run(repo, "git", "merge", "--no-ff", product, "-m", "merge product")
             target = run(repo, "git", "rev-parse", "HEAD")
 
-            observatory.verify_vellum_observatory_tail(repo, cursor, target)
+            observatory.verify_vellum_observatory_tail(
+                repo, cursor, target, allow_product_merges=True
+            )
+
+    def test_product_commit_after_cursor_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary) / "vellum"
+            _, cursor = init_repo(repo, "tracked.txt")
+            write(repo / "product.txt", "uncovered\n")
+            target = commit_all(repo, "uncovered product")
+            with self.assertRaisesRegex(observatory.ObservatoryError, "non-evidence change"):
+                observatory.verify_vellum_observatory_tail(repo, cursor, target)
+
+    def test_forged_cursor_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary) / "vellum"
+            _, target = init_repo(repo, "tracked.txt")
+            with self.assertRaisesRegex(observatory.ObservatoryError, "rev-parse"):
+                observatory.verify_vellum_observatory_tail(repo, "f" * 40, target)
 
     def test_tree_identical_merge_does_not_duplicate_observation_or_break_tail(
         self,

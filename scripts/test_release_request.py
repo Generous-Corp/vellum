@@ -122,6 +122,23 @@ class Check(unittest.TestCase):
 
 
 class ObservatoryTailSelection(unittest.TestCase):
+    def _repo_with_cursor(self) -> tuple[Path, str, object]:
+        temporary = tempfile.TemporaryDirectory()
+        root = Path(temporary.name)
+        run_git = lambda *args: subprocess.run(
+            ["git", *args], cwd=root, check=True, capture_output=True, text=True
+        )
+        run_git("init", "-b", "main")
+        run_git("config", "user.email", "test@example.invalid")
+        run_git("config", "user.name", "Release test")
+        (root / "tracked.txt").write_text("base\n")
+        run_git("add", ".")
+        run_git("commit", "-m", "base")
+        (root / "tracked.txt").write_text("cursor\n")
+        run_git("commit", "-am", "reconcile cursor")
+        cursor = run_git("rev-parse", "HEAD").stdout.strip()
+        return root, cursor, temporary
+
     def test_product_merge_from_cursor_covered_history_is_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -139,15 +156,42 @@ class ObservatoryTailSelection(unittest.TestCase):
             run_git("commit", "-am", "reconcile cursor")
             cursor = run_git("rev-parse", "HEAD").stdout.strip()
             run_git("checkout", "-b", "product", base)
+            run_git("checkout", "-b", "product-feature")
             (root / "product.txt").write_text("product\n")
             run_git("add", ".")
             run_git("commit", "-m", "product change")
+            product_feature = run_git("rev-parse", "HEAD").stdout.strip()
+            run_git("checkout", "product")
+            run_git("merge", "--no-ff", product_feature, "-m", "merge product branch")
             product = run_git("rev-parse", "HEAD").stdout.strip()
             run_git("checkout", "main")
             run_git("merge", "--no-ff", product, "-m", "merge product")
             target = run_git("rev-parse", "HEAD").stdout.strip()
 
             rr.require_evidence_tail(root, cursor, target)
+
+    def test_product_commit_after_cursor_is_refused(self) -> None:
+        root, cursor, temporary = self._repo_with_cursor()
+        try:
+            (root / "product.txt").write_text("uncovered\n")
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-m", "uncovered product"], cwd=root, check=True)
+            target = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                                    capture_output=True, text=True).stdout.strip()
+            with self.assertRaisesRegex(rr.ReleaseRequestError, "not observatory evidence"):
+                rr.require_evidence_tail(root, cursor, target)
+        finally:
+            temporary.cleanup()
+
+    def test_forged_cursor_is_refused(self) -> None:
+        root, _, temporary = self._repo_with_cursor()
+        try:
+            target = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                                    capture_output=True, text=True).stdout.strip()
+            with self.assertRaisesRegex(rr.ReleaseRequestError, "cannot compare"):
+                rr.require_evidence_tail(root, "f" * 40, target)
+        finally:
+            temporary.cleanup()
 
 
 # The live shapes (2026-11-01): Vellum's required checks come from classic branch

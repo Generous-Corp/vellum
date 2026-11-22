@@ -46,6 +46,11 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import version_at_land as val  # noqa: E402
+sys.path.insert(0, str(ROOT / "tools" / "provenance"))
+try:
+    import observatory as obs  # noqa: E402
+except ModuleNotFoundError:
+    obs = None
 VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
@@ -501,6 +506,25 @@ def require_evidence_tail(root: Path, cursor: str, commit: str) -> None:
     """
     if cursor == commit or not is_ancestor(root, cursor, commit):
         raise ReleaseRequestError(f"the cursor {cursor} is not a strict ancestor of {commit}")
+    if obs is None:
+        return _require_evidence_tail_legacy(root, cursor, commit)
+    error = obs.vellum_observatory_tail_error(root, cursor, commit, allow_product_merges=True)
+    if error:
+        if "evidence tail is discontinuous:" in error or "evidence tail must be linear:" in error:
+            error = "the evidence tail is not one linear chain at " + error.rsplit(": ", 1)[1]
+        elif "contains non-evidence change at " in error:
+            commit_name, change = error.rsplit(" at ", 1)[1].split(": ", 1)
+            error = f"{commit_name} is not observatory evidence: {change}"
+        elif "forbids rename/copy at " in error:
+            commit_name = error.rsplit(" at ", 1)[1].split(": ", 1)[0]
+            error = f"{commit_name} is not observatory evidence: D"
+        elif "changes nothing at " in error:
+            error = error.replace("evidence tail changes nothing at ", "") + " changes nothing"
+        raise ReleaseRequestError(error)
+
+
+def _require_evidence_tail_legacy(root: Path, cursor: str, commit: str) -> None:
+    """Keep copied release scripts usable when provenance modules are unavailable."""
     previous = cursor
     for entry in git(root, "rev-list", "--reverse", "--topo-order", f"{cursor}..{commit}").splitlines():
         parents = git(root, "rev-list", "--parents", "-n", "1", entry).split()[1:]
