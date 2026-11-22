@@ -367,9 +367,17 @@ endforeach()
 # the public header is mirrored, while this implementation is authored here.
 if(TARGET pulp-view-core AND APPLE)
     target_sources(pulp-view-core PRIVATE
-        "${PROJECT_SOURCE_DIR}/framework/core/view/src/plugin_view_host.cpp"
-        "${PROJECT_SOURCE_DIR}/framework/core/view/platform/mac/gpu_plugin_editor_host_mac.mm"
-        "${PROJECT_SOURCE_DIR}/framework/core/view/platform/mac/window_host_mac_metal_view.mm")
+        "${PROJECT_SOURCE_DIR}/framework/core/view/src/plugin_view_host.cpp")
+    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        target_sources(pulp-view-core PRIVATE
+            "${PROJECT_SOURCE_DIR}/framework/core/view/platform/ios/ios_accessibility_bridge.mm"
+            "${PROJECT_SOURCE_DIR}/framework/core/view/platform/ios/ios_editor_surface_host.mm"
+            "${PROJECT_SOURCE_DIR}/framework/core/view/platform/ios/ios_window_surface_host.mm")
+    else()
+        target_sources(pulp-view-core PRIVATE
+            "${PROJECT_SOURCE_DIR}/framework/core/view/platform/mac/gpu_plugin_editor_host_mac.mm"
+            "${PROJECT_SOURCE_DIR}/framework/core/view/platform/mac/window_host_mac_metal_view.mm")
+    endif()
     target_include_directories(pulp-view-core PRIVATE
         "${PROJECT_SOURCE_DIR}/framework/core/view/include")
 endif()
