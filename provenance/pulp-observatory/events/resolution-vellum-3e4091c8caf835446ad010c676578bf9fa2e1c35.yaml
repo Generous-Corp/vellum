@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-3e4091c8caf835446ad010c676578bf9fa2e1c35",
+  "kind": "resolution",
+  "created_at": "2026-11-22T15:02:08Z",
+  "resolves": "vellum-3e4091c8caf835446ad010c676578bf9fa2e1c35",
+  "disposition": "framework-only",
+  "rationale": "Vellum gpu-runtime/graphics CMake: adds a gpu-runtime-device-provider variant compiled with GPU_RUNTIME_EXPORT_ABI so only the provider dylib exports the gpu_runtime ABI, and links vellum-skia-dawn-provider to it. The standalone VellumGpuRuntime::Device archive Pulp links (core/render/CMakeLists.txt, core/gpu_audio/CMakeLists.txt) keeps its name and hidden visibility. Pulp search at origin/main a4921f08e632 (git grep -F over core tools test examples apple ship inspect packages CMakeLists.txt cmake) for GPU_RUNTIME_EXPORT_ABI, gpu-runtime-device-provider, VellumGpuRuntime::DeviceProvider and GPU_RUNTIME_API returns 0; control VellumGpuRuntime returns 57 in 18 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-09, 'Classify the pending Vellum observatory events instead of raising the budget'); no schema or API delta recorded on the event. Any later resolution overrides this.",
+  "owner": "@danielraffel",
+  "linked_commits": [
+    "3e4091c8caf835446ad010c676578bf9fa2e1c35"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}
