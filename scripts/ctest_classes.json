@@ -35,6 +35,7 @@
       "vellum.foundation",
       "vellum.frame-driver",
       "vellum.frame-pump",
+      "vellum.framework.canvas-raster-parity",
       "vellum.framework.gpu-capabilities",
       "vellum.framework.host-param-surface-model",
       "vellum.framework.knob-fine-drag",
