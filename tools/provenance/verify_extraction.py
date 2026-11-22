@@ -983,7 +983,8 @@ def current_mirror_receipts(
                  else transfer.get("export_receipt") if isinstance(transfer, dict) else None)
         if named not in receipts:
             return [], receipts, [f"{FRAMEWORK_TRANSFER_RECORD} names {named!r}, which is not a landed receipt"]
-        head_tree = transfer.get("mirror_tree")
+        head_tree = (successor.get("mirror_tree") if isinstance(successor, dict)
+                     else transfer.get("mirror_tree") if isinstance(transfer, dict) else None)
     current: list[str] = []
     older: list[str] = []
     for receipt_path in receipts:
