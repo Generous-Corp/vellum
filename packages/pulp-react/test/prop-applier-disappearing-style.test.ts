@@ -186,6 +186,11 @@ describe('@pulp/react prop-applier — disappearing style keys', () => {
         expect(callsTo('setBackgroundGradient')).toEqual([['c1', '']]);
     });
 
+    it('closes a Modal whose open prop is removed', () => {
+        applyChangedProps(makeInstance('m1', 'Modal'), { open: true }, {});
+        expect(callsTo('setVisible')).toEqual([['m1', false]]);
+    });
+
     it('clears a removed backgroundGradient through both background slots', () => {
         applyChangedProps(makeInstance('c2'),
                           { backgroundGradient: 'linear-gradient(red, blue)' }, {});

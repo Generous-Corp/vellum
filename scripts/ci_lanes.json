@@ -103,6 +103,10 @@
         ]
       },
       {
+        "script": "scripts/check_react_runtime.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/template_guard.py"
       },
       {
@@ -352,6 +356,10 @@
       },
       {
         "script": "authoring/adapters/illustrator/test_illustrator_to_svg.py"
+      },
+      {
+        "script": "scripts/check_react_runtime.py",
+        "isolated": true
       },
       {
         "script": "scripts/template_guard.py"

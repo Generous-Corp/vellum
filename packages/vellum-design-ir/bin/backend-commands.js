@@ -37,13 +37,28 @@ import {
     sourceArchiveArguments,
     success,
 } from './backend-protocol.js';
-import { loadSource, planAssets } from './backend-source.js';
+import { loadSource, outlineSource, planAssets } from './backend-source.js';
 import {
     acquireImportOperationLock,
     releaseImportOperationLock,
 } from './import-operation-lock.js';
 
 export async function executeBackendCommand(command, project, args) {
+    if (command === 'import' && args.outline) {
+        if (args.frame !== undefined || args.page !== undefined) {
+            fail('invalid_fig_outline', '--outline takes no frame or page selector');
+        }
+        const outline = await outlineSource(requiredSource(args), args['source-type'] ?? 'figma');
+        const lines = [`${outline.title || '(untitled)'} · ${outline.pageCount} page(s)`];
+        for (const page of outline.pages) {
+            lines.push(`${page.name} · ${page.frameCount} frame(s)`);
+            for (const frame of page.frames) {
+                const size = frame.width && frame.height ? ` (${frame.width} × ${frame.height})` : '';
+                lines.push(`  ${frame.guid}  ${frame.name}${size} · ${frame.descendants} descendants`);
+            }
+        }
+        return success('fig_outline', lines.join('\n'), outline);
+    }
     if (command === 'import' || command === 'reimport') {
         return withImportLock(project, () => (
             command === 'import'
@@ -236,6 +251,7 @@ async function importDesign(project, args) {
         sourceKey,
         sourceType,
         figFrame: args.frame,
+        figPage: args.page,
     });
     const paths = projectPaths(project, sourceKey, loaded.revision);
     const importLock = await readOptionalJson(paths.importLock);
@@ -379,6 +395,7 @@ async function reimportDesignFilesystem(project, args) {
             paths.resolvedTokenLayers,
         ]) {
             const expected = generated.get(path);
+            if (expected === undefined) continue;
             const current = await readFile(path).catch((error) => {
                 if (error.code === 'ENOENT') return null;
                 throw error;

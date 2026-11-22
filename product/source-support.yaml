@@ -65,6 +65,18 @@ sources:
       - rejects audio-widget nodes and audio-specific binding fields
       - image and vector assets are preserved but not painted by the native host
       - unsupported properties and fields remain explicit diagnostics and extensions
+  pencil:
+    channel: experimental
+    accepted_artifact: Pencil or OpenPencil node-tree JSON or .pen
+    provider_access: none
+    reimport: supported
+    requires: macOS native SDK
+  designmd:
+    channel: experimental
+    accepted_artifact: Google DESIGN.md token specification
+    provider_access: none
+    reimport: supported
+    requires: macOS native SDK
   figma-rest:
     channel: unavailable
   figma-file:

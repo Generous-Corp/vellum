@@ -1,60 +1,23 @@
-# Windows and Linux PluginView follow-up
+# RmlUi idle follow-up
 
-This lane is based on `lane/w-rmlui-hosts-3` at `ca11bb7abfe54ec1a2dc570489e29eef78726d80`, which is PR #686's branch. It keeps macOS packaging unchanged and makes the mirror unit packaging path portable for the Windows and Linux platform records.
+The origin regression test is committed as `3058e8ee8`. The required native-parent-host test could not be executed in this lane because `~/bin/leased-build --wait-secs 60 -- cmake -S rmlui -B build-rmlui -DVELLUM_RMLUI_NATIVE=ON -DVELLUM_RMLUI_CPU=ON -DVELLUM_RMLUI_NATIVE_HOST=ON -DVELLUM_RMLUI_BUILD_TESTS=ON -DVELLUM_RMLUI_FONTS=OFF -DCMAKE_BUILD_TYPE=Release` returned `leased-build: no lease within 60s (cores=8)` before configuring. On origin, the new assertion is expected to fail because every idle tick replaces the layer contents.
 
-The platform closure records still need to be produced from the exact Pulp commit by the platform closure exporter and checked into `provenance/framework/platforms/`. The records must cover `windows-x64`, `windows-arm64`, and `linux-x64`, use the renderer lock asset for each platform, and include the `pulp-view-core` host sources already scoped in `provenance/framework/ports.json`.
+`rmlui/src/metal_image_decode.mm` decodes synchronously through ImageIO and draws into a bitmap context on its caller's thread. The file has no queue or cancellation seam, so image decode can block the UI thread and delay close. This lane leaves it unchanged because moving ownership and lifetime off-thread is larger than a small safe fix. A lead-owned follow-up should add an explicit decode queue and close cancellation before changing this path.
 
-## Linux VM
+The idle/presentation behavior needs a macOS host run. The lead should run the native-parent-host test and an animation fixture on a GPU-capable macOS machine, plus the installed native-package consumer proof. The lane cannot claim those results.
 
-From the Vellum checkout, after the `linux-x64` record is present:
+The required control was performed locally with `git revert --no-edit --no-commit acb08a736`: the only fix files disappeared from the worktree while the regression test remained. The control test could not be executed because the same build lease was unavailable, so no passing control result is claimed.
 
-```sh
-cmake -S . -B build-rmlui-linux -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DVELLUM_BUILD_TESTS=ON \
-  -DVELLUM_ENABLE_MIRROR=ON \
-  -DVELLUM_ENABLE_GPU=ON \
-  -DVELLUM_ENABLE_GRAPHICS=ON \
-  -DVELLUM_ENABLE_AUTHORING=OFF \
-  -DVELLUM_ENABLE_RMLUI=ON \
-  -DVELLUM_RMLUI_BUILD_TESTS=ON \
-  -DVELLUM_BUILD_SMOKE_NATIVE=OFF
-~/bin/leased-build --wait-secs 3600 -- cmake --build build-rmlui-linux
-xvfb-run -a dbus-run-session -- ctest --test-dir build-rmlui-linux -L linux-host --output-on-failure
-```
+The requested texture grace-period cache is not implemented in this slice. The current native host already retains the RmlUi context and its textures across `detach()` and hidden visibility. `invalidate()` is terminal and closes the context, so adding delayed release there requires a reopen/load lifecycle and a fake-clock seam. That belongs in the next coherent change with a Metal texture-cache test.
 
-The `vellum.rmlui.plugin-view` contract is included in `linux-host` and should run in the same Xvfb invocation as the existing Linux host tests.
+`scripts/gates.sh origin/main` was attempted after removing stray `.DS_Store` files. It stopped before repository checks because the sandbox rejected its fallback temporary worktree location (`/Users/danielraffel/agent-worktrees` is not writable). No gate result is claimed.
 
-## Windows VM
-
-Run the same configure and build for both architectures after the corresponding record is present:
+Lead run list, from this checkout after a macOS GPU-capable configure with the same RmlUi options:
 
 ```sh
-cmake -S . -B build-rmlui-windows-x64 -A x64 \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DVELLUM_BUILD_TESTS=ON \
-  -DVELLUM_ENABLE_MIRROR=ON \
-  -DVELLUM_ENABLE_GPU=ON \
-  -DVELLUM_ENABLE_GRAPHICS=ON \
-  -DVELLUM_ENABLE_AUTHORING=OFF \
-  -DVELLUM_ENABLE_RMLUI=ON \
-  -DVELLUM_RMLUI_BUILD_TESTS=ON \
-  -DVELLUM_BUILD_SMOKE_NATIVE=OFF
-~/bin/leased-build --wait-secs 3600 -- cmake --build build-rmlui-windows-x64 --config Release
-ctest --test-dir build-rmlui-windows-x64 -C Release -R '^vellum\\.rmlui\\.plugin-view$' --output-on-failure
-
-cmake -S . -B build-rmlui-windows-arm64 -A ARM64 \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DVELLUM_BUILD_TESTS=ON \
-  -DVELLUM_ENABLE_MIRROR=ON \
-  -DVELLUM_ENABLE_GPU=ON \
-  -DVELLUM_ENABLE_GRAPHICS=ON \
-  -DVELLUM_ENABLE_AUTHORING=OFF \
-  -DVELLUM_ENABLE_RMLUI=ON \
-  -DVELLUM_RMLUI_BUILD_TESTS=ON \
-  -DVELLUM_BUILD_SMOKE_NATIVE=OFF
-~/bin/leased-build --wait-secs 3600 -- cmake --build build-rmlui-windows-arm64 --config Release
-ctest --test-dir build-rmlui-windows-arm64 -C Release -R '^vellum\\.rmlui\\.plugin-view$' --output-on-failure
+~/bin/leased-build --wait-secs 3600 -- cmake --build build-rmlui --target vellum-rmlui-native-parent-host-test
+ctest --test-dir build-rmlui --output-on-failure -R '^vellum\\.rmlui\\.native-parent-host$'
+ctest --test-dir build-rmlui --output-on-failure -R '^vellum\\.rmlui\\.install-consumer-native-package$'
 ```
 
-The Windows commands are compile and contract coverage only. A real GPU-backed surface and DAW/editor embedding still need a GPU-capable lead run.
+The lead should also run the animation-specific host fixture covering zero idle presents, one present after a DOM/data change, and presents on each animation tick until completion. This lane contains no GPU result.

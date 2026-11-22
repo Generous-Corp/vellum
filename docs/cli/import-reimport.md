@@ -37,16 +37,35 @@ generic control.
 Use the offline decoder for local Figma saves.
 
 ```sh
+vellum import --source-type fig ./design.fig --outline
 vellum import --project . --source-type fig ./design.fig --frame 0:2 --as main
 vellum reimport --project . --source ./design.fig --as main
 ```
 
-`--frame` takes a Figma frame GUID. Omit it to use the decoder's default
-frame. Reimport and design checks use the original frame selection. The
+`--outline` lists pages, frame names, GUIDs, dimensions, and descendant counts
+without writing files or requiring a project. Add `--json` for structured data.
+`--frame` takes a GUID or a case-insensitive name. Use `--page` to scope name
+lookup or use a GUID to resolve an ambiguous name. Omit `--frame` to use the
+decoder's default frame. Reimport and design checks pin the resolved GUID. The
 import snapshots the original bytes and copies referenced embedded raster
 assets into the project. It uses no Figma login or network connection.
 Zstd-compressed saves require Node.js 22.15 or newer. Decoded content follows
 the materialization limits described above.
+
+The macOS native SDK also imports Pencil and OpenPencil node-tree JSON
+(including `.pen` files) and Google DESIGN.md token specifications.
+
+```sh
+vellum import pencil ./panel.pen
+vellum import designmd ./DESIGN.md
+vellum reimport --source ./DESIGN.md
+```
+
+Import one source per project. Pencil produces a retained tree and a token
+file. DESIGN.md produces tokens and parser diagnostics without generating a
+screen. A reference to an unknown token stops the import before project files
+change. Both routes keep the original input as a revision snapshot for
+reimport and `vellum design check`.
 
 `.pulp.zip` is unpacked by the installed Python dispatcher with no external
 unzip dependency. Before any member is written, the dispatcher rejects path
