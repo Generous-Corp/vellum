@@ -269,18 +269,29 @@ function retainedStyle(context, node, viewport, root) {
         style.backgroundColor = colorSlot(context, refs, 'backgroundColor', paint.backgroundColor);
     }
     if (drawsBox && paint.boxShadow !== undefined) {
-        const shadow = paint.boxShadow;
-        if (!shadow || typeof shadow !== 'object') {
+        const shadows = Array.isArray(paint.boxShadow) ? paint.boxShadow : [paint.boxShadow];
+        if (shadows.some((shadow) => !shadow || typeof shadow !== 'object')) {
             throw new TypeError(`design node ${node.id} paint.boxShadow must be an object`);
         }
-        style.boxShadow = {
+        const retainedShadows = shadows.map((shadow) => ({
             ...paintNumbers(shadow, ['offsetX', 'offsetY', 'blurRadius', 'spreadRadius']),
             color: colorSlot(context, refs, 'boxShadow', shadow.color),
-        };
+        }));
+        if (retainedShadows.length > 1 && refs.boxShadow !== undefined) {
+            throw new TypeError(`design node ${node.id} paint.boxShadow cannot use color tokens with multiple shadows`);
+        }
+        style.boxShadow = retainedShadows.length === 1 ? retainedShadows[0] : retainedShadows;
     }
     if (drawsBox && paint.backgroundLinearGradient !== undefined) {
         style.backgroundLinearGradient = retainedGradient(
             context, refs, 'backgroundLinearGradient', paint.backgroundLinearGradient);
+    }
+    if (drawsBox && paint.backgroundGradient !== undefined) {
+        style.backgroundGradient = retainedGradient(
+            context, refs, 'backgroundGradient', paint.backgroundGradient);
+    }
+    if (drawsBox && paint.border && typeof paint.border === 'object') {
+        style.border = paint.border;
     }
     if (drawsBox && Array.isArray(paint.backgroundGradients)) {
         style.backgroundGradients = paint.backgroundGradients.map((gradient, index) =>
@@ -302,11 +313,20 @@ function retainedStyle(context, node, viewport, root) {
                 tokens, paint[property], [], context.tokenLayers));
         }
     }
+    for (const property of ['borderTopLeftRadius', 'borderTopRightRadius',
+        'borderBottomRightRadius', 'borderBottomLeftRadius']) {
+        if (typeof paint[property] === 'number' && Number.isFinite(paint[property])) {
+            style[property] = paint[property];
+        }
+    }
     if (typeof typography.color === 'string' && node.kind !== 'path') {
         style.color = colorSlot(context, refs, 'color', typography.color);
     }
     Object.assign(style, paintNumbers(typography, ['fontSize', 'fontWeight', 'letterSpacing']));
     if (typeof typography.fontFamily === 'string') style.fontFamily = typography.fontFamily;
+    for (const property of ['fontStyle', 'textAlign', 'verticalAlign']) {
+        if (typeof typography[property] === 'string') style[property] = typography[property];
+    }
     for (const property of VECTOR_PAINT_KEYS) {
         if (typeof paint[property] === 'string') style[property] = paint[property];
     }
