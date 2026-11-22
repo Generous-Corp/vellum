@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-ef0d43957f4f5cfdd27f4fba09f7dfba05b0225b",
+  "kind": "resolution",
+  "created_at": "2026-11-22T15:02:08Z",
+  "resolves": "vellum-ef0d43957f4f5cfdd27f4fba09f7dfba05b0225b",
+  "disposition": "framework-only",
+  "rationale": "Vellum-native performance change: batches dense axis-aligned solid rectangle draws in SkiaDawnSurface's retained PaintCommand path, with a GPU parity test. Pulp's own renderer does not paint through Vellum's PaintCommand/SkiaDawnSurface path, and it reaches SkiaDawnSurface only as an SDK consumer in test/editor_host_slice. Pulp search at origin/main a4921f08e632 (git grep -w over core tools test examples apple ship inspect packages) for draw_rectangle, batchable_rectangle, rectangle_batch and PaintCommand returns 0; control SkiaSurface on the same search returns 288 in 64 files. An optimisation, not a correctness fix Pulp is missing. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-09, 'Classify the pending Vellum observatory events instead of raising the budget'); no schema or API delta recorded on the event. Any later resolution overrides this.",
+  "owner": "@danielraffel",
+  "linked_commits": [
+    "ef0d43957f4f5cfdd27f4fba09f7dfba05b0225b"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}

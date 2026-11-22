@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-2eafd562cbe3605e14f31700c4d28e5bc9664b9c",
+  "kind": "resolution",
+  "created_at": "2026-11-22T15:02:08Z",
+  "resolves": "vellum-2eafd562cbe3605e14f31700c4d28e5bc9664b9c",
+  "disposition": "framework-only",
+  "rationale": "Vellum provider packaging: moves the native Dawn bootstrap bodies out of the inline header into the provider dylib (VELLUM_GRAPHICS_API exports); every declaration keeps its signature. Pulp has no copy of dawn_native_bootstrap.hpp or dawn_bootstrap.cpp; its only uses (test/editor_host_slice/rmlui_vellum_renderer_main.cpp, test/test_pulp_vellum_editor.cpp) include the header from the Vellum SDK and call register_native_dawn_bootstrap(&error), whose signature is unchanged. Pulp search at origin/main a4921f08e632 (git grep -w over core tools test examples apple ship inspect packages) for native_dawn_bootstrap and register_native_dawn_bootstrap_for_bundle returns 0; control SkiaSurface on the same search returns 288 in 64 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-09, 'Classify the pending Vellum observatory events instead of raising the budget'); no schema or API delta recorded on the event. Any later resolution overrides this.",
+  "owner": "@danielraffel",
+  "linked_commits": [
+    "2eafd562cbe3605e14f31700c4d28e5bc9664b9c"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}
