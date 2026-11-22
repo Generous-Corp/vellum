@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Negative controls for the installed-dylib symbol census."""
+"""Tests for the installed-dylib symbol census and runtime identity."""
 
 from __future__ import annotations
 
 import contextlib
 import importlib.util
 import io
+import os
 import subprocess
 import sys
 import tempfile
@@ -59,6 +60,37 @@ def classes(*names: str) -> str:
     rows = ["Contents of (__DATA,__objc_classlist) section"]
     rows += [f"0000000000004000 0x5000 _OBJC_CLASS_$_{n}" for n in names]
     return "\n".join(rows) + "\n"
+
+
+class MirrorRuntimeIdentityTest(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("VELLUM_RUNTIME_IDENTITY_BUILD"),
+                         "requires a built macOS mirror runtime")
+    def test_dylib_and_objc_names_include_build_identity(self) -> None:
+        build = Path(os.environ["VELLUM_RUNTIME_IDENTITY_BUILD"])
+        identity = os.environ["VELLUM_RUNTIME_IDENTITY_TAG"]
+        objc_suffix = "_" + identity.replace("-", "_").replace(".", "_")
+        images = sorted(build.glob("libvellum-mirror-*.dylib"))
+        self.assertTrue(images, f"no mirror dylibs in {build}")
+        providers = sorted(build.glob("libvellum-skia-dawn-provider*.dylib"))
+        self.assertEqual(len(providers), 1, f"expected one provider in {build}")
+
+        findings = []
+        classes_seen = set()
+        for image in [*images, *providers]:
+            result = subprocess.run(["otool", "-D", str(image)], check=True,
+                                    capture_output=True, text=True)
+            _, install_name = result.stdout.splitlines()
+            if install_name != f"@rpath/{image.name}" or not image.name.endswith(f"-{identity}.dylib"):
+                findings.append(f"{image.name}: {install_name}")
+            for name in sorted(sc.objc_classes(sc.run_otool(image))):
+                classes_seen.add(name)
+                if not name.endswith(objc_suffix):
+                    findings.append(f"{image.name}: Objective-C class {name}")
+
+        self.assertTrue(any(name.startswith("VellumMirrorMetalView") for name in classes_seen),
+                        "the selected dylibs do not define the plug-in's Metal view base class")
+        if findings:
+            self.fail("\n".join(findings))
 
 
 class SymbolCensusTest(unittest.TestCase):
