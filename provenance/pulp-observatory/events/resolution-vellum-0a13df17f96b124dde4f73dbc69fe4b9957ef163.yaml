@@ -2,10 +2,10 @@
   "schema_version": 1,
   "event_id": "resolution-vellum-0a13df17f96b124dde4f73dbc69fe4b9957ef163",
   "kind": "resolution",
-  "created_at": "2026-11-22T09:30:00Z",
+  "created_at": "2026-11-22T09:55:00Z",
   "resolves": "vellum-0a13df17f96b124dde4f73dbc69fe4b9957ef163",
   "disposition": "framework-only",
-  "rationale": "Source commit 0a13df17f96b124dde4f73dbc69fe4b9957ef163 changes authoring/CMakeLists.txt; contract tests: vellum-ui, vellum.authoring. Its only delta is the include_dependency_deltas entry authoring/CMakeLists.txt. Pulp main has no authoring/CMakeLists.txt (nor an authoring/ tree to carry it), so there is nothing to port; this is a Vellum-only framework change.",
+  "rationale": "Source commit 0a13df17f96b124dde4f73dbc69fe4b9957ef163 maps authoring/CMakeLists.txt; contract tests: vellum-ui, vellum.authoring. It carries include_dependency_deltas for authoring/CMakeLists.txt, but Pulp has no corresponding authoring/CMakeLists.txt; classify framework-only with that include delta recorded.",
   "owner": "@danielraffel",
   "linked_commits": [
     "0a13df17f96b124dde4f73dbc69fe4b9957ef163"

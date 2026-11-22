@@ -2,10 +2,10 @@
   "schema_version": 1,
   "event_id": "resolution-vellum-1d53f6f4d0717475810cc3ae9585bcf5cb020d98",
   "kind": "resolution",
-  "created_at": "2026-11-22T09:30:00Z",
+  "created_at": "2026-11-22T09:55:00Z",
   "resolves": "vellum-1d53f6f4d0717475810cc3ae9585bcf5cb020d98",
   "disposition": "framework-only",
-  "rationale": "Source commit 1d53f6f4d0717475810cc3ae9585bcf5cb020d98 maps cli/vellum_native_backend.py; contract tests: vellum.capture-stats, vellum.gpu-native. Every mapped path is absent from Pulp main and the event carries no schema/API or include delta; this is a Vellum-only framework observation.",
+  "rationale": "Source commit 1d53f6f4d0717475810cc3ae9585bcf5cb020d98 maps cli/vellum_native_backend.py; contract tests: vellum.capture-stats, vellum.gpu-native. Mapped paths are absent from Pulp main and this event has no schema/API or include delta.",
   "owner": "@danielraffel",
   "linked_commits": [
     "1d53f6f4d0717475810cc3ae9585bcf5cb020d98"
