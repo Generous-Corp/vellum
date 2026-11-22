@@ -1,0 +1,20 @@
+{
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "created_at": "2026-11-22T08:30:00Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-50b2512ff12a7b047710b1b2ef61dbf20a3e204d",
+  "kind": "resolution",
+  "linked_commits": [
+    "50b2512ff12a7b047710b1b2ef61dbf20a3e204d"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Vellum-native observation; every mapped path is absent from Pulp main and the event declares no schema/API delta or shared-contract release blocker. Owner-approved framework-only classification.",
+  "resolves": "vellum-50b2512ff12a7b047710b1b2ef61dbf20a3e204d",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
