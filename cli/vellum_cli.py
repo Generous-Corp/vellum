@@ -1606,7 +1606,8 @@ def parser() -> argparse.ArgumentParser:
 def forwarded_arguments(args: argparse.Namespace) -> list[str]:
     ignored = {"json", "command", "project"}
     if args.command == "import":
-        ignored.update({"output", "provenance", "timeout", "illustrator_input"})
+        ignored.update({"output", "provenance", "timeout", "illustrator_input", "manifest",
+                        "validate_only", "emit", "mode", "source_out"})
     forwarded: list[str] = []
     for key, value in vars(args).items():
         if key in ignored or value is None or value is False:
