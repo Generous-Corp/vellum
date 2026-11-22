@@ -65,8 +65,21 @@ def validate_installed_source_imports(prefix: Path, root: Path, env: dict[str, s
                 "children": [{"type": "text", "id": "caption", "content": "Sample Label"}],
             }],
         }), "{"),
-        ("designmd", "DESIGN.md", "---\ncolors:\n  primary: '#123456'\n---\n# Sample System\n",
-         "---\ncolors: [\n---\n"),
+        ("designmd", "DESIGN.md", """---
+colors:
+  primary: '#123456'
+  accent: '{colors.primary}'
+  highlight: '{colors.accent}'
+typography:
+  body:
+    fontFamily: 'Sample Sans'
+    fontSize: '14px'
+components:
+  panel:
+    typography: '{typography.body}'
+---
+# Sample System
+""", "---\ncolors: [\n---\n"),
     ):
         if only is not None and lane != only:
             continue
@@ -98,6 +111,11 @@ def validate_installed_source_imports(prefix: Path, root: Path, env: dict[str, s
             if (materialized.exists() or values["main.primary"]["$value"] != "#123456"
                     or "main.unknown-setting" in values):
                 raise ValidationError("DESIGN.md import did not produce token-only output")
+            layers = json.loads((project / "tokens/generated/main.layers.json").read_text(encoding="utf-8"))
+            primitive = layers["layers"]["primitive"]
+            if (primitive["main.highlight"] != "#123456"
+                    or primitive["main.components.panel.typography"]["fontSize"] != "14px"):
+                raise ValidationError("DESIGN.md did not resolve the color and typography references")
             run([
                 sys.executable, "-B", "-c",
                 "from pathlib import Path; import sys; sys.path.insert(0, sys.argv[1]); "
@@ -113,7 +131,7 @@ def validate_installed_source_imports(prefix: Path, root: Path, env: dict[str, s
         if lock.read_bytes() != before:
             raise ValidationError(f"Malformed {lane} input advanced the import lock")
         if lane == "designmd":
-            source.write_text(fixture.replace("#123456", "{colors.missing}"), encoding="utf-8")
+            source.write_text(initial.replace("{colors.accent}", "{colors.missing}"), encoding="utf-8")
             command(project, "reimport", "--source", str(source), status="invalid_designmd",
                     diagnostic="designmd.broken-ref")
             if lock.read_bytes() != before:
