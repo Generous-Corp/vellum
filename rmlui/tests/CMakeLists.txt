@@ -7,6 +7,11 @@ function(vellum_rmlui_add_test name source)
         VELLUM_RMLUI_TEST_FIXTURES="${_vellum_rmlui_fixtures}")
 endfunction()
 
+if(TARGET pulp-view-core)
+    vellum_rmlui_add_test(vellum-rmlui-plugin-view-test plugin_view_test.cpp pulp-view-core)
+    add_test(NAME vellum.rmlui.plugin-view COMMAND vellum-rmlui-plugin-view-test)
+endif()
+
 vellum_rmlui_add_test(vellum-rmlui-backend-test backend_test.cpp VellumRmlUi::Core)
 
 # The link boundary check (cmake/VellumRmlUiLinkBoundary.cmake), on a stand-in

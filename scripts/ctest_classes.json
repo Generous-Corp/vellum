@@ -106,6 +106,7 @@
       "vellum.rmlui.midi-learn",
       "vellum.rmlui.midi-panic",
       "vellum.rmlui.native-parent-host",
+      "vellum.rmlui.plugin-view",
       "vellum.rmlui.settings",
       "vellum.rmlui.settings-bridge",
       "vellum.rmlui.soft-render-golden",

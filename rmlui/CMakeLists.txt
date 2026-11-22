@@ -199,6 +199,18 @@ set(VELLUM_RMLUI_COMPONENTS Core SoftRenderer DevAssets)
 set(_vellum_rmlui_install_targets
     vellum-rmlui-core vellum-rmlui-soft-renderer vellum-rmlui-dev-assets)
 
+# When Vellum's retained view core is present, expose the CPU RmlUi document
+# as a normal View. The platform PluginViewHost implementations then provide
+# the native child window, paint surface, and event dispatch on Windows and
+# Linux without a second windowing backend.
+if(TARGET pulp-view-core)
+    target_sources(pulp-view-core PRIVATE src/plugin_view.cpp)
+    target_include_directories(pulp-view-core PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+    target_link_libraries(pulp-view-core PUBLIC
+        vellum-rmlui-core vellum-rmlui-soft-renderer)
+endif()
+
 if(VELLUM_RMLUI_NATIVE_HOST)
     if(NOT APPLE)
         message(FATAL_ERROR "VELLUM_RMLUI_NATIVE_HOST is currently supported on macOS only")

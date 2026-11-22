@@ -20,6 +20,13 @@ their notices under `share/doc/VellumRmlUiNative/`. It is not part of the
 Vellum SDK. Each release publishes it separately as
 `vellum-rmlui-sdk-<version>-darwin-arm64.tar.gz`.
 
+When RmlUi is built inside Vellum with the retained view core, the module also
+adds `vellum/rmlui/plugin_view.hpp`. `vellum::rmlui::PluginView` is a normal
+Vellum `View`, so the existing Windows and Linux `PluginViewHost` implementations
+provide parent attachment, sizing, input dispatch, and presentation. This first
+cross-platform slice uses the CPU renderer and submits its RGBA frame through the
+host canvas. macOS `NativeParentHost` remains the reference native-parent path.
+
 Build it with `VELLUM_RMLUI_NATIVE=ON`, `VELLUM_RMLUI_METAL=ON` and
 `VELLUM_RMLUI_NATIVE_PACKAGE=ON`, or use `scripts/build_rmlui_sdk_artifact.py`,
 which builds the release archive reproducibly. Without
@@ -37,7 +44,7 @@ keeps the individual options available for compatibility.
 | --- | --- | --- | --- | --- |
 | `vellum` | vellum | Skia/Dawn | macOS, iOS, Windows, Linux, Android | planned |
 | `metal` | vellum | Metal | macOS, iOS | macOS tested, iOS planned |
-| `cpu` | vellum | CPU | macOS, iOS, Windows, Linux, Android | macOS, Linux, Windows tested; iOS, Android planned |
+| `cpu` | vellum | CPU | macOS, iOS, Windows, Linux, Android | macOS, Windows, Linux tested; iOS, Android planned |
 | `dx11` | upstream-mit | DirectX 11 | Windows | planned |
 | `dx12` | upstream-mit | DirectX 12 | Windows | planned |
 | `gl2` | upstream-mit | OpenGL 2 | Windows, Linux | planned |
