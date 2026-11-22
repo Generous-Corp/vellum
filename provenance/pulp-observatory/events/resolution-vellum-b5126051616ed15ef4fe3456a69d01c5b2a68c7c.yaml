@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-b5126051616ed15ef4fe3456a69d01c5b2a68c7c",
+  "kind": "resolution",
+  "created_at": "2026-11-22T15:02:08Z",
+  "resolves": "vellum-b5126051616ed15ef4fe3456a69d01c5b2a68c7c",
+  "disposition": "framework-only",
+  "rationale": "Vellum test wiring only: registers vellum.gpu.rectangle-batches in graphics/tests/CMakeLists.txt and the pr-fast ctest class so the rectangle-batch checks run in Vellum CI. Pulp has no counterpart test. Pulp search at origin/main a4921f08e632 (git grep -w over core tools test examples apple ship inspect packages) for rectangle_batch_checks, rectangle-batches and rectangle_batch returns 0; control SkiaSurface on the same search returns 288 in 64 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-09, 'Classify the pending Vellum observatory events instead of raising the budget'); no schema or API delta recorded on the event. Any later resolution overrides this.",
+  "owner": "@danielraffel",
+  "linked_commits": [
+    "b5126051616ed15ef4fe3456a69d01c5b2a68c7c"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}
