@@ -119,7 +119,7 @@ def source_argument(arguments: list[str], command: str) -> tuple[int, Path] | No
     options_with_values = {
         "--project", "--source-type", "--as", "--source-key",
         "--framework-version", "--cli-api", "--target",
-        "--capture-envelope", "--interaction-plan", "--frame",
+        "--capture-envelope", "--interaction-plan", "--frame", "--page",
         "--source-archive", "--source-archive-sha256",
         "--source-archive-name", "--source-archive-member",
     }
@@ -132,7 +132,7 @@ def source_argument(arguments: list[str], command: str) -> tuple[int, Path] | No
                 raise ArchiveFailure(f"{value} requires a value")
             index += 2
             continue
-        if value == "--json":
+        if value in {"--json", "--outline"}:
             index += 1
             continue
         if value.startswith("--"):
