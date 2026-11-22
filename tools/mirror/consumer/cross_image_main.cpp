@@ -31,9 +31,8 @@ int main(int argc, char** argv) {
     for (uint32_t i = 0; i < _dyld_image_count(); ++i) {
         const char* const image = _dyld_get_image_name(i);
         if (image == nullptr) continue;
-        saw_provider |= std::strstr(image, "libvellum-skia-dawn-provider.dylib") != nullptr;
-        saw_duplicate |=
-            std::strstr(image, "libvellum-skia-dawn-provider-duplicate.dylib") != nullptr;
+        saw_provider |= std::strcmp(image, argv[1]) == 0;
+        saw_duplicate |= std::strcmp(image, argv[2]) == 0;
     }
     if (!saw_provider || !saw_duplicate)
         return fail("two distinct provider images were not present in the process");

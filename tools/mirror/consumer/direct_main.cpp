@@ -14,8 +14,10 @@ namespace units = pulp;
 #define VELLUM_MIRROR_FROM_HSV_SYMBOL "_ZN4pulp6canvas5Color8from_hsvENS1_3HSVEf"
 #endif
 
-int main() {
-    void* const frontend = dlopen("@rpath/libvellum-mirror-canvas.dylib", RTLD_NOW | RTLD_GLOBAL);
+int main(int argc, char** argv) {
+    if (argc != 3)
+        return 2;
+    void* const frontend = dlopen(argv[1], RTLD_NOW | RTLD_GLOBAL);
     if (frontend == nullptr)
         return 2;
 
@@ -25,7 +27,7 @@ int main() {
     for (uint32_t i = 0; i < _dyld_image_count(); ++i) {
         const char* const image = _dyld_get_image_name(i);
         if (image != nullptr &&
-            std::strstr(image, "libvellum-skia-dawn-provider.dylib") != nullptr) {
+            std::strstr(image, argv[2]) != nullptr) {
             provider_path = image;
             break;
         }
@@ -43,7 +45,7 @@ int main() {
     Dl_info provider_info{};
     if (dladdr(reinterpret_cast<void*>(from_hsv), &provider_info) == 0 ||
         provider_info.dli_fname == nullptr ||
-        std::strstr(provider_info.dli_fname, "libvellum-skia-dawn-provider.dylib") == nullptr)
+        std::strcmp(provider_info.dli_fname, provider_path) != 0)
         return 6;
 
     const auto color = from_hsv({210.0f, 1.0f, 1.0f}, 1.0f);

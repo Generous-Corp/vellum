@@ -191,23 +191,33 @@ def sdk_node(sdk: Path) -> Path:
 
 
 def copy_frameworks(sdk: Path, destination: Path) -> list[str]:
-    source = sdk / "sdk/lib"
-    mirror = sdk / "sdk/mirror/lib"
-    files = [
-        ("libvellum-authoring.dylib", source / "libvellum-authoring.dylib"),
-        ("libvellum-gpu.dylib", source / "libvellum-gpu.dylib"),
-        ("libvellum-skia-dawn-provider.dylib", source / "libvellum-skia-dawn-provider.dylib"),
-        ("libvellum-mirror-foundation.dylib", mirror / "libvellum-mirror-foundation.dylib"),
-        ("libvellum-mirror-state-core.dylib", mirror / "libvellum-mirror-state-core.dylib"),
-    ]
-    # The provider links the mirrored unit libraries it needs by @rpath, and
-    # that set grows as units land. Every installed unit library ships so the
-    # app never names one the bundle lacks.
-    if mirror.is_dir():
-        files += [
-            (path.name, path) for path in sorted(mirror.glob("libvellum-mirror-*.dylib"))
-            if path.name not in {"libvellum-mirror-foundation.dylib", "libvellum-mirror-state-core.dylib"}
+    prefix = (sdk / "sdk").resolve()
+    mirror = prefix / "mirror/lib"
+    manifest = prefix / "share/vellum/runtime-images.json"
+    if manifest.exists():
+        try:
+            images = json.loads(manifest.read_text(encoding="utf-8"))
+            runtime_paths = [
+                safe_relative(prefix, images[name], "runtime image")
+                for name in ("provider", "foundation", "state-core")
+            ]
+        except (OSError, ValueError, KeyError, TypeError, BackendFailure) as error:
+            raise BackendFailure(f"Invalid SDK runtime image manifest: {error}", status="invalid_sdk") from error
+    else:
+        # SDKs built before the runtime image manifest used stable filenames.
+        runtime_paths = [
+            prefix / "lib/libvellum-skia-dawn-provider.dylib",
+            *(mirror / f"libvellum-mirror-{unit}.dylib" for unit in ("foundation", "state-core")),
         ]
+    required = [
+        prefix / "lib/libvellum-authoring.dylib",
+        prefix / "lib/libvellum-gpu.dylib",
+        *runtime_paths,
+    ]
+    # The provider links the mirrored units by @rpath.
+    paths = required + [path for path in sorted(mirror.glob("libvellum-mirror-*.dylib"))
+                        if path not in required]
+    files = [(path.name, path) for path in paths]
     destination.mkdir(parents=True)
     for name, candidate in files:
         if not candidate.is_file():

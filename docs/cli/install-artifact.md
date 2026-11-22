@@ -101,10 +101,11 @@ sdk/lib/libvellum-*.a
 sdk/bin/vellum-app-host             # pinned-Skia mode
 sdk/lib/libvellum-authoring.dylib   # pinned-Skia mode
 sdk/lib/libvellum-gpu.dylib         # pinned-Skia mode
-sdk/lib/libvellum-skia-dawn-provider.dylib # pinned-Skia provider closure
-sdk/mirror/lib/libvellum-mirror-foundation.dylib # provider runtime dependency
-sdk/mirror/lib/libvellum-mirror-canvas.dylib # mirrored canvas runtime
-sdk/mirror/lib/libvellum-mirror-state-core.dylib # provider runtime dependency
+sdk/share/vellum/runtime-images.json # installed paths for the provider and required mirror units
+sdk/lib/libvellum-skia-dawn-provider-<identity>.dylib # pinned-Skia provider closure
+sdk/mirror/lib/libvellum-mirror-foundation-<identity>.dylib # provider runtime dependency
+sdk/mirror/lib/libvellum-mirror-canvas-<identity>.dylib # mirrored canvas runtime
+sdk/mirror/lib/libvellum-mirror-state-core-<identity>.dylib # provider runtime dependency
 design-ir/bin/vellum-backend.js
 design-ir/src/...
 design-ir/schema/...

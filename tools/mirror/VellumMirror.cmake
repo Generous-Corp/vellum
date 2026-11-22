@@ -693,6 +693,17 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
     list(APPEND _vellum_mirror_unit_libraries "${_library}")
 endforeach()
 
+# Raw-path consumers use the same filenames as the exported CMake targets.
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/runtime-images.json" CONTENT
+"{
+  \"provider\": \"${CMAKE_INSTALL_LIBDIR}/$<TARGET_FILE_NAME:vellum-skia-dawn-provider>\",
+  \"canvas\": \"${VELLUM_MIRROR_INSTALL_DIR}/lib/$<TARGET_FILE_NAME:vellum-mirror-canvas>\",
+  \"foundation\": \"${VELLUM_MIRROR_INSTALL_DIR}/lib/$<TARGET_FILE_NAME:vellum-mirror-foundation>\",
+  \"state-core\": \"${VELLUM_MIRROR_INSTALL_DIR}/lib/$<TARGET_FILE_NAME:vellum-mirror-state-core>\"
+}
+")
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/runtime-images.json" DESTINATION "share/vellum")
+
 # Executables declared in provenance/framework/units.json. Each links the
 # unit libraries that carry the mirrored targets it names, so it holds one
 # copy of every mirrored symbol, as an installed consumer would. They are
