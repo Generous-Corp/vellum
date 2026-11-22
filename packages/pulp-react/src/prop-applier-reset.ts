@@ -449,6 +449,7 @@ export const NO_RESET_NEEDED: Readonly<Record<string, string>> = {
     overlayParent: 'qualifies an overlay claim; reclaimOverlayForMovedParent '
         + 'compares the old and new declaration on every commit.',
     src: 'the applier clears the image source itself when the prop disappears.',
+    open: 'the removal walk in applyChangedProps closes a Modal itself when the prop disappears.',
     selectionMode: 'the applier restores single selection itself when the prop disappears.',
     selected: 'the applier clears the selection itself when the prop disappears.',
     value: 'control data, not style: as with an uncontrolled DOM input the widget '

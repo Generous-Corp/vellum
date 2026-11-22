@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-54642d4bb76577979c735eae5ca44485f1b927fc",
+  "kind": "resolution",
+  "created_at": "2026-11-22T15:02:08Z",
+  "resolves": "vellum-54642d4bb76577979c735eae5ca44485f1b927fc",
+  "disposition": "framework-only",
+  "rationale": "Tests only, for the Vellum-native @vellum/ui retained paint styles and shadow validation (packages/vellum-ui/test/design.test.js, runtime.test.js). Pulp has no @vellum/ui runtime or tests. Pulp search at origin/main a4921f08e632 (git grep -w over core tools test examples apple ship inspect packages) for retainedStyle, validateBoxShadow and tokenSlotColor returns 0; control SkiaSurface on the same search returns 288 in 64 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-09, 'Classify the pending Vellum observatory events instead of raising the budget'); no schema or API delta recorded on the event. Any later resolution overrides this.",
+  "owner": "@danielraffel",
+  "linked_commits": [
+    "54642d4bb76577979c735eae5ca44485f1b927fc"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}
