@@ -19,6 +19,15 @@ target_include_directories(vellum-design-pipeline
         "${VELLUM_MIRROR_CHOC_ROOT}")
 target_link_libraries(vellum-design-pipeline PUBLIC Vellum::MirrorDesign_import)
 
+add_executable(vellum-source-adapter src/source_adapter_main.cpp)
+target_compile_features(vellum-source-adapter PRIVATE cxx_std_20)
+target_link_libraries(vellum-source-adapter PRIVATE Vellum::DesignPipeline)
+set_target_properties(vellum-source-adapter PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+    INSTALL_RPATH "@loader_path/../mirror/${CMAKE_INSTALL_LIBDIR};@loader_path/../${CMAKE_INSTALL_LIBDIR}")
+install(TARGETS vellum-source-adapter RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
 if(VELLUM_BUILD_TESTS)
     add_executable(vellum-design-pipeline-test tests/design_pipeline_test.cpp)
     target_link_libraries(vellum-design-pipeline-test PRIVATE Vellum::DesignPipeline)
