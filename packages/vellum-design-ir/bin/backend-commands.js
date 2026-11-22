@@ -395,6 +395,7 @@ async function reimportDesignFilesystem(project, args) {
             paths.resolvedTokenLayers,
         ]) {
             const expected = generated.get(path);
+            if (expected === undefined) continue;
             const current = await readFile(path).catch((error) => {
                 if (error.code === 'ENOENT') return null;
                 throw error;
