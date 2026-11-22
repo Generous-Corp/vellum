@@ -978,6 +978,9 @@
       "pulp_path": null,
       "pulp_commits": [],
       "framework_blob": null,
+      "platforms": [
+        "linux-x64"
+      ],
       "reason": "The Linux X11 plug-in editor host: a reparented child window that renders the View tree with Skia Graphite on Dawn/Vulkan. Written for Vellum, not taken from Pulp plugin-view-host sources."
     }
   ]
