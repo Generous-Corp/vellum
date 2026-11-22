@@ -18,6 +18,7 @@
 #include "test_support.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -192,6 +193,46 @@ void check_command_mapping(vellum::graphics::SkiaDawnSurface& surface) {
     VELLUM_RMLUI_CHECK(nodes[1].mesh->vertices.size() == 3);
     // A shared generated texture is converted once.
     VELLUM_RMLUI_CHECK(nodes[1].mesh->texture == mesh.texture);
+
+    // Detaching retains decoded textures for a short, clock-controlled grace
+    // period so a quick reattach does not decode them again.
+    auto now = std::chrono::steady_clock::time_point{};
+    std::size_t decodes = 0;
+    VellumRenderer cached(surface, 0x000000ffu, [&] { return now; });
+    cached.set_image_decoder([&](const std::string&, std::uint32_t& decoded_width,
+                                 std::uint32_t& decoded_height,
+                                 std::vector<std::uint8_t>& pixels) {
+        ++decodes;
+        decoded_width = 2;
+        decoded_height = 1;
+        pixels.assign(8, 0x7f);
+        return true;
+    });
+    auto image_bytes = std::make_shared<const std::string>("encoded");
+    auto cached_image = command;
+    cached_image.texture_path = "image.png";
+    cached_image.texture_bytes = image_bytes;
+    cached.begin_frame(width, height);
+    cached.submit(cached_image);
+    cached.end_frame();
+    VELLUM_RMLUI_CHECK(decodes == 1 && cached.cached_texture_count() == 1);
+    cached.on_detach();
+    now += std::chrono::milliseconds(100);
+    cached.on_attach();
+    cached.begin_frame(width, height);
+    cached.submit(cached_image);
+    cached.end_frame();
+    VELLUM_RMLUI_CHECK(decodes == 1);
+    cached.on_detach();
+    now += std::chrono::milliseconds(251);
+    cached.on_idle();
+    VELLUM_RMLUI_CHECK(cached.cached_texture_count() == 0);
+    cached.begin_frame(width, height);
+    cached.submit(cached_image);
+    cached.end_frame();
+    VELLUM_RMLUI_CHECK(decodes == 2);
+    cached.on_close();
+    VELLUM_RMLUI_CHECK(cached.cached_texture_count() == 0);
 }
 
 } // namespace
