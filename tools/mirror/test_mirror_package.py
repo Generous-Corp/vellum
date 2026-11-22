@@ -1403,6 +1403,13 @@ class FrameworkPortsPlanTest(unittest.TestCase):
         self.assertIn(self.planned(self.OLD), self.sources(plan))
         self.assertEqual(plan["framework_native_edits"], [])
 
+    def test_a_transferred_closure_cannot_record_its_own_historical_skia_asset(self) -> None:
+        for dependency in self.fixture.closure["external_inputs"]:
+            dependency["asset_sha256"] = "0" * 64
+        self.fixture.closure["targets"][0]["external_link_inputs"][0]["asset_sha256"] = "0" * 64
+        self.fixture.write_receipt()
+        self.assertRefused("closure was exported against skia archive")
+
     def test_an_unrecorded_file_is_refused_until_a_ledger_row_adds_it(self) -> None:
         self.fixture.write(self.NEW, b"int ported() { return 2; }\n")
         self.assertRefused("does not list")
