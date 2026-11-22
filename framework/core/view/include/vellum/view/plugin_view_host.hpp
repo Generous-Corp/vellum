@@ -120,9 +120,9 @@ public:
 
         /// Keep the native backing layer visible until resume_presentation().
         /// The host still attaches, initializes GPU state, and services idle
-        /// and frame callbacks. macOS GPU hosts paint only background_rgb
-        /// while deferred. Other platform hosts may treat this as unsupported
-        /// and present normally.
+        /// and frame callbacks, but presents no drawable while deferred.
+        /// Other platform hosts may treat this as unsupported and present
+        /// normally.
         bool defer_presentation = false;
 
         /// The editor's own background, 0xRRGGBB. The host paints it wherever
@@ -227,6 +227,11 @@ public:
         repaint();
         return false;
     }
+
+    /// Number of frames presented by this host. The macOS GPU host exposes
+    /// this for installed-consumer tests. Hosts without a presentation counter
+    /// return zero.
+    virtual std::size_t presented_frame_count() const { return 0; }
 
     /// Allow the root view to be painted after a deferred open. UI thread
     /// only. Idempotent. Platform hosts that support deferral schedule their

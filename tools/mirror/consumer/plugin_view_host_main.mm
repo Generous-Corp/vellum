@@ -127,17 +127,20 @@ int main(int argc, char** argv) {
     NSView* parent = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 64, 64)];
     gpu->attach_to_parent((void*)parent);
     if (live_gpu) {
-        if (!gpu->present_first_frame()) return fail("offscreen GPU paint failed");
-        const auto png = gpu->capture_back_buffer_png();
-        if (png.empty()) return fail("GPU readback was empty");
-        if (!png_pixel_matches(png, -4, -4, background_rgb))
-            return fail("unpainted readback corner did not use the requested background");
-        if (!png_pixel_matches(png, 8, 8, background_rgb))
-            return fail("deferred GPU readback painted the View before resume");
+        if (gpu->presented_frame_count() != 0)
+            return fail("deferred presentation produced a frame before the first paint");
+        if (gpu->present_first_frame())
+            return fail("deferred present_first_frame unexpectedly presented");
+        if (gpu->presented_frame_count() != 0)
+            return fail("deferred presentation acquired or presented a drawable");
         gpu->resume_presentation();
         if (!gpu->present_first_frame()) return fail("resumed GPU paint failed");
+        // An AppKit-driven repaint (setNeedsDisplay from resume) may add more
+        // counted frames on its own schedule, so assert "at least one".
+        if (gpu->presented_frame_count() < 1)
+            return fail("resume did not produce a first presentation");
         if (!png_pixel_matches(gpu->capture_back_buffer_png(), 8, 8, 0x2878DC))
-            return fail("resumed GPU readback did not contain the View paint");
+            return fail("first resumed presentation did not contain the View paint");
     }
     // A real AppKit key event sent to the host's own view must reach the
     // View tree (calling the View's handler directly would prove nothing).
