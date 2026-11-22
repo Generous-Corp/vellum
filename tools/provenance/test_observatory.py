@@ -2803,10 +2803,11 @@ class VellumNativePathTests(unittest.TestCase):
             with self.assertRaisesRegex(observatory.ObservatoryError, "repeated"):
                 nat.load_native_paths(root)
 
-    def test_no_list_is_committed_until_the_data_follow_up(self) -> None:
+    def test_native_path_allowlist_is_committed_and_loaded(self) -> None:
         nat = self.native_module()
-        self.assertFalse((observatory.ROOT / nat.NATIVE_PATHS_PATH).exists())
-        self.assertEqual(nat.load_native_paths(observatory.ROOT), [])
+        entries = nat.load_native_paths(observatory.ROOT)
+        self.assertEqual([entry["id"] for entry in entries],
+                         ["native-cli-backend", "native-cli-native-backend"])
 
     def test_an_entry_goes_stale_when_pulp_gains_its_symbol(self) -> None:
         nat = self.native_module()

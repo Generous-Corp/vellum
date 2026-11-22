@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "id": "native-cli-backend",
+      "paths": ["cli/vellum_backend.py"],
+      "absent_in_pulp": ["ArchiveFailure"],
+      "reason": "Vellum's installed SDK archive backend has no Pulp counterpart."
+    },
+    {
+      "id": "native-cli-native-backend",
+      "paths": ["cli/vellum_native_backend.py"],
+      "absent_in_pulp": ["BackendArgumentParser"],
+      "reason": "Vellum's native SDK backend has no Pulp counterpart."
+    }
+  ]
+}
