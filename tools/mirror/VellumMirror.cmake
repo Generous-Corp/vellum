@@ -465,6 +465,14 @@ if(TARGET vellum-skia-dawn-provider)
         VellumMirrorEnvironmentObserver=VellumMirrorEnvironmentObserver_${VELLUM_RUNTIME_IDENTITY_TAG})
 endif()
 
+# The provider force-links the GPU device archive, whose Metal surface view is
+# named through GPU_RUNTIME_OBJC_SUFFIX. Compile definitions on the provider do
+# not reach a static-library dependency, so the archive gets the suffix itself.
+if(TARGET gpu-runtime-device-provider)
+    target_compile_definitions(gpu-runtime-device-provider PRIVATE
+        GPU_RUNTIME_OBJC_SUFFIX=${VELLUM_RUNTIME_OBJC_SUFFIX})
+endif()
+
 # Optional V8 (VELLUM_ENABLE_V8). The closures build view-script with QuickJS
 # only, so its V8 backend compiles as a stub. This is the one native addition
 # to that unit's compile: the backend's PULP_HAS_V8 switch, the provider

@@ -407,6 +407,13 @@ class ConsumerProviderPathTest(unittest.TestCase):
         self.assertEqual(assigns, ['set(_provider "${_prefix}/${_provider_relative}")'])
         self.assertNotIn("libvellum-skia-dawn-provider.dylib", text)
 
+    def test_gpu_device_archive_gets_the_objc_suffix(self) -> None:
+        text = (HERE / "VellumMirror.cmake").read_text()
+        self.assertRegex(
+            text,
+            r"target_compile_definitions\(gpu-runtime-device-provider PRIVATE\s+"
+            r"GPU_RUNTIME_OBJC_SUFFIX=\$\{VELLUM_RUNTIME_OBJC_SUFFIX\}\)")
+
 
 if __name__ == "__main__":
     unittest.main()
