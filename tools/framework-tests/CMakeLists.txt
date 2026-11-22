@@ -300,6 +300,11 @@ else()
         main_thread_timer_test.mm native_dialog_delivery_test.cpp)
 endif()
 
+# iOS-only: compiled by tools/mirror/consumer/ios-auv3 against the iOS simulator
+# SDK, never by this macOS tree. Naming it here keeps the guard below honest.
+set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+    ios_au_editor_controller_test.mm)
+
 # Every test file here must be registered above. A test file that no
 # vellum_add_framework_test() names would build nothing and run nothing while
 # the lane stays green, so configure refuses it.

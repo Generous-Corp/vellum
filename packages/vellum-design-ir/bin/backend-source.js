@@ -7,7 +7,7 @@ import {
     normalizeSha256ContentHash,
     parseDesignIR,
 } from '../src/index.js';
-import { decodeFigSource } from '../src/fig-file/import.js';
+import { decodeFigSource, outlineFigFile } from '../src/fig-file/import.js';
 import {
     fail,
     isSafeRelativeAsset,
@@ -22,24 +22,47 @@ const MAX_ASSET_COUNT = 10_000;
 const MAX_NODE_COUNT = 100_000;
 const MAX_TREE_DEPTH = 512;
 
-export async function loadSource(sourcePath, { captureEnvelope, figFrame, sourceArchive, sourceKey, sourceType }) {
-    if (!['fig', 'figma', 'design-ir', 'html', 'claude-design'].includes(sourceType)) {
-        fail('unsupported_source_type', `Unsupported source type '${sourceType}'`);
-    }
-    const file = resolve(sourcePath);
+function isFigSource(file, sourceType) {
+    return sourceType === 'fig' || (sourceType === 'figma' && file.toLowerCase().endsWith('.fig'));
+}
+
+async function readImportSource(file, byteLimit) {
     const metadata = await lstat(file).catch(() => null);
     if (!metadata?.isFile() || metadata.isSymbolicLink()) {
         fail('invalid_source', `Import source must be a regular file: ${file}`);
     }
-    const isFig = sourceType === 'fig' || (sourceType === 'figma' && basename(file).toLowerCase().endsWith('.fig'));
-    if (figFrame !== undefined && (!isFig || !/^\d+:\d+$/.test(figFrame))) {
-        fail('invalid_fig_frame', '--frame requires a local Figma .fig source and a frame GUID');
+    if (metadata.size > byteLimit) {
+        fail('source_too_large', `Import source exceeds ${byteLimit} bytes`);
     }
-    const maxSourceBytes = isFig ? MAX_ARCHIVE_BYTES : MAX_SOURCE_BYTES;
-    if (metadata.size > maxSourceBytes) {
-        fail('source_too_large', `Import source exceeds ${maxSourceBytes} bytes`);
+    return readFile(file);
+}
+
+export async function outlineSource(sourcePath, sourceType) {
+    const file = resolve(sourcePath);
+    if (!isFigSource(file, sourceType)) {
+        fail('invalid_fig_outline', '--outline requires a local Figma .fig source');
     }
-    const sourceBytes = await readFile(file);
+    const bytes = await readImportSource(file, MAX_ARCHIVE_BYTES);
+    try {
+        return outlineFigFile(bytes);
+    } catch (error) {
+        fail('invalid_fig', `Figma .fig outline could not be decoded: ${error.message}`);
+    }
+}
+
+export async function loadSource(sourcePath, { captureEnvelope, figFrame, figPage, sourceArchive, sourceKey, sourceType }) {
+    if (!['fig', 'figma', 'design-ir', 'html', 'claude-design'].includes(sourceType)) {
+        fail('unsupported_source_type', `Unsupported source type '${sourceType}'`);
+    }
+    const file = resolve(sourcePath);
+    const isFig = isFigSource(file, sourceType);
+    if (figFrame !== undefined && (!isFig || !figFrame.trim())) {
+        fail('invalid_fig_frame', '--frame requires a local Figma .fig source and a frame GUID or name');
+    }
+    if (figPage !== undefined && (!isFig || figFrame === undefined || !figPage.trim())) {
+        fail('invalid_fig_frame', '--page requires a local Figma .fig frame selector and a page name');
+    }
+    const sourceBytes = await readImportSource(file, isFig ? MAX_ARCHIVE_BYTES : MAX_SOURCE_BYTES);
     if (sourceArchive === null && !isFig && (
         basename(file).toLowerCase().endsWith('.pulp.zip') || hasZipMagic(sourceBytes)
     )) {
@@ -106,7 +129,7 @@ export async function loadSource(sourcePath, { captureEnvelope, figFrame, source
     if (isFig) {
         let decoded;
         try {
-            decoded = decodeFigSource(sourceBytes, { sourceKey, frame: figFrame });
+            decoded = decodeFigSource(sourceBytes, { sourceKey, frame: figFrame, page: figPage });
         } catch (error) {
             fail('invalid_fig', `Figma .fig source could not be decoded: ${error.message}`);
         }

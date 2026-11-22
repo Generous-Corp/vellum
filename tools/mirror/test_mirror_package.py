@@ -2872,5 +2872,25 @@ class ConfigureDependsTest(unittest.TestCase):
             self.assertIn(path, dependencies)
 
 
+class IOSAUv3IntegrationLayoutTest(unittest.TestCase):
+    """Keep CoreAudioKit out of the mirrored view-core unit."""
+
+    REPO = Path(__file__).resolve().parents[2]
+
+    def test_controller_lives_in_the_extension_integration(self) -> None:
+        view_header = self.REPO / "framework/core/view/include/vellum/view/platform/ios_au_editor_controller.h"
+        view_source = self.REPO / "framework/core/view/platform/ios/ios_au_editor_controller.mm"
+        integration_header = self.REPO / "integrations/vellum-auv3-ios/ios_au_editor_controller.h"
+        integration_source = self.REPO / "integrations/vellum-auv3-ios/ios_au_editor_controller.mm"
+        self.assertTrue(view_header.is_file())
+        self.assertTrue(view_source.is_file())
+        self.assertTrue(integration_header.is_file())
+        self.assertTrue(integration_source.is_file())
+        self.assertNotIn("CoreAudioKit/CoreAudioKit.h", view_header.read_text())
+        self.assertNotIn("AUViewController", view_header.read_text())
+        self.assertIn("CoreAudioKit/CoreAudioKit.h", integration_header.read_text())
+        self.assertIn("VellumAUv3EditorController", integration_source.read_text())
+
+
 if __name__ == "__main__":
     unittest.main()
