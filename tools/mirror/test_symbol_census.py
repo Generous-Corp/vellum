@@ -7,6 +7,7 @@ import contextlib
 import importlib.util
 import io
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -76,6 +77,36 @@ class MirrorRuntimeIdentityTest(unittest.TestCase):
         stmt = cmake[start:cmake.index(")\n", start)]
         self.assertIn("CACHE INTERNAL", stmt)
         self.assertRegex(stmt, r"\bFORCE\b")
+
+    def test_sdl_objc_rename_uses_the_registered_provided_target(self) -> None:
+        cmake = (HERE / "VellumMirror.cmake").read_text(encoding="utf-8")
+        start = cmake.index('        if(_key STREQUAL "SDL3_STATIC" AND APPLE)')
+        end = cmake.index("        endif()", start) + len("        endif()")
+        condition = re.sub(
+            r'target_compile_definitions\("\$\{_provided\}" PRIVATE.*?\n                \)',
+            'set(_sdl_rename_taken TRUE)',
+            cmake[start:end],
+            flags=re.DOTALL,
+        )
+        registration = (HERE / "mirror_package.py").read_text(encoding="utf-8")
+        self.assertIn('"sdl3":', registration)
+        self.assertIn('"provides": ["SDL3-static"]', registration)
+        script = "\n".join((
+            'set(_vellum_mirror_dep_name "sdl3")',
+            'string(MAKE_C_IDENTIFIER "${_vellum_mirror_dep_name}" _key)',
+            'string(TOUPPER "${_key}" _key)',
+            'set(_provided "SDL3-static")',
+            'set(APPLE TRUE)',
+            condition,
+            'if(NOT _sdl_rename_taken)',
+            'message(FATAL_ERROR "SDL rename branch was not taken")',
+            'endif()',
+        )) + "\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            script_path = Path(tmp) / "sdl-rename.cmake"
+            script_path.write_text(script, encoding="utf-8")
+            result = subprocess.run(["cmake", "-P", str(script_path)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
 
     @unittest.skipUnless(os.environ.get("VELLUM_RUNTIME_IDENTITY_BUILD"),
                          "requires a built macOS mirror runtime")
