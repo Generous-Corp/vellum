@@ -68,7 +68,14 @@ if(VELLUM_BUILD_TESTS)
             "${_vellum_conformance_dir}/${_stem}_entry.cpp")
     endforeach()
     add_library(vellum-emitter-conformance-baked OBJECT ${_vellum_conformance_sources})
-    target_include_directories(vellum-emitter-conformance-baked PUBLIC "${_vellum_conformance_dir}")
+    # The generated sources include the mirrored view headers, which
+    # Vellum::MirrorDesign_import carries only at their installed path; add the
+    # build tree's include roots as vellum-design-pipeline does.
+    target_include_directories(vellum-emitter-conformance-baked PUBLIC
+        "${_vellum_conformance_dir}"
+        ${_vellum_mirror_public_includes}
+        "${VELLUM_MIRROR_BUILD_INFO_DIR}"
+        "${VELLUM_MIRROR_CHOC_ROOT}")
     target_link_libraries(vellum-emitter-conformance-baked PUBLIC Vellum::MirrorDesign_import)
     add_executable(vellum-design-emitter-conformance
         tests/design_emitter_conformance_test.cpp)
@@ -76,6 +83,8 @@ if(VELLUM_BUILD_TESTS)
         PRIVATE vellum-emitter-conformance-baked Vellum::MirrorDesign_import)
     target_compile_definitions(vellum-design-emitter-conformance PRIVATE
         VELLUM_REPO_ROOT="${PROJECT_SOURCE_DIR}")
+    set_target_properties(vellum-design-emitter-conformance PROPERTIES
+        BUILD_RPATH "$<TARGET_FILE_DIR:vellum-skia-dawn-provider>")
     add_test(NAME vellum.design-emitter-conformance
         COMMAND vellum-design-emitter-conformance)
 endif()
