@@ -41,6 +41,40 @@ if(APPLE)
 endif()
 find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
 
+# Every installed mirror closure gets a short identity. It is derived from the
+# source revision, the locked renderer and optional V8 inputs, and the ABI
+# switches that change compiled interfaces. Target names stay stable so the
+# package export and Pulp staging continue to use the same CMake targets.
+execute_process(
+    COMMAND git -C "${PROJECT_SOURCE_DIR}" rev-parse HEAD
+    OUTPUT_VARIABLE _vellum_runtime_source_revision
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE _vellum_runtime_source_result)
+if(NOT _vellum_runtime_source_result EQUAL 0 OR
+   NOT _vellum_runtime_source_revision MATCHES "^[0-9a-fA-F]{7,64}$")
+    message(FATAL_ERROR "Vellum: runtime identity needs an authoritative source revision")
+endif()
+file(SHA256 "${PROJECT_SOURCE_DIR}/gpu-runtime/renderer-lock.json" _vellum_runtime_renderer_pin)
+file(SHA256 "${PROJECT_SOURCE_DIR}/provenance/third-party-lock.json" _vellum_runtime_dependency_pin)
+set(_vellum_runtime_abi_inputs
+    "mirror=${VELLUM_ENABLE_MIRROR}"
+    "v8=${VELLUM_ENABLE_V8}"
+    "tracing=${VELLUM_ENABLE_TRACING}"
+    "graphics=${VELLUM_ENABLE_GRAPHICS}"
+    "gpu=${VELLUM_ENABLE_GPU}"
+    "asan=${VELLUM_ENABLE_ADDRESS_SANITIZER}"
+    "renderer=${_vellum_runtime_renderer_pin}"
+    "dependencies=${_vellum_runtime_dependency_pin}")
+string(JOIN "|" _vellum_runtime_identity_seed
+    "source=${_vellum_runtime_source_revision}" ${_vellum_runtime_abi_inputs})
+string(SHA256 _vellum_runtime_identity_hash "${_vellum_runtime_identity_seed}")
+string(SUBSTRING "${_vellum_runtime_identity_hash}" 0 12 VELLUM_RUNTIME_IDENTITY_TAG)
+set(VELLUM_RUNTIME_IDENTITY_TAG "${VELLUM_RUNTIME_IDENTITY_TAG}" CACHE INTERNAL
+    "Identity of the Vellum runtime closure")
+set(VELLUM_RUNTIME_IDENTITY_SUFFIX "-${VELLUM_RUNTIME_IDENTITY_TAG}")
+set(VELLUM_RUNTIME_OBJC_SUFFIX "_${VELLUM_RUNTIME_IDENTITY_TAG}")
+message(STATUS "Vellum: runtime closure identity ${VELLUM_RUNTIME_IDENTITY_TAG}")
+
 set(VELLUM_MIRROR_DEPS_DIR "${CMAKE_BINARY_DIR}/_deps/vellum-mirror" CACHE PATH
     "Where the mirror's pinned dependency sources are fetched")
 set(_vellum_mirror_generated "${CMAKE_BINARY_DIR}/generated/vellum-mirror")
@@ -200,6 +234,19 @@ function(_vellum_mirror_add_dependency name)
                 target_compile_options("${_provided}" PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${_option}>")
             endforeach()
         endif()
+        if(_key STREQUAL "SDL3_STATIC" AND APPLE)
+            foreach(_sdl_class IN ITEMS
+                    Cocoa_PasteboardDataProvider SDL3AppDelegate SDL3Application
+                    SDL3Cocoa_WindowListener SDL3METAL_PaletteData SDL3METAL_RenderData
+                    SDL3METAL_TextureData SDL3MessageBoxPresenter SDL3OpenGLContext
+                    SDL3TranslatorResponder SDL3View SDL3Window SDL3_RumbleContext
+                    SDL3_RumbleMotor SDL3_cocoametalview
+                    SDLCaptureVideoDataOutputSampleBufferDelegate SDLPrivateCameraData
+                    SDL_CocoaVideoData SDL_CocoaWindowData)
+                target_compile_definitions("${_provided}" PRIVATE
+                    "${_sdl_class}=${_sdl_class}_${VELLUM_RUNTIME_IDENTITY_TAG}")
+            endforeach()
+        endif()
     endforeach()
 endfunction()
 
@@ -314,6 +361,11 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         # installed choke headers is lifted (gpu_surface_guard.py). PRIVATE,
         # so it never reaches an installed consumer.
         target_compile_definitions("${_vellum_mirror_target}" PRIVATE VELLUM_MIRROR_BUILD=1)
+        if(APPLE)
+            target_compile_definitions("${_vellum_mirror_target}" PRIVATE
+                PULP_VIEW_OBJC_SUFFIX=${VELLUM_RUNTIME_OBJC_SUFFIX}
+                VellumMirrorEnvironmentObserver=VellumMirrorEnvironmentObserver_${VELLUM_RUNTIME_IDENTITY_TAG})
+        endif()
         # VELLUM_ENABLE_TRACING: every mirrored target compiles with the same
         # trace switch and Perfetto header, so no two objects disagree on
         # kTracingEnabled. Compile usage only; the one Perfetto library is
@@ -372,6 +424,24 @@ if(TARGET pulp-view-core AND APPLE)
         "${PROJECT_SOURCE_DIR}/framework/core/view/platform/mac/window_host_mac_metal_view.mm")
     target_include_directories(pulp-view-core PRIVATE
         "${PROJECT_SOURCE_DIR}/framework/core/view/include")
+endif()
+
+# Windows owns the HWND child editor host. Its Dawn surface is created after
+# attachment, when the child has its final parent and DPI context.
+if(TARGET pulp-view-core AND WIN32)
+    target_sources(pulp-view-core PRIVATE
+        "${PROJECT_SOURCE_DIR}/framework/core/view/src/plugin_view_host.cpp"
+        "${PROJECT_SOURCE_DIR}/framework/core/view/platform/win/gpu_plugin_editor_host_win.cpp")
+    target_include_directories(pulp-view-core PRIVATE
+        "${PROJECT_SOURCE_DIR}/framework/core/view/include")
+endif()
+
+if(TARGET vellum-skia-dawn-provider)
+    set_target_properties(vellum-skia-dawn-provider PROPERTIES
+        OUTPUT_NAME "vellum-skia-dawn-provider${VELLUM_RUNTIME_IDENTITY_SUFFIX}")
+    target_compile_definitions(vellum-skia-dawn-provider PRIVATE
+        PULP_VIEW_OBJC_SUFFIX=${VELLUM_RUNTIME_OBJC_SUFFIX}
+        VellumMirrorEnvironmentObserver=VellumMirrorEnvironmentObserver_${VELLUM_RUNTIME_IDENTITY_TAG})
 endif()
 
 # Optional V8 (VELLUM_ENABLE_V8). The closures build view-script with QuickJS
@@ -445,6 +515,7 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
     add_library("Vellum::Mirror${_first}${_rest}" ALIAS "${_library}")
     set_target_properties("${_library}" PROPERTIES
         EXPORT_NAME "Mirror${_first}${_rest}"
+        OUTPUT_NAME "vellum-mirror-${_vellum_mirror_unit}${VELLUM_RUNTIME_IDENTITY_SUFFIX}"
         MACOSX_RPATH ON
         BUILD_WITH_INSTALL_RPATH ON
         INSTALL_RPATH "@loader_path;@loader_path/../../${CMAKE_INSTALL_LIBDIR}"
