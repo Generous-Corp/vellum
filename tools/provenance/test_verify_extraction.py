@@ -3685,6 +3685,26 @@ class RendererPinTests(unittest.TestCase):
         errors, _ = verify_extraction.mirror_renderer_pin_check(self.root, self.pulp, [older, newest])
         self.assertIn("which is not a landed receipt", errors[0])
 
+    def test_transfer_successor_names_the_current_receipt(self) -> None:
+        old_tree = self.commit_mirror(b"old\n")
+        older = self.landed("older", self.pulp_commit(self.other_milestone()), old_tree)
+        new_tree = self.commit_mirror(b"new\n")
+        newest = self.landed("newest", self.pulp_commit(self.matching_pin), new_tree)
+        git = ["git", "-C", str(self.root), "-c", "user.name=t", "-c", "user.email=t@t"]
+        subprocess.run(git + ["rm", "-q", "-r", "mirror"], check=True)
+        (self.root / "framework").mkdir()
+        (self.root / "framework/a.cpp").write_bytes(b"new\n")
+        subprocess.run(git + ["add", "framework"], check=True)
+        subprocess.run(git + ["commit", "-q", "-m", "transfer"], check=True)
+        record = self.root / verify_extraction.FRAMEWORK_TRANSFER_RECORD
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(json.dumps({"export_receipt": "provenance/mirror/receipts/legacy.json", "mirror_tree": new_tree}), encoding="utf-8")
+        successor = self.root / "provenance/framework/transfer-successor.json"
+        successor.write_text(json.dumps({"export_receipt": newest}), encoding="utf-8")
+        errors, rows = verify_extraction.mirror_renderer_pin_check(self.root, self.pulp, [older, newest])
+        self.assertEqual(errors, [])
+        self.assertEqual({row["receipt"]: row["matches_lock"] for row in rows}, {newest: True, older: None})
+
 
 if __name__ == "__main__":
     unittest.main()
