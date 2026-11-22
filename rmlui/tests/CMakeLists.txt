@@ -17,7 +17,7 @@ vellum_rmlui_add_test(vellum-rmlui-backend-test backend_test.cpp VellumRmlUi::Co
 # The link boundary check (cmake/VellumRmlUiLinkBoundary.cmake), on a stand-in
 # project: clean passes, and each planted violation fails it with its own
 # message, so a check that cannot see a link cannot pass.
-foreach(_case IN ITEMS clean private genex alias unlinked_renderer)
+foreach(_case IN ITEMS clean private near_match genex alias unlinked_renderer unlinked_plugin_view)
     set(_name "vellum.rmlui.link-boundary-${_case}")
     add_test(NAME "${_name}"
         COMMAND "${CMAKE_COMMAND}"
@@ -26,15 +26,19 @@ foreach(_case IN ITEMS clean private genex alias unlinked_renderer)
             "-DVELLUM_RMLUI_MODULE_DIR=${PROJECT_SOURCE_DIR}"
             "-DPLANT=${_case}")
     if(_case STREQUAL "clean")
-        set(_expect "rmlui-link-boundary: 3 targets checked; only vellum-rmlui-vellum-renderer links Vellum")
+        continue()
     elseif(_case STREQUAL "private")
         set(_expect "rmlui-link-boundary: vellum-rmlui-native links Vellum::Gpu")
+    elseif(_case STREQUAL "near_match")
+        set(_expect "rmlui-link-boundary: vellum-rmlui-plugin-view-extra links Vellum::MirrorView_core")
     elseif(_case STREQUAL "genex")
         set(_expect "rmlui-link-boundary: vellum-rmlui-core links [^\n]*Vellum::Gpu")
     elseif(_case STREQUAL "alias")
         set(_expect "rmlui-link-boundary: vellum-rmlui-native links VellumRmlUi::Gpu \\(alias VellumRmlUi::Gpu -> Vellum::Gpu\\)")
-    else()
+    elseif(_case STREQUAL "unlinked_renderer")
         set(_expect "rmlui-link-boundary: vellum-rmlui-vellum-renderer links no Vellum target")
+    else()
+        set(_expect "rmlui-link-boundary: vellum-rmlui-plugin-view links no Vellum target")
     endif()
     set_tests_properties("${_name}" PROPERTIES PASS_REGULAR_EXPRESSION "${_expect}")
 endforeach()

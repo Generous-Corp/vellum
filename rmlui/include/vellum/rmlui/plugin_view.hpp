@@ -11,8 +11,8 @@ namespace vellum::rmlui {
 
 // A RmlUi document exposed as a Vellum View. PluginViewHost owns the native
 // child window and paints this view through its existing platform surface.
-// The first cross-platform implementation deliberately uses SoftRenderer.
-class VELLUM_RMLUI_API PluginView final : public view::View {
+// SoftRenderer supplies the CPU frame.
+class PluginView final : public view::View {
   public:
     explicit PluginView(AssetProvider& assets);
     ~PluginView() override;

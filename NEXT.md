@@ -1,34 +1,41 @@
-# RmlUi plugin-host follow-up
+# RmlUi PluginView validation
 
-This slice adds `vellum::rmlui::PluginView`, which lets the existing Windows
-and Linux `PluginViewHost` implementations host a CPU-rendered RmlUi document.
-The adapter forwards pointer, wheel, key, text, and leave events and paints the
-CPU frame through the host canvas. macOS `NativeParentHost` and its tests are
-unchanged.
+`VellumRmlUi::PluginView` exposes a CPU-rendered RmlUi document as a
+Vellum view. The headless test renders the document and records its paint
+command. Native child-window attachment, input delivery, and display still
+need a device run. Pixel output through a GPU-backed host needs a GPU run by
+the lead.
 
-The GPU renderer choices remain follow-up work. That includes the Vellum
-Skia/Dawn renderer and RmlUi's upstream DirectX, OpenGL, Vulkan, SDL, and SDL
-GPU backends. The adapter currently encodes the CPU frame as PNG for the host
-canvas, which is intentional for this first cross-platform proof.
+## Windows and Linux VM prerequisites
 
-Run the Linux X11 contract under the same virtual display used by the existing
-host tests:
+This revision's mirror packager supports Darwin only. Windows and Linux
+need verified platform closure records, matching locked Skia/Dawn archives,
+and mirror packaging that provides `Vellum::MirrorView_core`. The CPU
+setting selects the RmlUi document renderer. The mirror host still needs
+its platform Skia/Dawn build. These VM commands apply once those
+prerequisites are present. Set `VELLUM_SKIA_ARCHIVE` to the matching
+archive on the VM and run from the checkout root.
+
+Linux, under the VM's build lease:
 
 ```sh
-cd /Volumes/Atelier/Code/agent-worktrees/lanes/w-rmlui-hosts/repo
-cmake -S . -B build-linux-rmlui -DVELLUM_ENABLE_MIRROR=ON -DVELLUM_ENABLE_RMLUI=ON -DVELLUM_RMLUI_RENDERER=cpu -DVELLUM_BUILD_TESTS=ON
-xvfb-run -a --server-args='-screen 0 1280x800x24' cmake --build build-linux-rmlui --target vellum-rmlui-plugin-view-test
-xvfb-run -a --server-args='-screen 0 1280x800x24' ctest --test-dir build-linux-rmlui -R '^vellum\.rmlui\.plugin-view$' --output-on-failure
+cmake -S . -B build-linux-rmlui -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DVELLUM_ENABLE_MIRROR=ON -DVELLUM_ENABLE_GRAPHICS=ON -DVELLUM_ENABLE_GPU=ON \
+  -DVELLUM_ENABLE_RMLUI=ON -DVELLUM_RMLUI_RENDERER=cpu -DVELLUM_BUILD_TESTS=ON \
+  -DVELLUM_SKIA_ARCHIVE="$VELLUM_SKIA_ARCHIVE"
+cmake --build build-linux-rmlui --target vellum-rmlui-plugin-view-test
+ctest --test-dir build-linux-rmlui --no-tests=error \
+  -R '^vellum[.]rmlui[.]plugin-view$' --output-on-failure
 ```
 
-Run the Windows contract in the Windows VM from a checked-out copy of this
-branch:
+Windows, in an MSVC developer PowerShell under the VM's build lease:
 
 ```powershell
-cmake -S . -B build-win-rmlui -DVELLUM_ENABLE_MIRROR=ON -DVELLUM_ENABLE_RMLUI=ON -DVELLUM_RMLUI_RENDERER=cpu -DVELLUM_BUILD_TESTS=ON
-cmake --build build-win-rmlui --target vellum-rmlui-plugin-view-test --config Release
-ctest --test-dir build-win-rmlui -C Release -R '^vellum\.rmlui\.plugin-view$' --output-on-failure
+cmake -S . -B build-win-rmlui -G Ninja -DCMAKE_BUILD_TYPE=Release `
+  -DVELLUM_ENABLE_MIRROR=ON -DVELLUM_ENABLE_GRAPHICS=ON -DVELLUM_ENABLE_GPU=ON `
+  -DVELLUM_ENABLE_RMLUI=ON -DVELLUM_RMLUI_RENDERER=cpu -DVELLUM_BUILD_TESTS=ON `
+  "-DVELLUM_SKIA_ARCHIVE=$env:VELLUM_SKIA_ARCHIVE"
+cmake --build build-win-rmlui --target vellum-rmlui-plugin-view-test
+ctest --test-dir build-win-rmlui --no-tests=error `
+  -R '^vellum[.]rmlui[.]plugin-view$' --output-on-failure
 ```
-
-The lane has no GPU. A lead run with a real Windows or Linux GPU should add a
-pixel-level host proof before enabling any GPU renderer in this adapter.

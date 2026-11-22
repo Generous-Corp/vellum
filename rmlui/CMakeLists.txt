@@ -25,9 +25,9 @@ cmake_minimum_required(VERSION 3.24)
 #                              and Apple frameworks.
 #   VellumRmlUi::VellumRenderer draws the backend's commands as triangle meshes
 #                              through Vellum's SkiaDawnSurface
-#                              (VELLUM_RMLUI_VELLUM_RENDERER=ON). It is the only
-#                              target that links Vellum; Core and SoftRenderer
-#                              never do.
+#                              (VELLUM_RMLUI_VELLUM_RENDERER=ON).
+#   VellumRmlUi::PluginView    exposes a CPU-rendered document as a Vellum View
+#                              when the Vellum mirror view unit is available.
 # On its own the module pins the macOS deployment target Vellum uses, so the
 # archives Native installs (RmlUi, FreeType) can link into a plug-in that runs
 # on older macOS than the build host. Inside a Vellum build the parent decides.
@@ -375,11 +375,9 @@ if(TARGET vellum-rmlui-native)
     vellum_rmlui_require_nonfinite(vellum-rmlui-native PUBLIC)
 endif()
 
-# Only VellumRenderer may link Vellum; every other library here stays usable
-# without it.
 include(cmake/VellumRmlUiLinkBoundary.cmake)
 get_property(_vellum_rmlui_targets DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" PROPERTY BUILDSYSTEM_TARGETS)
-vellum_rmlui_check_link_boundary(ALLOW vellum-rmlui-vellum-renderer TARGETS ${_vellum_rmlui_targets})
+vellum_rmlui_check_link_boundary(TARGETS ${_vellum_rmlui_targets})
 
 if(VELLUM_RMLUI_INSTALL)
     set(_vellum_rmlui_cmake_dir "${CMAKE_INSTALL_LIBDIR}/cmake/VellumRmlUi")
