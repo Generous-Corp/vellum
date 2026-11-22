@@ -94,9 +94,6 @@ set_property(TARGET mirror APPEND PROPERTY LINK_DEPENDS "${GENERATED}")
             self.assertIn("_vendored_symbol", second)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 class GpuRuntimePinnedInterfaceTest(unittest.TestCase):
     """Provider visibility must stay outside the mirror-bound header tree."""
 
@@ -121,7 +118,11 @@ class GpuRuntimePinnedInterfaceTest(unittest.TestCase):
         graphics = (repo / "graphics/CMakeLists.txt").read_text(encoding="utf-8")
         self.assertIn('$<LINK_LIBRARY:WHOLE_ARCHIVE,VellumGpuRuntime::DeviceProvider>', graphics)
         runtime = (repo / "gpu-runtime/CMakeLists.txt").read_text(encoding="utf-8")
-        self.assertNotIn('target_link_libraries(gpu-runtime-skia-log-bridge', runtime)
+        # The bridge keeps the installed package contract (Device for installed
+        # consumers) while in-tree mirror builds see only the DeviceApi headers.
+        self.assertIn('$<BUILD_INTERFACE:VellumGpuRuntime::DeviceApi>', runtime)
+        self.assertIn('$<INSTALL_INTERFACE:VellumGpuRuntime::Device>', runtime)
+        self.assertNotIn('$<BUILD_INTERFACE:VellumGpuRuntime::Device>', runtime)
         self.assertIn('"${CMAKE_CURRENT_LIST_DIR}/include"', runtime)
         pin = "14bd4c5e430bc8da6b4204f1daa8a1bdbc6b7f3a"
         def git(*args: str) -> str:
@@ -133,3 +134,7 @@ class GpuRuntimePinnedInterfaceTest(unittest.TestCase):
         )
         exports = (repo / "cmake/skia_dawn_provider.exports").read_text(encoding="utf-8")
         self.assertIn("__ZN11gpu_runtime*", exports)
+
+
+if __name__ == "__main__":
+    unittest.main()
