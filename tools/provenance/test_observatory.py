@@ -539,6 +539,21 @@ class ObservatoryTests(unittest.TestCase):
 
             observatory.verify_vellum_observatory_tail(repo, source, evidence)
 
+    def test_product_merge_from_cursor_covered_history_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary) / "vellum"
+            _, base = init_repo(repo, "tracked.txt")
+            write(repo / "tracked.txt", "cursor\n")
+            cursor = commit_all(repo, "reconcile cursor")
+            run(repo, "git", "checkout", "-b", "product", base)
+            write(repo / "product.txt", "product\n")
+            product = commit_all(repo, "product change")
+            run(repo, "git", "checkout", "main")
+            run(repo, "git", "merge", "--no-ff", product, "-m", "merge product")
+            target = run(repo, "git", "rev-parse", "HEAD")
+
+            observatory.verify_vellum_observatory_tail(repo, cursor, target)
+
     def test_tree_identical_merge_does_not_duplicate_observation_or_break_tail(
         self,
     ) -> None:

@@ -121,6 +121,35 @@ class Check(unittest.TestCase):
         self.refused("full SHA", commit="abc")
 
 
+class ObservatoryTailSelection(unittest.TestCase):
+    def test_product_merge_from_cursor_covered_history_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run_git = lambda *args: subprocess.run(
+                ["git", *args], cwd=root, check=True, capture_output=True, text=True
+            )
+            run_git("init", "-b", "main")
+            run_git("config", "user.email", "test@example.invalid")
+            run_git("config", "user.name", "Release test")
+            (root / "tracked.txt").write_text("base\n")
+            run_git("add", ".")
+            run_git("commit", "-m", "base")
+            base = run_git("rev-parse", "HEAD").stdout.strip()
+            (root / "tracked.txt").write_text("cursor\n")
+            run_git("commit", "-am", "reconcile cursor")
+            cursor = run_git("rev-parse", "HEAD").stdout.strip()
+            run_git("checkout", "-b", "product", base)
+            (root / "product.txt").write_text("product\n")
+            run_git("add", ".")
+            run_git("commit", "-m", "product change")
+            product = run_git("rev-parse", "HEAD").stdout.strip()
+            run_git("checkout", "main")
+            run_git("merge", "--no-ff", product, "-m", "merge product")
+            target = run_git("rev-parse", "HEAD").stdout.strip()
+
+            rr.require_evidence_tail(root, cursor, target)
+
+
 # The live shapes (2026-11-01): Vellum's required checks come from classic branch
 # protection, each bound to GitHub Actions (app 15368); its rulesets add only the
 # merge queue.
