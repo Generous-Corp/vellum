@@ -7,6 +7,7 @@
 #include <vellum/graphics/capture_stats.hpp>
 #include <vellum/graphics/frame_driver.hpp>
 #include <vellum/graphics/hit_test.hpp>
+#include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/pointer_router.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
@@ -87,6 +88,56 @@ bool read_file(const std::filesystem::path& path, std::string& output) {
     contents << input.rdbuf();
     if (!input || contents.str().empty()) return false;
     output = contents.str();
+    return true;
+}
+
+bool load_bundle_images(const std::filesystem::path& bundle,
+                        vellum::authoring::JsApplicationOptions& options, std::string& error) {
+    auto sidecar = bundle;
+    sidecar += ".images.json";
+    std::error_code filesystem_error;
+    const auto size = std::filesystem::file_size(sidecar, filesystem_error);
+    if (filesystem_error == std::errc::no_such_file_or_directory) return true;
+    if (filesystem_error || size > 96U * 1024U * 1024U) {
+        error = "could not read native bundle images within the encoded size limit";
+        return false;
+    }
+    NSString* path = [NSString stringWithUTF8String:sidecar.c_str()];
+    NSData* data = [NSData dataWithContentsOfFile:path];
+    id catalog = data == nil ? nil
+        : [NSJSONSerialization JSONObjectWithData:data options:0 error:nullptr];
+    if (![catalog isKindOfClass:NSDictionary.class]) {
+        error = "native bundle image catalog must be a JSON object";
+        return false;
+    }
+    NSDictionary* images = static_cast<NSDictionary*>(catalog);
+    std::size_t decoded_bytes = 0;
+    for (NSString* name in [images.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
+        id encoded = images[name];
+        NSData* bytes = [encoded isKindOfClass:NSString.class]
+            ? [[NSData alloc] initWithBase64EncodedString:encoded options:0] : nil;
+        if (bytes == nil) {
+            error = "native bundle image is not base64";
+            return false;
+        }
+        const std::span<const std::uint8_t> input{
+            static_cast<const std::uint8_t*>(bytes.bytes), bytes.length};
+        const auto dimensions = vellum::graphics::png_header_dimensions(input);
+        if (!dimensions || !vellum::graphics::image_dimensions_fit(
+                dimensions->width, dimensions->height) ||
+            (decoded_bytes += std::size_t{dimensions->width} * dimensions->height * 4U) >
+                vellum::graphics::kMaxImageBytes) {
+            error = "native bundle image exceeds the decoded size limit or has an invalid header";
+            return false;
+        }
+        if (!vellum::graphics::normalize_content_hash(name.UTF8String)) {
+            error = "native bundle image key must be a SHA-256 content hash";
+            return false;
+        }
+        auto asset = SkiaDawnSurface::decode_image_asset(input, name.UTF8String, &error);
+        if (!asset) return false;
+        options.images.push_back(std::move(asset));
+    }
     return true;
 }
 
@@ -207,7 +258,8 @@ struct FrameInfo final {
 // Renders the scene on the GPU, checks it has content, and writes a PNG when
 // `png_path` is non-empty.
 bool capture_frame(const RenderedApplication& rendered,
-                   const std::filesystem::path& png_path, FrameInfo& frame,
+                   const std::filesystem::path& png_path,
+                   std::uint32_t scale, FrameInfo& frame,
                    std::string* error) {
     static bool bootstrapped = false;
     if (!bootstrapped) {
@@ -217,7 +269,7 @@ bool capture_frame(const RenderedApplication& rendered,
     auto surface = SkiaDawnSurface::create(
         {.width = static_cast<std::uint32_t>(rendered.scene.width),
          .height = static_cast<std::uint32_t>(rendered.scene.height),
-         .scale = 1.0F},
+         .scale = static_cast<float>(scale)},
         error);
     if (!surface || !validate_gpu(*surface, false, error) ||
         !surface->render(rendered.scene, error)) {
@@ -266,7 +318,8 @@ bool advance_clock(JsApplication& application, std::uint64_t milliseconds,
     return true;
 }
 
-int run_headless(const Options& options, std::string_view bundle) {
+int run_headless(const Options& options, std::string_view bundle,
+                 const vellum::authoring::JsApplicationOptions& application_options) {
     @autoreleasepool {
         std::string error;
         ComponentRegistry components;
@@ -274,8 +327,6 @@ int run_headless(const Options& options, std::string_view bundle) {
             std::cerr << error << '\n';
             return 1;
         }
-        vellum::authoring::JsApplicationOptions application_options;
-        application_options.manual_clock = options.manual_clock;
         auto application = JsApplication::create(
             bundle, application_options, &error);
         RenderedApplication rendered;
@@ -422,6 +473,7 @@ int run_headless(const Options& options, std::string_view bundle) {
                 const auto directory = options.capture_dir.empty()
                     ? std::filesystem::path(".") : options.capture_dir;
                 if (!capture_frame(rendered, directory / (pending_capture + ".png"),
+                                   options.capture_scale,
                                    step_frame, &error)) {
                     std::cerr << error << '\n';
                     return 1;
@@ -445,7 +497,7 @@ int run_headless(const Options& options, std::string_view bundle) {
             return 1;
         }
         FrameInfo frame;
-        if (!capture_frame(rendered, options.capture, frame, &error)) {
+        if (!capture_frame(rendered, options.capture, options.capture_scale, frame, &error)) {
             std::cerr << error << '\n';
             return 1;
         }
@@ -484,6 +536,7 @@ std::filesystem::path packaged_state_path() {
 }
 
 std::vector<ComponentModuleSpec> interactive_component_specs;
+vellum::authoring::JsApplicationOptions interactive_application_options;
 
 using vellum::graphics::PointerEvent;
 using vellum::graphics::PointerModifiers;
@@ -570,7 +623,7 @@ std::unordered_set<std::string> interactive_nodes(
     if (self) {
         std::string error;
         _components = std::make_unique<ComponentRegistry>();
-        _application = JsApplication::create(bundle, &error);
+        _application = JsApplication::create(bundle, interactive_application_options, &error);
         if (!load_components(components, *_components, &error) || !_application ||
             !_application->render(_rendered, &error)) {
             NSLog(@"Vellum application initialization failed: %s", error.c_str());
@@ -1191,7 +1244,7 @@ std::unordered_set<std::string> interactive_nodes(
         static_cast<const char*>(self.bundleData.bytes), self.bundleData.length);
     std::string error;
     ComponentRegistry components;
-    auto probe = JsApplication::create(bundle, &error);
+    auto probe = JsApplication::create(bundle, interactive_application_options, &error);
     RenderedApplication rendered;
     if (!load_components(interactive_component_specs, components, &error) ||
         !probe || !probe->render(rendered, &error) ||
@@ -1244,12 +1297,19 @@ int main(int argc, const char* argv[]) {
         std::cerr << "could not read application bundle: " << options.bundle << '\n';
         return 2;
     }
+    vellum::authoring::JsApplicationOptions application_options{.manual_clock = options.manual_clock};
+    std::string error;
+    if (!load_bundle_images(options.bundle, application_options, error)) {
+        std::cerr << error << '\n';
+        return 2;
+    }
     if (options.no_window || options.manual_clock || !options.dump_tree.empty() ||
         !options.capture.empty() || !options.steps.empty() ||
         !options.state_file.empty()) {
-        return run_headless(options, bundle);
+        return run_headless(options, bundle, application_options);
     }
     interactive_component_specs = options.components;
+    interactive_application_options = std::move(application_options);
     @autoreleasepool {
         NSApplication* application = NSApplication.sharedApplication;
         application.activationPolicy = NSApplicationActivationPolicyRegular;

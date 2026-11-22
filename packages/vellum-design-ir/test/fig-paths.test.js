@@ -101,3 +101,9 @@ test('a stroke-only vector resolves to its stroke outline, painted as a fill', (
   assert.equal(r.box.minY, 7);
   assert.equal(r.d, 'M0 0 L2 0 L2 20 L0 20 Z');
 });
+
+test('serializes an outline with leading closes as valid SVG path data', () => {
+  const blob = encode([CLOSE], [CLOSE], [MOVE, 1, 2], [LINE, 3, 4], [CLOSE]);
+  assert.equal(toPathData(decodePathBlob(blob)), 'M1 2 L3 4 Z');
+  assert.equal(toPathData(decodePathBlob(encode([CLOSE]))), '');
+});
