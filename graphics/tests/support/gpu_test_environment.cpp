@@ -29,8 +29,7 @@ ProbeOutcome probe_real_adapter() {
         const wgpu::InstanceFeatureName features[] = {wgpu::InstanceFeatureName::TimedWaitAny};
         descriptor.requiredFeatureCount = 1;
         descriptor.requiredFeatures = features;
-        dawn::native::Instance native(reinterpret_cast<const WGPUInstanceDescriptor*>(&descriptor));
-        wgpu::Instance instance(native.Get());
+        auto instance = wgpu::CreateInstance(&descriptor);
         if (!instance) {
             probed.detail = "Dawn could not create an instance";
             return probed;

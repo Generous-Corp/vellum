@@ -96,9 +96,11 @@ endif()
 # library has no native default here: the embedding executable bootstraps it.
 set(GPU_RUNTIME_BUILD_TESTS ${VELLUM_BUILD_TESTS})
 set(GPU_RUNTIME_HOST_OWNS_DAWN_PROCS ON)
+set(GPU_RUNTIME_BUILD_PROVIDER OFF)
 if(VELLUM_HAS_SKIA_DAWN)
     set(GPU_RUNTIME_SKIA_DIR "${VELLUM_SKIA_DIR}")
     set(GPU_RUNTIME_REQUIRE_DEVICE ON)
+    set(GPU_RUNTIME_BUILD_PROVIDER ON)
 endif()
 add_subdirectory(gpu-runtime)
 
