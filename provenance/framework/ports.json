@@ -965,6 +965,20 @@
       "pulp_commits": [],
       "framework_blob": null,
       "reason": "Centralizes the Graphite raster options used by the plug-in editor surface and its regression test."
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/gpu_plugin_editor_host_win.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "The Win32 plug-in view host: a child HWND that creates a Dawn/D3D12 surface after attachment and renders the View tree with Skia Graphite. Written for Vellum as the Windows counterpart to the macOS GPU editor host.",
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ]
     }
   ]
 }

@@ -8,6 +8,7 @@ The installed DesignIR backend connects the public Python `vellum` CLI to
   containing one audio-free root frame;
 - the actual Pulp `.pulp.zip` container for that contract: exactly one
   `.pulp.json` scene plus its sibling assets;
+- a local Figma `.fig` file;
 - a Vellum adapter source model containing `source`, `root`, optional `tokens`,
   `assets`, and `diagnostics` fields;
 - canonical `https://vellum.dev/schemas/design-ir/v1` JSON.
@@ -31,8 +32,21 @@ diagnostic kinds, synthetic multi-selection roots, and unpinned parser/schema
 versions. Pulp's name-based extractor can promote names such as `dial`,
 `slider`, `level`, or `meter` into audio widgets; until Pulp has an explicit
 generic-export mode, such an export is rejected rather than guessed back into a
-generic control. It does not decode an arbitrary `.fig`, REST response, or
-provider archive.
+generic control.
+
+Use the offline decoder for local Figma saves.
+
+```sh
+vellum import --project . --source-type fig ./design.fig --frame 0:2 --as main
+vellum reimport --project . --source ./design.fig --as main
+```
+
+`--frame` takes a Figma frame GUID. Omit it to use the decoder's default
+frame. Reimport and design checks use the original frame selection. The
+import snapshots the original bytes and copies referenced embedded raster
+assets into the project. It uses no Figma login or network connection.
+Zstd-compressed saves require Node.js 22.15 or newer. Decoded content follows
+the materialization limits described above.
 
 `.pulp.zip` is unpacked by the installed Python dispatcher with no external
 unzip dependency. Before any member is written, the dispatcher rejects path

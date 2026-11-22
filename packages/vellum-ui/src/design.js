@@ -260,16 +260,31 @@ function retainedStyle(context, node, viewport, root) {
         style.backgroundLinearGradient = retainedGradient(
             context, refs, 'backgroundLinearGradient', paint.backgroundLinearGradient);
     }
-    if (typeof paint.borderRadius === 'number' || typeof paint.borderRadius === 'string') {
-        const radius = tokenValue(tokens, paint.borderRadius, [], context.tokenLayers);
-        if (typeof radius === 'number' && Number.isFinite(radius)) style.borderRadius = radius;
+    if (drawsBox && Array.isArray(paint.backgroundGradients)) {
+        style.backgroundGradients = paint.backgroundGradients.map((gradient, index) =>
+            retainedGradient(context, refs, `backgroundGradients.${index}`, gradient));
+    }
+    for (const property of [
+        'borderRadius', 'borderTopLeftRadius', 'borderTopRightRadius',
+        'borderBottomRightRadius', 'borderBottomLeftRadius',
+        'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
+    ]) {
+        const value = tokenValue(tokens, paint[property], [], context.tokenLayers);
+        if (typeof value === 'number' && Number.isFinite(value)) style[property] = value;
+    }
+    for (const property of [
+        'borderTopColor', 'borderRightColor', 'borderBottomColor', 'borderLeftColor',
+    ]) {
+        if (typeof paint[property] === 'string') {
+            style[property] = canonicalColor(tokenValue(
+                tokens, paint[property], [], context.tokenLayers));
+        }
     }
     if (typeof typography.color === 'string' && node.kind !== 'path') {
         style.color = colorSlot(context, refs, 'color', typography.color);
     }
-    if (typeof typography.fontSize === 'number' && Number.isFinite(typography.fontSize)) {
-        style.fontSize = typography.fontSize;
-    }
+    Object.assign(style, paintNumbers(typography, ['fontSize', 'fontWeight']));
+    if (typeof typography.fontFamily === 'string') style.fontFamily = typography.fontFamily;
     for (const property of VECTOR_PAINT_KEYS) {
         if (typeof paint[property] === 'string') style[property] = paint[property];
     }
