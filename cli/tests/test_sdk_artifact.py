@@ -330,13 +330,20 @@ class SdkArtifactTests(unittest.TestCase):
             (package / "VellumConfig.cmake").write_text(
                 "# Vellum::Gpu Vellum::Authoring\n", encoding="utf-8"
             )
+            images = {
+                "provider": "lib/libvellum-skia-dawn-provider-a1b2c3d4e5f6.dylib",
+                "canvas": "mirror/lib/libvellum-mirror-canvas-a1b2c3d4e5f6.dylib",
+                "foundation": "mirror/lib/libvellum-mirror-foundation-a1b2c3d4e5f6.dylib",
+                "state-core": "mirror/lib/libvellum-mirror-state-core-a1b2c3d4e5f6.dylib",
+            }
+            manifest = install_tree / "share/vellum/runtime-images.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text(json.dumps(images), encoding="utf-8")
             for relative in (
                 "bin/vellum-app-host",
                 "lib/libvellum-authoring.dylib",
                 "lib/libvellum-gpu.dylib",
-                "lib/libvellum-skia-dawn-provider.dylib",
-                "mirror/lib/libvellum-mirror-foundation.dylib",
-                "mirror/lib/libvellum-mirror-state-core.dylib",
+                *images.values(),
             ):
                 path = install_tree / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -360,7 +367,7 @@ class SdkArtifactTests(unittest.TestCase):
             self.assertTrue(all(
                 with_backend["commands"][command]
                 for command in ("build", "run", "test", "capture", "package")
-            ))
+            ), "native capabilities require the identity-suffixed SDK images")
             authoring = with_backend["authoring"]
             self.assertTrue(authoring["text_input_v1"]["native_direct_text"])
             self.assertTrue(authoring["scenario_v1"]["input"])
@@ -370,7 +377,7 @@ class SdkArtifactTests(unittest.TestCase):
             self.assertTrue(authoring["text_input_v1"]["accessibility_text"])
             self.assertFalse(authoring["text_input_v1"]["clipboard_editing"])
             self.assertFalse(authoring["persistence"]["migration_api"])
-            (install_tree / "mirror/lib/libvellum-mirror-state-core.dylib").unlink()
+            (install_tree / images["state-core"]).unlink()
             without_state_core = derive_capabilities(payload, install_tree)
             self.assertFalse(any(
                 without_state_core["commands"][command]
