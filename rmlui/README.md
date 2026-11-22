@@ -26,6 +26,31 @@ which builds the release archive reproducibly. Without
 `VELLUM_RMLUI_NATIVE_PACKAGE`, Native installs into the VellumRmlUi package
 directory instead, as a component of that package.
 
+## Choosing a renderer
+
+Run `vellum rmlui renderers` to inspect this catalog. A project can select an
+implemented Vellum renderer during configure with
+`-DVELLUM_RMLUI_RENDERER=<id>`. The selector enables the existing options and
+keeps the individual options available for compatibility.
+
+| ID | Kind | Graphics API | Platforms | Status |
+| --- | --- | --- | --- | --- |
+| `vellum` | vellum | Skia/Dawn | macOS, iOS, Windows, Linux, Android | planned |
+| `metal` | vellum | Metal | macOS, iOS | macOS tested, iOS planned |
+| `cpu` | vellum | CPU | macOS, iOS, Windows, Linux, Android | macOS, Linux, Windows tested; iOS, Android planned |
+| `dx11` | upstream-mit | DirectX 11 | Windows | planned |
+| `dx12` | upstream-mit | DirectX 12 | Windows | planned |
+| `gl2` | upstream-mit | OpenGL 2 | Windows, Linux | planned |
+| `gl3` | upstream-mit | OpenGL 3 / GLES3 | Windows, Linux, Android | planned |
+| `vk` | upstream-mit | Vulkan | Windows, Linux, Android | planned |
+| `sdl` | upstream-mit | SDL renderer | Windows, Linux, Android | planned |
+| `sdl_gpu` | upstream-mit | SDL GPU | Windows, Linux, Android | planned |
+
+The upstream MIT backends remain cataloged for deliberate future integration.
+They are rejected by the selector until a Vellum consumer test exists. Third-party
+integrations are listed in the community discussion and are not vetted or
+packaged by Vellum. Check each project's license before use.
+
 ## Using the RmlUi SDK
 
 Install the Vellum SDK and the RmlUi SDK into separate prefixes, then put both
