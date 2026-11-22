@@ -91,6 +91,14 @@ class VELLUM_RMLUI_API RenderInterface {
     virtual void begin_frame(std::uint32_t width, std::uint32_t height) = 0;
     virtual void submit(const DrawCommand& command) = 0;
     virtual void end_frame() = 0;
+
+    // Hosts call these around editor attachment and visibility changes. The
+    // default hooks keep existing renderers source-compatible.
+    virtual void on_attach() {}
+    virtual void on_detach() {}
+    virtual void on_visibility_changed(bool) {}
+    virtual void on_idle() {}
+    virtual void on_close() {}
 };
 
 class VELLUM_RMLUI_API LuaInterface {
@@ -246,6 +254,10 @@ class VELLUM_RMLUI_API Backend {
     }
     void render();
     [[nodiscard]] bool needs_render() const noexcept;
+    void on_attach();
+    void on_detach();
+    void on_visibility_changed(bool visible);
+    void on_idle();
     void close();
     [[nodiscard]] bool is_open() const noexcept {
         return open_;

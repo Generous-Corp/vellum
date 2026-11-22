@@ -697,7 +697,16 @@ void Backend::render() {
     renderer_.end_frame();
 }
 
+void Backend::on_attach() { renderer_.on_attach(); }
+
+void Backend::on_detach() { renderer_.on_detach(); }
+
+void Backend::on_visibility_changed(bool visible) { renderer_.on_visibility_changed(visible); }
+
+void Backend::on_idle() { renderer_.on_idle(); }
+
 void Backend::close() {
+    renderer_.on_close();
     if (runtime_) {
         if (runtime_->context) {
             detail::AssetScope scope(&assets_, runtime_->scope_prefix, runtime_.get());
