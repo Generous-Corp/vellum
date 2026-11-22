@@ -969,6 +969,71 @@
         "windows-x64",
         "windows-arm64"
       ]
+    },
+    {
+      "framework_path": "framework/core/view/platform/ios/ios_accessibility_bridge.mm",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "UIKit VoiceOver accessibility bridge for Vellum iOS view trees.",
+      "platforms": [
+        "ios-device-arm64",
+        "ios-simulator-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/view/platform/ios/ios_editor_surface_host.mm",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "UIKit plug-in editor surface host for Vellum iOS AUv3 embedding.",
+      "platforms": [
+        "ios-device-arm64",
+        "ios-simulator-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/view/platform/ios/ios_window_surface_host.mm",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "UIKit standalone window host for Vellum iOS applications.",
+      "platforms": [
+        "ios-device-arm64",
+        "ios-simulator-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/view/platform/linux/gpu_plugin_editor_host_x11.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "platforms": [
+        "linux-x64"
+      ],
+      "reason": "The Linux X11 plug-in editor host: a reparented child window that renders the View tree with Skia Graphite on Dawn/Vulkan. Written for Vellum, not taken from Pulp plugin-view-host sources."
+    },
+    {
+      "framework_path": "framework/core/render/src/graphite_raster_options.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Centralizes the Graphite raster options used by the plug-in editor surface and its regression test."
     }
   ]
 }

@@ -164,11 +164,17 @@ install(DIRECTORY "${_vellum_skia_include}/webgpu/"
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/vellum/dawn/webgpu")
 
 # One installed dylib owns the locked archives for both GPU and mirror users.
-# Whole-archive linking makes the public Skia/Dawn API available independently
-# of which entry points either Vellum client happens to use today.
+# Whole-archive linking keeps implementations available to the provider's
+# clients. The Mach-O export list makes every other definition private, so dyld
+# cannot coalesce its weak definitions with a host's Skia or Dawn build.
 add_library(vellum-skia-dawn-provider SHARED
     "${CMAKE_CURRENT_LIST_DIR}/skia_dawn_provider.cpp")
 add_library(Vellum::SkiaDawnProvider ALIAS vellum-skia-dawn-provider)
+set(_vellum_provider_exports "${CMAKE_CURRENT_LIST_DIR}/skia_dawn_provider.exports")
+target_link_options(vellum-skia-dawn-provider PRIVATE
+    "LINKER:-exported_symbols_list,${_vellum_provider_exports}")
+set_property(TARGET vellum-skia-dawn-provider APPEND PROPERTY LINK_DEPENDS
+    "${_vellum_provider_exports}")
 file(RELATIVE_PATH _vellum_provider_to_mirror_lib
     "${CMAKE_INSTALL_FULL_LIBDIR}"
     "${CMAKE_INSTALL_PREFIX}/mirror/lib")
