@@ -27,7 +27,7 @@ class NoticesManifestTest(unittest.TestCase):
         bundled = json.loads((ROOT / "provenance/third-party-lock.json").read_text())[
             "runtime_toolchain_dependencies"
         ]["renderer"]["bundled_components"]
-        self.assertEqual(len(manifest["entries"]), 26)
+        self.assertEqual(len(manifest["entries"]), 27)
         self.assertEqual(
             sorted(row["name"] for row in bundled),
             sorted(entry["name"] for entry in manifest["entries"] if entry["name"] in {row["name"] for row in bundled}),

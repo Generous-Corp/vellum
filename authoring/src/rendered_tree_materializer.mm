@@ -64,6 +64,12 @@ constexpr std::array<std::string_view, 4> kCornerRadiusKeys{
     "borderTopLeftRadius", "borderTopRightRadius",
     "borderBottomRightRadius", "borderBottomLeftRadius",
 };
+const std::array<NSString*, 4> kBorderWidths{
+    @"borderTopWidth", @"borderRightWidth", @"borderBottomWidth", @"borderLeftWidth",
+};
+const std::array<NSString*, 4> kBorderColors{
+    @"borderTopColor", @"borderRightColor", @"borderBottomColor", @"borderLeftColor",
+};
 constexpr std::size_t kMaximumTransformBytes = 1024U;
 constexpr std::size_t kMaximumTransformFunctions = 32U;
 
@@ -113,7 +119,15 @@ bool style_key_consumed(std::string_view type, std::string_view key, const Style
         key == "gridTemplateColumns" || key == "gridTemplateRows") {
         return use.lays_out_children;
     }
-    if (key == "backgroundGradient" || key == "backgroundLinearGradient" || key == "boxShadow") return true;
+    if (key == "backgroundGradient" || key == "backgroundLinearGradient" ||
+        key == "backgroundGradients" || key == "boxShadow") return true;
+    if (!text) {
+        for (std::size_t side = 0; side < kBorderWidths.size(); ++side) {
+            if (key == kBorderWidths[side].UTF8String || key == kBorderColors[side].UTF8String) {
+                return true;
+            }
+        }
+    }
     if (key == "backgroundColor") return !text;
     if (key == "borderRadius" || contains(kCornerRadiusKeys, key)) {
         return !text || use.paints_text_background;
@@ -421,6 +435,19 @@ bool parse_linear_gradient(
     NSDictionary* style,
     std::vector<vellum::graphics::LinearGradient>& output,
     std::string* error) {
+    if (id layers = style[@"backgroundGradients"]; layers != nil) {
+        if (![layers isKindOfClass:NSArray.class] || [layers count] > 8U ||
+            style[@"backgroundGradient"] != nil || style[@"backgroundLinearGradient"] != nil) {
+            set_error(error, "backgroundGradients requires up to eight layers as the sole gradient style");
+            return false;
+        }
+        for (id layer in layers) {
+            if (!parse_linear_gradient_value(layer, "backgroundGradients", output, error, true)) {
+                return false;
+            }
+        }
+        return true;
+    }
     id raw = style[@"backgroundGradient"] ?: style[@"backgroundLinearGradient"];
     return parse_linear_gradient_value(raw, raw == style[@"backgroundGradient"] ?
         "backgroundGradient" : "backgroundLinearGradient", output, error);
@@ -2200,6 +2227,272 @@ bool validate_attributed_run(
     return true;
 }
 
+// A border occupies the area between the outer rounded rectangle and its
+// inset. A solid uniform border uses one even-odd path, so translucent
+// corners never blend twice. Individual sides share mitered edges.
+bool append_box_border(
+    NSDictionary* style, MaterializeContext& context,
+    vellum::graphics::SceneNode& output, std::string* error) {
+    using namespace vellum::graphics;
+    const float width = output.bounds.width;
+    const float height = output.bounds.height;
+    if (width <= 0.0F || height <= 0.0F) return true;
+
+    std::array<float, 4> widths{};
+    std::array<Color, 4> colors{};
+    for (std::size_t side = 0; side < widths.size(); ++side) {
+        if (style[kBorderWidths[side]] == nil && style[kBorderColors[side]] == nil) continue;
+        const auto color = parse_color(style[kBorderColors[side]]);
+        if (!finite_number(style[kBorderWidths[side]], widths[side]) ||
+            widths[side] < 0.0F || !color) {
+            set_error(error, "box border sides require a nonnegative width and hex color");
+            return false;
+        }
+        colors[side] = *color;
+    }
+    if (std::ranges::none_of(widths, [](float value) { return value > 0.0F; })) return true;
+    auto radii = resolved_corner_radii(output);
+    const auto scale_for = [](float available, float sum) {
+        return sum > available ? available / sum : 1.0F;
+    };
+    const float scale = std::min({
+        scale_for(width, radii.top_left + radii.top_right),
+        scale_for(width, radii.bottom_left + radii.bottom_right),
+        scale_for(height, radii.top_left + radii.bottom_left),
+        scale_for(height, radii.top_right + radii.bottom_right),
+    });
+    radii.top_left *= scale;
+    radii.top_right *= scale;
+    radii.bottom_right *= scale;
+    radii.bottom_left *= scale;
+    const auto append = [&](std::size_t side, PathGeometry path, bool clipped) {
+        SceneNode border;
+        border.id = output.id + "/border-" + std::to_string(side);
+        if (++context.nodes > kMaximumNodes || !context.identities.insert(border.id).second) {
+            set_error(error, "generated box border exceeds node limit or duplicates a node id");
+            return false;
+        }
+        border.kind = SceneNode::Kind::path;
+        border.bounds = {0.0F, 0.0F, width, height};
+        border.fill = colors[side];
+        border.path = std::make_shared<const PathGeometry>(std::move(path));
+        if (clipped && is_rounded(radii)) {
+            border.clip = NodeClip{.rect = border.bounds, .radii = radii, .clips_own_paint = true};
+        }
+        output.children.push_back(std::move(border));
+        return true;
+    };
+
+    auto [top, right, bottom, left] = widths;
+    const auto same_color = [&](Color color) {
+        const auto first = colors[0];
+        return color.red == first.red && color.green == first.green &&
+            color.blue == first.blue && color.alpha == first.alpha;
+    };
+    if (top == right && top == bottom && top == left &&
+        std::ranges::all_of(colors, same_color)) {
+        if (colors[0].alpha == 0.0F) return true;
+        PathGeometry ring;
+        ring.fill_rule = FillRule::evenodd;
+        const auto rounded_box = [&](float x, float y, float w, float h, float inset) {
+            const auto inner_radius = [inset](float radius) { return std::max(0.0F, radius - inset); };
+            const float tl = inner_radius(radii.top_left), tr = inner_radius(radii.top_right);
+            const float bl = inner_radius(radii.bottom_left), br = inner_radius(radii.bottom_right);
+            const auto add = [&](PathVerb verb, std::initializer_list<float> values) {
+                ring.verbs.push_back(verb);
+                ring.values.insert(ring.values.end(), values);
+            };
+            const auto arc = [&](float r, float end_x, float end_y) {
+                if (r > 0.0F) add(PathVerb::arc, {r, r, 0, 0, 1, end_x, end_y});
+            };
+            add(PathVerb::move, {x + tl, y});
+            add(PathVerb::line, {x + w - tr, y}); arc(tr, x + w, y + tr);
+            add(PathVerb::line, {x + w, y + h - br}); arc(br, x + w - br, y + h);
+            add(PathVerb::line, {x + bl, y + h}); arc(bl, x, y + h - bl);
+            add(PathVerb::line, {x, y + tl}); arc(tl, x + tl, y);
+            add(PathVerb::close, {});
+        };
+        rounded_box(0, 0, width, height, 0);
+        if (2 * top < width && 2 * top < height) {
+            rounded_box(top, top, width - 2 * top, height - 2 * top, top);
+        }
+        return append(0, std::move(ring), false);
+    }
+
+    const auto inset = [&](float available, float first, float second) {
+        const float factor = scale_for(available, first + second);
+        return std::pair{first * factor, available - second * factor};
+    };
+    const auto [x0, x1] = inset(width, left, right);
+    const auto [y0, y1] = inset(height, top, bottom);
+    // Partition the rounded border ring by side.  A straight-sided polygon
+    // clipped to the outer rounded box leaves the curved corner sections
+    // outside the polygon (and therefore unpainted) when side colours differ.
+    // Give each side the corresponding outer and inner contour, splitting
+    // every corner at the border-width-weighted bisector so the four paths
+    // meet without gaps or area overlap.
+    if (x1 > x0 && y1 > y0) {
+        const float inner_width = x1 - x0;
+        const float inner_height = y1 - y0;
+        // CSS keeps each inner corner's centre aligned with the outer corner;
+        // horizontal and vertical insets therefore produce an elliptical arc.
+        std::array<float, 4> inner_rx{
+            std::max(0.0F, radii.top_left - left),
+            std::max(0.0F, radii.top_right - right),
+            std::max(0.0F, radii.bottom_right - right),
+            std::max(0.0F, radii.bottom_left - left),
+        };
+        std::array<float, 4> inner_ry{
+            std::max(0.0F, radii.top_left - top),
+            std::max(0.0F, radii.top_right - top),
+            std::max(0.0F, radii.bottom_right - bottom),
+            std::max(0.0F, radii.bottom_left - bottom),
+        };
+        const float inner_scale_x = std::min({
+            scale_for(inner_width, inner_rx[0] + inner_rx[1]),
+            scale_for(inner_width, inner_rx[3] + inner_rx[2]),
+        });
+        const float inner_scale_y = std::min({
+            scale_for(inner_height, inner_ry[0] + inner_ry[3]),
+            scale_for(inner_height, inner_ry[1] + inner_ry[2]),
+        });
+        for (float& radius : inner_rx) radius *= inner_scale_x;
+        for (float& radius : inner_ry) radius *= inner_scale_y;
+
+        const auto append_arc = [](PathGeometry& path, float radius_x, float radius_y,
+                                   float end_x, float end_y, bool clockwise) {
+            if (radius_x > 0.0F && radius_y > 0.0F) {
+                path.verbs.push_back(PathVerb::arc);
+                path.values.insert(path.values.end(), {radius_x, radius_y, 0, 0,
+                                                       clockwise ? 1.0F : 0.0F, end_x, end_y});
+            } else {
+                path.verbs.push_back(PathVerb::line);
+                path.values.insert(path.values.end(), {end_x, end_y});
+            }
+        };
+        const auto make_side = [&](std::size_t side) {
+            PathGeometry path;
+            const auto unit = [](float first, float second) {
+                const float length = std::hypot(first, second);
+                return length > 0.0F ? std::pair{first / length, second / length}
+                                    : std::pair{0.70710678118F, 0.70710678118F};
+            };
+            const auto [utlx, utly] = unit(top, left);
+            const auto [utrx, utry] = unit(top, right);
+            const auto [ubrx, ubry] = unit(bottom, right);
+            const auto [ublx, ubly] = unit(bottom, left);
+            const float otlx = radii.top_left * utlx, otly = radii.top_left * utly;
+            const float otrx = radii.top_right * utrx, otry = radii.top_right * utry;
+            const float obrx = radii.bottom_right * ubrx, obry = radii.bottom_right * ubry;
+            const float oblx = radii.bottom_left * ublx, obly = radii.bottom_left * ubly;
+            const float itlx = inner_rx[0] * utlx, itly = inner_ry[0] * utly;
+            const float itrx = inner_rx[1] * utrx, itry = inner_ry[1] * utry;
+            const float ibrx = inner_rx[2] * ubrx, ibry = inner_ry[2] * ubry;
+            const float iblx = inner_rx[3] * ublx, ibly = inner_ry[3] * ubly;
+            const float inner_tl_split_x = x0 + inner_rx[0] - itlx;
+            const float inner_tl_split_y = y0 + inner_ry[0] - itly;
+            const float inner_tr_split_x = x1 - inner_rx[1] + itrx;
+            const float inner_tr_split_y = y0 + inner_ry[1] - itry;
+            const float inner_br_split_x = x1 - inner_rx[2] + ibrx;
+            const float inner_br_split_y = y1 - inner_ry[2] + ibry;
+            const float inner_bl_split_x = x0 + inner_rx[3] - iblx;
+            const float inner_bl_split_y = y1 - inner_ry[3] + ibly;
+            const auto move = [&](float x, float y) {
+                path.verbs.push_back(PathVerb::move);
+                path.values.insert(path.values.end(), {x, y});
+            };
+            const auto line = [&](float x, float y) {
+                path.verbs.push_back(PathVerb::line);
+                path.values.insert(path.values.end(), {x, y});
+            };
+            const auto close = [&] { path.verbs.push_back(PathVerb::close); };
+            switch (side) {
+            case 0: // top: top sectors of the top corners
+                move(radii.top_left - otlx, radii.top_left - otly);
+                append_arc(path, radii.top_left, radii.top_left, radii.top_left, 0.0F, true);
+                line(width - radii.top_right, 0.0F);
+                append_arc(path, radii.top_right, radii.top_right, width - radii.top_right + otrx,
+                           radii.top_right - otry, true);
+                line(inner_tr_split_x, inner_tr_split_y);
+                append_arc(path, inner_rx[1], inner_ry[1], x1 - inner_rx[1], y0, false);
+                line(x0 + inner_rx[0], y0);
+                append_arc(path, inner_rx[0], inner_ry[0], inner_tl_split_x,
+                           inner_tl_split_y, false);
+                line(radii.top_left - otlx, radii.top_left - otly);
+                close();
+                break;
+            case 1: // right: right sectors of the right corners
+                move(width - radii.top_right + otrx, radii.top_right - otry);
+                append_arc(path, radii.top_right, radii.top_right, width, radii.top_right, true);
+                line(width, height - radii.bottom_right);
+                append_arc(path, radii.bottom_right, radii.bottom_right,
+                           width - radii.bottom_right + obrx,
+                           height - radii.bottom_right + obry, true);
+                line(inner_br_split_x, inner_br_split_y);
+                append_arc(path, inner_rx[2], inner_ry[2], x1, y1 - inner_ry[2], false);
+                line(x1, y0 + inner_ry[1]);
+                append_arc(path, inner_rx[1], inner_ry[1], inner_tr_split_x,
+                           inner_tr_split_y, false);
+                line(width - radii.top_right + otrx, radii.top_right - otry);
+                close();
+                break;
+            case 2: // bottom: bottom sectors of the bottom corners
+                move(width - radii.bottom_right + obrx, height - radii.bottom_right + obry);
+                append_arc(path, radii.bottom_right, radii.bottom_right,
+                           width - radii.bottom_right, height, true);
+                line(radii.bottom_left, height);
+                append_arc(path, radii.bottom_left, radii.bottom_left,
+                           radii.bottom_left - oblx,
+                           height - radii.bottom_left + obly, true);
+                line(inner_bl_split_x, inner_bl_split_y);
+                append_arc(path, inner_rx[3], inner_ry[3], x0 + inner_rx[3], y1, false);
+                line(x1 - inner_rx[2], y1);
+                append_arc(path, inner_rx[2], inner_ry[2], inner_br_split_x,
+                           inner_br_split_y, false);
+                line(width - radii.bottom_right + obrx, height - radii.bottom_right + obry);
+                close();
+                break;
+            case 3: // left: left sectors of the left corners
+                move(radii.bottom_left - oblx, height - radii.bottom_left + obly);
+                append_arc(path, radii.bottom_left, radii.bottom_left,
+                           0.0F, height - radii.bottom_left, true);
+                line(0.0F, radii.top_left);
+                append_arc(path, radii.top_left, radii.top_left, radii.top_left - otlx,
+                           radii.top_left - otly, true);
+                line(inner_tl_split_x, inner_tl_split_y);
+                append_arc(path, inner_rx[0], inner_ry[0], x0, y0 + inner_ry[0], false);
+                line(x0, y1 - inner_ry[3]);
+                append_arc(path, inner_rx[3], inner_ry[3], inner_bl_split_x,
+                           inner_bl_split_y, false);
+                line(radii.bottom_left - oblx, height - radii.bottom_left + obly);
+                close();
+                break;
+            }
+            return path;
+        };
+        for (std::size_t side = 0; side < widths.size(); ++side) {
+            if (widths[side] == 0.0F || colors[side].alpha == 0.0F) continue;
+            if (!append(side, make_side(side), true)) return false;
+        }
+        return true;
+    }
+
+    const std::array<std::array<float, 8>, 4> sides{{
+        {0, 0, width, 0, x1, y0, x0, y0},
+        {width, 0, width, height, x1, y1, x1, y0},
+        {width, height, 0, height, x0, y1, x1, y1},
+        {0, height, 0, 0, x0, y0, x0, y1},
+    }};
+    for (std::size_t side = 0; side < sides.size(); ++side) {
+        if (widths[side] == 0.0F || colors[side].alpha == 0.0F) continue;
+        PathGeometry path;
+        path.verbs = {PathVerb::move, PathVerb::line, PathVerb::line, PathVerb::line, PathVerb::close};
+        path.values.assign(sides[side].begin(), sides[side].end());
+        if (!append(side, std::move(path), true)) return false;
+    }
+    return true;
+}
+
 bool materialize_node(
     NSDictionary* source,
     const vellum::graphics::Rect& proposed,
@@ -2462,6 +2755,11 @@ bool materialize_node(
     }
 
     if (!parse_grouping(style, identity, style_use, context, output, error)) return false;
+    if ((output.kind == vellum::graphics::SceneNode::Kind::rectangle ||
+         output.kind == vellum::graphics::SceneNode::Kind::group) &&
+        !append_box_border(style, context, output, error)) {
+        return false;
+    }
 
     for (NSString* event in events) {
         if (![event isKindOfClass:NSString.class] ||

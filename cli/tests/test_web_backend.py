@@ -30,6 +30,8 @@ validate_component_source = BACKEND_MODULE["validate_component_source"]
 build_component_modules = BACKEND_MODULE["build_component_modules"]
 contains_sdk_install_path = BACKEND_MODULE["contains_sdk_install_path"]
 lower_dom_snapshot = BACKEND_MODULE["lower_dom_snapshot"]
+lower_computed_material = BACKEND_MODULE["_lower_computed_material"]
+computed_gradient = BACKEND_MODULE["_computed_gradient"]
 CAPTURE_STYLE_NAMES = BACKEND_MODULE["CAPTURE_STYLE_NAMES"]
 chrome_path = BACKEND_MODULE["chrome_path"]
 BackendFailure = BACKEND_MODULE["BackendFailure"]
@@ -75,6 +77,55 @@ class LiveBrowserGateTests(unittest.TestCase):
         self.assertEqual(launched, [])
         popen.assert_not_called()
         run.assert_not_called()
+
+    def test_computed_material_rejects_elliptical_border_radius(self) -> None:
+        node = {"kind": "view", "properties": {}}
+        with self.assertRaisesRegex(BackendFailure, "elliptical border radius top-left") as raised:
+            lower_computed_material(
+                node, {"border-top-left-radius": "12px 6px"}, (0, 0, 80, 40))
+        self.assertEqual(raised.exception.status, "unsupported_material")
+
+    def test_computed_material_rejects_percentage_radius_on_non_square_box(self) -> None:
+        node = {"kind": "view", "properties": {}}
+        with self.assertRaisesRegex(BackendFailure, "percentage border radius top-left") as raised:
+            lower_computed_material(
+                node, {"border-top-left-radius": "50%"}, (0, 0, 80, 40))
+        self.assertEqual(raised.exception.status, "unsupported_material")
+
+    def test_computed_material_rejects_background_gradient_overflow(self) -> None:
+        node = {"kind": "view", "properties": {}}
+        layers = ", ".join("linear-gradient(to right, rgb(0, 0, 0), rgb(255, 255, 255))"
+                            for _ in range(9))
+        with self.assertRaisesRegex(BackendFailure, "more than 8 background gradients") as raised:
+            lower_computed_material(
+                node, {"background-image": layers}, (0, 0, 80, 40))
+        self.assertEqual(raised.exception.status, "unsupported_material")
+
+    def test_computed_gradient_retains_circle_shape_and_position(self) -> None:
+        gradient = computed_gradient(
+            "radial-gradient(circle 40% at 25% 75%, rgb(0, 0, 0), rgb(255, 255, 255))")
+        self.assertEqual(gradient["radiusX"], 0.4)
+        self.assertEqual(gradient["radiusY"], 0.4)
+        self.assertEqual(gradient["centerX"], 0.25)
+        self.assertEqual(gradient["centerY"], 0.75)
+
+    def test_computed_material_rejects_default_radial_gradient(self) -> None:
+        node = {"kind": "view", "properties": {}}
+        with self.assertRaisesRegex(BackendFailure, "default radial gradients") as raised:
+            lower_computed_material(
+                node, {"background-image": "radial-gradient(rgb(0, 0, 0), rgb(255, 255, 255))"},
+                (0, 0, 80, 40))
+        self.assertEqual(raised.exception.status, "unsupported_material")
+
+    def test_computed_material_rejects_unsupported_gradient_direction(self) -> None:
+        node = {"kind": "view", "properties": {}}
+        with self.assertRaisesRegex(BackendFailure, "unsupported CSS gradient layer") as raised:
+            lower_computed_material(
+                node,
+                {"background-image": "linear-gradient(to bottom right, rgb(0, 0, 0), rgb(255, 255, 255))"},
+                (0, 0, 80, 40),
+            )
+        self.assertEqual(raised.exception.status, "unsupported_material")
 
     def test_a_set_but_unusable_pinned_browser_fails_instead_of_skipping(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -305,6 +356,29 @@ class BrowserCaptureLoweringTests(unittest.TestCase):
         computed = root["children"][0]["properties"]["computedStyles"]
         self.assertEqual(computed[CAPTURE_STYLE_NAMES[0]], "block")
         self.assertEqual(computed[CAPTURE_STYLE_NAMES[1]], "")
+
+    def test_empty_pseudo_element_row_cannot_replace_its_painted_box(self) -> None:
+        gradient = "radial-gradient(80% 60% at 50% 20%, rgb(0, 0, 0), rgba(0, 0, 0, 0))"
+        snapshot = {
+            "strings": ["#document", "::before", gradient],
+            "documents": [{
+                "nodes": {"nodeType": [9, 1], "nodeName": [0, 1], "nodeValue": [-1, -1],
+                          "parentIndex": [-1, 0], "attributes": [[], []]},
+                "layout": {"nodeIndex": [0, 1, 1], "styles": [[], [-1, -1, -1, -1, 2], [-1, -1, -1, -1, 2]],
+                           "bounds": [[0, 0, 800, 600], [5, 6, 80, 60], [0, 0, 0, 0]]},
+            }],
+        }
+        layout = snapshot["documents"][0]["layout"]
+        for include_empty_row in (True, False):
+            with self.subTest(include_empty_row=include_empty_row):
+                if not include_empty_row:
+                    for values in layout.values():
+                        values.pop()
+                root, _assets, _evidence = lower_dom_snapshot(
+                    snapshot, settled_snapshot=snapshot, screenshot={})
+                properties = root["children"][0]["properties"]
+                self.assertEqual(properties["layout"], {"x": 5, "y": 6, "width": 80, "height": 60})
+                self.assertEqual(properties["paint"]["backgroundGradients"][0]["radiusX"], 0.8)
 
     def test_dom_snapshot_lowers_chrome_boxes_relative_to_parent(self) -> None:
         """Each laid-out node keeps Chrome's box as a parent-relative frame."""

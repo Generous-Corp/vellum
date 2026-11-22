@@ -541,6 +541,31 @@ test('Design produces a receipt for every token slot', () => {
     assert.equal(tree.tokens.filter((receipt) => receipt.path === 'c.fill').length, 1);
 });
 
+test('Design preserves token receipts in layered background gradients', () => {
+    const tree = renderTree({
+        tokens: {
+            'c.layerStop': { $type: 'color', $value: '#f97316' },
+        },
+        root: {
+            id: 'root', kind: 'view', properties: { layout: { width: 80, height: 60 } },
+            children: [{
+                id: 'layered', kind: 'view', children: [],
+                properties: { layout: { width: 80, height: 60 }, paint: {
+                    backgroundGradients: [{
+                        kind: 'linear', angle: 90,
+                        stops: [{ position: 0, color: '{c.layerStop}' },
+                            { position: 1, color: '#ffffff' }],
+                    }],
+                } },
+            }],
+        },
+    });
+    const layered = flatten(tree).find((node) => node.id === 'layered');
+    assert.deepEqual(Object.keys(layered.tokenRefs), ['backgroundGradients.0.stops.0']);
+    assert.equal(layered.style.backgroundGradients[0].stops[0].color, '#f97316');
+    assert.equal(receiptOf(tree, layered, 'backgroundGradients.0.stops.0').path, 'c.layerStop');
+});
+
 test('Design keeps every supported gradient field and refuses unknown ones', () => {
     const gradient = {
         kind: 'two-circle-radial', spread: 'reflect', interpolation: 'oklab',

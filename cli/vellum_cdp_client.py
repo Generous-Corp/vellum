@@ -23,6 +23,14 @@ MAX_DISCOVERY_BYTES = 64 * 1024
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 MAX_SCREENSHOT_BYTES = 16 * 1024 * 1024
 MAX_COMPUTED_STYLES = 128
+CAPTURE_STYLE_NAMES = (
+    "display", "visibility", "color", "font-size", "background-image",
+    "list-style-image", "content", "background-color", "font-family", "font-weight",
+    *(f"border-{side}-{field}" for side in ("top", "right", "bottom", "left")
+      for field in ("width", "style", "color")),
+    *(f"border-{corner}-radius" for corner in
+      ("top-left", "top-right", "bottom-right", "bottom-left")),
+)
 DEFAULT_TIMEOUT = 15.0
 ALLOWED_COMMANDS = {
     "DOM.enable",
@@ -277,10 +285,7 @@ class CdpClient:
         stable_since: float | None = None
         snapshot: dict[str, Any] = {}
         while time.monotonic() < deadline:
-            snapshot = self.capture_dom_snapshot([
-                "display", "visibility", "color", "font-size",
-                "background-image", "list-style-image", "content",
-            ])
+            snapshot = self.capture_dom_snapshot(list(CAPTURE_STYLE_NAMES))
             digest = hashlib.sha256(
                 json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode("utf-8")
             ).hexdigest()
