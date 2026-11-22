@@ -2,13 +2,14 @@ set(_vellum_rmlui_fixtures "${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
 function(vellum_rmlui_add_test name source)
     add_executable(${name} ${source})
+    target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(${name} PRIVATE ${ARGN})
     target_compile_definitions(${name} PRIVATE
         VELLUM_RMLUI_TEST_FIXTURES="${_vellum_rmlui_fixtures}")
 endfunction()
 
 if(TARGET vellum-rmlui-plugin-view)
-    vellum_rmlui_add_test(vellum-rmlui-plugin-view-test plugin_view_test.cpp vellum-rmlui-plugin-view)
+    vellum_rmlui_add_test(vellum-rmlui-plugin-view-test ../plugin_view/tests/plugin_view_test.cpp vellum-rmlui-plugin-view)
     add_test(NAME vellum.rmlui.plugin-view COMMAND vellum-rmlui-plugin-view-test)
 endif()
 

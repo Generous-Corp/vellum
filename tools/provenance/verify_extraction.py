@@ -148,6 +148,9 @@ RENAMED_MIRROR_EXEMPT_PREFIXES: tuple[str, ...] = (
     # matches the folder and everything below it, never a sibling whose name
     # merely starts the same way.
     "authoring/design_pipeline/",
+    # The RmlUi PluginView entry point wraps the mirrored view unit, so it
+    # names that unit's headers and namespace.
+    "rmlui/plugin_view/",
 )
 # The framework units' behavior tests include and call the units by their
 # names, so the renamed-mirror rule does not read them. A test only consumes:

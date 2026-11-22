@@ -202,7 +202,7 @@ set(_vellum_rmlui_install_targets
 # The mirror unit lets PluginView use the platform host's native child window,
 # paint surface, and event dispatch.
 if(TARGET Vellum::MirrorView_core)
-    add_library(vellum-rmlui-plugin-view STATIC src/plugin_view.cpp)
+    add_library(vellum-rmlui-plugin-view STATIC plugin_view/plugin_view.cpp)
     add_library(VellumRmlUi::PluginView ALIAS vellum-rmlui-plugin-view)
     target_compile_features(vellum-rmlui-plugin-view PUBLIC cxx_std_20)
     set_target_properties(vellum-rmlui-plugin-view PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -210,6 +210,7 @@ if(TARGET Vellum::MirrorView_core)
     # one list, the same one the framework tests use.
     target_include_directories(vellum-rmlui-plugin-view PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/plugin_view/include>
         "$<BUILD_INTERFACE:${_vellum_mirror_public_includes}>"
         $<BUILD_INTERFACE:${VELLUM_MIRROR_BUILD_INFO_DIR}>
         $<BUILD_INTERFACE:${VELLUM_MIRROR_CHOC_ROOT}>)
@@ -402,8 +403,12 @@ if(VELLUM_RMLUI_INSTALL)
     install(DIRECTORY include/vellum
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
         COMPONENT VellumRmlUi
-        PATTERN plugin_view.hpp EXCLUDE
         ${_vellum_rmlui_native_header_excludes})
+    if(TARGET vellum-rmlui-plugin-view)
+        install(FILES plugin_view/include/vellum/rmlui/plugin_view.hpp
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/vellum/rmlui
+            COMPONENT VellumRmlUi)
+    endif()
     install(FILES assets/midi-learn.rcss assets/midi-panic.rcss
         DESTINATION ${CMAKE_INSTALL_DATADIR}/VellumRmlUi
         COMPONENT VellumRmlUi)
