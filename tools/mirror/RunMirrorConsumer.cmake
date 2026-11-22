@@ -210,7 +210,6 @@ if(DEFINED ENV{VELLUM_MIRROR_LIVE_GPU})
     endif()
 endif()
 
-set(_provider "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-skia-dawn-provider.dylib")
 find_program(_nm nm REQUIRED)
 set(_provider_census "${Python3_EXECUTABLE}" -I
     "${VELLUM_SOURCE_DIR}/tools/mirror/provider_symbol_census.py"

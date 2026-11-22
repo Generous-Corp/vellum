@@ -398,5 +398,15 @@ class RuntimeIdentityRevisionCheckTest(unittest.TestCase):
                 self.assertIn("REJECTED" if rejected else "ACCEPTED", out.stderr + out.stdout)
 
 
+class ConsumerProviderPathTest(unittest.TestCase):
+    """RunMirrorConsumer must keep the provider path from runtime-images.json."""
+
+    def test_provider_path_is_never_reset_to_an_unsuffixed_name(self) -> None:
+        text = (HERE / "RunMirrorConsumer.cmake").read_text()
+        assigns = re.findall(r"^\s*set\(_provider\s+\"[^\n]*$", text, re.M)
+        self.assertEqual(assigns, ['set(_provider "${_prefix}/${_provider_relative}")'])
+        self.assertNotIn("libvellum-skia-dawn-provider.dylib", text)
+
+
 if __name__ == "__main__":
     unittest.main()
