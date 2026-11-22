@@ -35,6 +35,7 @@ __ZTSN7httplib*
 __ZZN7httplib*
 __ZZNK7httplib*
 __ZGVZN7httplib*
+__ZGVZNK7httplib*
 __ZGVN7httplib*
 __ZN5woff2*
 __ZNK5woff2*
@@ -54,6 +55,30 @@ __ZZN18pulp_bundled_fonts*
 __ZZNK18pulp_bundled_fonts*
 __ZGVZN18pulp_bundled_fonts*
 __ZGVN18pulp_bundled_fonts*
+
+# choc's file watcher and QuickJS helpers are compiled into the provider.
+__ZN4choc*
+__ZNK4choc*
+__ZTVN4choc*
+__ZTIN4choc*
+__ZTSN4choc*
+__ZZN4choc*
+__ZZNK4choc*
+__ZGVZN4choc*
+__ZGVZNK4choc*
+__ZGVN4choc*
+
+# The provider also carries one Skia Graphite Dawn callback.
+__ZN5skgpu8graphite*
+__ZNK5skgpu8graphite*
+__ZTVN5skgpu8graphite*
+__ZTIN5skgpu8graphite*
+__ZTSN5skgpu8graphite*
+__ZZN5skgpu8graphite*
+__ZZNK5skgpu8graphite*
+__ZGVZN5skgpu8graphite*
+__ZGVZNK5skgpu8graphite*
+__ZGVN5skgpu8graphite*
 
 # Brotli, nanosvg and ICU data, which the GPU provider carries without a recipe
 # archive.
