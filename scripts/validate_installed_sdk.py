@@ -73,8 +73,13 @@ def validate_installed_source_imports(prefix: Path, root: Path, env: dict[str, s
         project = root / f"{lane}-project"
         command(root, "create", f"{lane} sample", "--directory", str(project), status="created")
         source = root / filename
-        source.write_text(fixture, encoding="utf-8")
-        command(project, "import", lane, str(source), status="imported")
+        initial = fixture
+        diagnostic = ""
+        if lane == "designmd":
+            initial = fixture.replace("colors:", "unknown-setting: true\ncolors:")
+            diagnostic = "designmd.unknown-key"
+        source.write_text(initial, encoding="utf-8")
+        command(project, "import", lane, str(source), status="imported", diagnostic=diagnostic)
         materialized = project / "ui/generated/main.materialized.json"
         tokens = project / "tokens/imported/main.tokens.json"
         lock = project / "design/import.lock.json"
@@ -90,8 +95,16 @@ def validate_installed_source_imports(prefix: Path, root: Path, env: dict[str, s
                 raise ValidationError("Pencil import did not preserve the frame and its label")
         else:
             values = json.loads(tokens.read_text(encoding="utf-8"))
-            if materialized.exists() or values["main.primary"]["$value"] != "#123456":
+            if (materialized.exists() or values["main.primary"]["$value"] != "#123456"
+                    or "main.unknown-setting" in values):
                 raise ValidationError("DESIGN.md import did not produce token-only output")
+            run([
+                sys.executable, "-B", "-c",
+                "from pathlib import Path; import sys; sys.path.insert(0, sys.argv[1]); "
+                "from vellum_manifest import imported_materialized_design; "
+                "assert imported_materialized_design(Path(sys.argv[2])) is None",
+                str(prefix / "lib/vellum"), str(project),
+            ], cwd=project, env=env)
         command(project, "design", "check", status="design_clean")
         command(project, "reimport", "--source", str(source), status="reimport_unchanged")
         before = lock.read_bytes()
@@ -100,11 +113,16 @@ def validate_installed_source_imports(prefix: Path, root: Path, env: dict[str, s
         if lock.read_bytes() != before:
             raise ValidationError(f"Malformed {lane} input advanced the import lock")
         if lane == "designmd":
-            source.write_text(fixture.replace("colors:", "unknown-setting: true\ncolors:"), encoding="utf-8")
-            command(project, "reimport", "--source", str(source), status="reimported",
-                    diagnostic="designmd.unknown-key")
-            if "unknown-setting" in tokens.read_text(encoding="utf-8"):
-                raise ValidationError("DESIGN.md imported an unknown key as a token")
+            source.write_text(fixture.replace("#123456", "{colors.missing}"), encoding="utf-8")
+            command(project, "reimport", "--source", str(source), status="invalid_designmd",
+                    diagnostic="designmd.broken-ref")
+            if lock.read_bytes() != before:
+                raise ValidationError("An unresolved DESIGN.md token advanced the import lock")
+        source.write_text(fixture.replace("#123456", "#654321"), encoding="utf-8")
+        command(project, "reimport", "--source", str(source), status="reimported")
+        command(project, "design", "check", status="design_clean")
+        if lock.read_bytes() == before:
+            raise ValidationError(f"Changed {lane} input did not advance the import lock")
 
 
 def installed_payload_name(relative: str) -> str:

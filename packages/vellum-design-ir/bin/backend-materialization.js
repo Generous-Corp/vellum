@@ -27,7 +27,7 @@ export function generatedFiles(context) {
         sourceType,
     } = context;
     const files = new Map();
-    const componentDefinitions = flattenComponents(document);
+    const tokenOnly = sourceType === 'designmd';
     const importGraph = {
         order: [sourceKey],
         schema: IMPORT_GRAPH_SCHEMA,
@@ -60,9 +60,11 @@ export function generatedFiles(context) {
         files: {
             aggregateDesignIr: relative(project, paths.aggregateIr),
             assetManifest: relative(project, paths.assetManifest),
-            generatedComponents: relative(project, paths.generatedComponents),
-            materializedUi: relative(project, paths.materializedUi),
-            nodeIds: relative(project, paths.nodeIds),
+            ...(tokenOnly ? {} : {
+                generatedComponents: relative(project, paths.generatedComponents),
+                materializedUi: relative(project, paths.materializedUi),
+                nodeIds: relative(project, paths.nodeIds),
+            }),
             normalizedDesignIr: relative(project, paths.sourceIr),
             overlay: relative(project, paths.overlay),
             snapshot: relative(project, paths.snapshotSource),
@@ -93,13 +95,6 @@ export function generatedFiles(context) {
     files.set(paths.importLock, jsonBytes(lock));
     files.set(paths.sourceIr, jsonBytes(document));
     files.set(paths.aggregateIr, jsonBytes(document));
-    files.set(paths.generatedComponents, jsonBytes({
-        components: componentDefinitions,
-        revision: document.source.revision,
-        schema: GENERATED_COMPONENT_SCHEMA,
-        sourceKey,
-    }));
-    files.set(paths.nodeIds, Buffer.from(nodeIdsTypescript(componentDefinitions), 'utf8'));
     files.set(paths.importedTokens, jsonBytes(document.tokens));
     files.set(paths.resolvedTokenLayers, jsonBytes({
         layers: applied.tokenLayers,
@@ -113,13 +108,23 @@ export function generatedFiles(context) {
         schema: ASSET_MANIFEST_SCHEMA,
         sourceKey,
     }));
-    files.set(paths.materializedUi, jsonBytes(applied.materialized));
-    files.set(paths.generatedBindings, jsonBytes({
-        bindings: applied.resolvedBindings,
-        revision: document.source.revision,
-        schema: GENERATED_BINDINGS_SCHEMA,
-        sourceKey,
-    }));
+    if (!tokenOnly) {
+        const componentDefinitions = flattenComponents(document);
+        files.set(paths.generatedComponents, jsonBytes({
+            components: componentDefinitions,
+            revision: document.source.revision,
+            schema: GENERATED_COMPONENT_SCHEMA,
+            sourceKey,
+        }));
+        files.set(paths.nodeIds, Buffer.from(nodeIdsTypescript(componentDefinitions), 'utf8'));
+        files.set(paths.materializedUi, jsonBytes(applied.materialized));
+        files.set(paths.generatedBindings, jsonBytes({
+            bindings: applied.resolvedBindings,
+            revision: document.source.revision,
+            schema: GENERATED_BINDINGS_SCHEMA,
+            sourceKey,
+        }));
+    }
     files.set(paths.importReport, jsonBytes(importReport));
     files.set(paths.snapshotProvenance, jsonBytes(snapshotProvenance({
         assets: assets.manifest,
