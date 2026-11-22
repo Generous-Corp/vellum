@@ -62,6 +62,7 @@ VellumRenderer::VellumRenderer(graphics::SkiaDawnSurface& surface, std::uint32_t
 void VellumRenderer::collect_expired_textures() {
     if (texture_grace_active_ && clock_() >= texture_expiry_) {
         textures_.clear();
+        scene_ = {};
         texture_grace_active_ = false;
     }
 }
@@ -87,6 +88,7 @@ void VellumRenderer::on_idle() { collect_expired_textures(); }
 
 void VellumRenderer::on_close() {
     textures_.clear();
+    scene_ = {};
     texture_grace_active_ = false;
 }
 
