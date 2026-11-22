@@ -1048,6 +1048,11 @@ def renderer_pin_errors(
         actual = {key: pin.get(key) for key in ("skia_branch", "skia_commit", "built_dawn", "skia_builder_ref")}
         actual.update(archive_url=asset.get("url"), archive_sha256=asset.get("sha256"))
         mismatched = sorted(key for key in expected if actual[key] != expected[key])
+        historical_assets = renderer_lock.get("historical_skia_assets", [])
+        if ("archive_sha256" in mismatched and actual["archive_sha256"] in historical_assets):
+            mismatched.remove("archive_sha256")
+            if "archive_url" in mismatched:
+                mismatched.remove("archive_url")
         exception = renderer_lock.get("builder_change_exception")
         if "skia_builder_ref" in mismatched and isinstance(exception, dict):
             if (actual["skia_builder_ref"] == exception.get("from")

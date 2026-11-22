@@ -3579,6 +3579,29 @@ class RendererPinTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertTrue(rows[0]["matches_lock"])
 
+    def test_reexported_receipt_with_recorded_historical_asset_passes(self) -> None:
+        renderer_path = self.root / "gpu-runtime/renderer-lock.json"
+        renderer = json.loads(renderer_path.read_text())
+        renderer["historical_skia_assets"] = ["dca73c0eee5b0f6d129fe357d0754f7165c6b436051e0de947aeedd3e1bde250"]
+        renderer["builder_change_exception"] = {
+            "from": "312f05e24a5d5a45d4a3e70ca70ff3ccff1b4d97",
+            "to": renderer["builder"]["commit"],
+            "skia": renderer["sources"]["skia"],
+            "dawn": renderer["sources"]["dawn"],
+        }
+        renderer_path.write_text(json.dumps(renderer))
+        pin = json.loads(json.dumps(self.matching_pin))
+        pin["skia_builder_ref"] = "312f05e24a5d5a45d4a3e70ca70ff3ccff1b4d97"
+        pin["release_assets"]["mac-universal"] = {
+            "url": "https://github.com/danielraffel/skia-builder/releases/download/chrome/m158/"
+                   "skia-build-mac-universal-gpu-release.zip",
+            "sha256": "dca73c0eee5b0f6d129fe357d0754f7165c6b436051e0de947aeedd3e1bde250",
+        }
+        receipt = self.receipt(self.pulp_commit(pin))
+        errors, rows = verify_extraction.renderer_pin_errors(self.root, self.pulp, [receipt])
+        self.assertEqual(errors, [])
+        self.assertTrue(rows[0]["matches_lock"])
+
     def test_an_unrecorded_builder_change_is_refused(self) -> None:
         pin = json.loads(json.dumps(self.matching_pin))
         pin["skia_builder_ref"] = "9" * 40
