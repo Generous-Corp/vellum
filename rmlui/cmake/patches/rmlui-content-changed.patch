@@ -1,0 +1,194 @@
+diff --git a/Include/RmlUi/Core/Context.h b/Include/RmlUi/Core/Context.h
+index bf73811a..a9a31093 100644
+--- a/Include/RmlUi/Core/Context.h
++++ b/Include/RmlUi/Core/Context.h
+@@ -5,6 +5,8 @@
+ #include "ScriptInterface.h"
+ #include "ScrollTypes.h"
+ #include "Traits.h"
++
++#include <functional>
+ #include "Types.h"
+ 
+ namespace Rml {
+@@ -53,6 +55,13 @@ public:
+ 	/// @return The current density-independent pixel ratio of the context.
+ 	float GetDensityIndependentPixelRatio() const;
+ 
++	using ContentChangedCallback = std::function<void()>;
++
++	/// Sets a callback invoked when document content becomes dirty.
++	void SetContentChangedCallback(ContentChangedCallback callback);
++	/// Notifies the context owner that document content changed.
++	void NotifyContentChanged();
++
+ 	/// Updates all elements in the context's documents.
+ 	/// This must be called before Context::Render, but after any elements have been changed, added, or removed.
+ 	bool Update();
+@@ -390,6 +399,8 @@ private:
+ 	// See RequestNextUpdate() and NextUpdateRequested() for details.
+ 	double next_update_timeout = 0;
+ 
++	ContentChangedCallback content_changed_callback;
++
+ 	// Internal callback for when an element is detached or removed from the hierarchy.
+ 	void OnElementDetach(Element* element);
+ 	// Internal callback for when a new element gains focus.
+diff --git a/Source/Core/Context.cpp b/Source/Core/Context.cpp
+index 6af67fb5..cdc86c5f 100644
+--- a/Source/Core/Context.cpp
++++ b/Source/Core/Context.cpp
+@@ -20,6 +20,7 @@
+ #include <clocale>
+ #include <iterator>
+ #include <limits>
++#include <utility>
+ 
+ namespace Rml {
+ 
+@@ -126,6 +127,17 @@ const String& Context::GetName() const
+ 	return name;
+ }
+ 
++void Context::SetContentChangedCallback(ContentChangedCallback callback)
++{
++	content_changed_callback = std::move(callback);
++}
++
++void Context::NotifyContentChanged()
++{
++	if (content_changed_callback)
++		content_changed_callback();
++}
++
+ void Context::SetDimensions(const Vector2i _dimensions)
+ {
+ 	if (dimensions != _dimensions)
+@@ -160,6 +172,7 @@ void Context::SetDensityIndependentPixelRatio(float dp_ratio)
+ 	if (density_independent_pixel_ratio != dp_ratio)
+ 	{
+ 		density_independent_pixel_ratio = dp_ratio;
++		NotifyContentChanged();
+ 
+ 		for (int i = 0; i < root->GetNumChildren(true); ++i)
+ 		{
+@@ -526,6 +539,7 @@ void Context::RemoveEventListener(const String& event, EventListener* listener,
+ 
+ bool Context::ProcessKeyDown(Input::KeyIdentifier key_identifier, int key_modifier_state)
+ {
++	NotifyContentChanged();
+ 	// Generate the parameters for the key event.
+ 	Dictionary parameters;
+ 	GenerateKeyEventParameters(parameters, key_identifier);
+@@ -539,6 +553,7 @@ bool Context::ProcessKeyDown(Input::KeyIdentifier key_identifier, int key_modifi
+ 
+ bool Context::ProcessKeyUp(Input::KeyIdentifier key_identifier, int key_modifier_state)
+ {
++	NotifyContentChanged();
+ 	// Generate the parameters for the key event.
+ 	Dictionary parameters;
+ 	GenerateKeyEventParameters(parameters, key_identifier);
+@@ -552,6 +567,7 @@ bool Context::ProcessKeyUp(Input::KeyIdentifier key_identifier, int key_modifier
+ 
+ bool Context::ProcessTextInput(char character)
+ {
++	NotifyContentChanged();
+ 	// Only the standard ASCII character set is a valid subset of UTF-8.
+ 	if (static_cast<unsigned char>(character) > 127)
+ 		return false;
+@@ -560,6 +576,7 @@ bool Context::ProcessTextInput(char character)
+ 
+ bool Context::ProcessTextInput(Character character)
+ {
++	NotifyContentChanged();
+ 	// Generate the parameters for the key event.
+ 	String text = StringUtilities::ToUTF8(character);
+ 	return ProcessTextInput(text);
+@@ -567,6 +584,7 @@ bool Context::ProcessTextInput(Character character)
+ 
+ bool Context::ProcessTextInput(const String& string)
+ {
++	NotifyContentChanged();
+ 	Element* target = (focus ? focus : root.get());
+ 
+ 	Dictionary parameters;
+@@ -579,6 +597,7 @@ bool Context::ProcessTextInput(const String& string)
+ 
+ bool Context::ProcessMouseMove(int x, int y, int key_modifier_state)
+ {
++	NotifyContentChanged();
+ 	// Check whether the mouse moved since the last event came through.
+ 	Vector2i old_mouse_position = mouse_position;
+ 	mouse_position = {x, y};
+@@ -620,6 +639,7 @@ static Element* FindFocusElement(Element* element)
+ 
+ bool Context::ProcessMouseButtonDown(int button_index, int key_modifier_state)
+ {
++	NotifyContentChanged();
+ 	Dictionary parameters;
+ 	GenerateMouseEventParameters(parameters, button_index);
+ 	GenerateKeyModifierEventParameters(parameters, key_modifier_state);
+@@ -724,6 +744,7 @@ bool Context::ProcessMouseButtonDown(int button_index, int key_modifier_state)
+ 
+ bool Context::ProcessMouseButtonUp(int button_index, int key_modifier_state)
+ {
++	NotifyContentChanged();
+ 	Dictionary parameters;
+ 	GenerateMouseEventParameters(parameters, button_index);
+ 	GenerateKeyModifierEventParameters(parameters, key_modifier_state);
+@@ -798,11 +819,13 @@ bool Context::ProcessMouseButtonUp(int button_index, int key_modifier_state)
+ 
+ bool Context::ProcessMouseWheel(float wheel_delta, int key_modifier_state)
+ {
++	NotifyContentChanged();
+ 	return ProcessMouseWheel(Vector2f{0.f, wheel_delta}, key_modifier_state);
+ }
+ 
+ bool Context::ProcessMouseWheel(Vector2f wheel_delta, int key_modifier_state)
+ {
++	NotifyContentChanged();
+ 	if (scroll_controller->GetMode() == ScrollController::Mode::Autoscroll)
+ 	{
+ 		scroll_controller->Reset();
+@@ -838,6 +861,7 @@ bool Context::ProcessMouseWheel(Vector2f wheel_delta, int key_modifier_state)
+ 
+ bool Context::ProcessMouseLeave()
+ {
++	NotifyContentChanged();
+ 	mouse_active = false;
+ 
+ 	// Update the hover chain. Now that 'mouse_active' is disabled this will remove the hover state from all elements.
+diff --git a/Source/Core/Element.cpp b/Source/Core/Element.cpp
+index fa087f95..9baebcae 100644
+--- a/Source/Core/Element.cpp
++++ b/Source/Core/Element.cpp
+@@ -1985,7 +1985,11 @@ void Element::OnChildRemove(Element* /*child*/) {}
+ void Element::DirtyLayout()
+ {
+ 	if (Element* document = GetOwnerDocument())
++	{
+ 		document->DirtyLayout();
++		if (Context* context = GetContext())
++			context->NotifyContentChanged();
++	}
+ }
+ 
+ bool Element::IsLayoutDirty()
+@@ -2492,6 +2496,8 @@ void Element::DirtyStackingContext()
+ {
+ 	if (Element* stacking_context_parent = ClosestStackingContextContainer())
+ 		stacking_context_parent->stacking_context_dirty = true;
++	if (Context* context = GetContext())
++		context->NotifyContentChanged();
+ }
+ 
+ Element* Element::ClosestStackingContextContainer()
+@@ -2517,6 +2523,8 @@ void Element::DirtyDefinition(DirtyNodes dirty_nodes)
+ 			parent->dirty_child_definitions = true;
+ 		break;
+ 	}
++	if (Context* context = GetContext())
++		context->NotifyContentChanged();
+ }
+ 
+ void Element::UpdateDefinition()
