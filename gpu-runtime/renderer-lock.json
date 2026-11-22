@@ -36,5 +36,8 @@
       }
     }
   },
-  "release_tag": "chrome/m158-attested.1"
+  "release_tag": "chrome/m158-attested.1",
+  "historical_skia_assets": [
+    "dca73c0eee5b0f6d129fe357d0754f7165c6b436051e0de947aeedd3e1bde250"
+  ]
 }

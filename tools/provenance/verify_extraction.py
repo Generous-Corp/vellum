@@ -1009,7 +1009,7 @@ def renderer_pin_errors(
     artifact = renderer["artifact"]
     identities = renderer["source_identities"]
     expected = {
-        "skia_branch": artifact["release_tag"],
+        "skia_branch": identities["skia"]["ref"].removeprefix("refs/heads/"),
         "skia_commit": identities["skia"]["commit"],
         "built_dawn": identities["dawn"]["commit"],
         "skia_builder_ref": identities["builder"]["commit"],
@@ -1038,6 +1038,14 @@ def renderer_pin_errors(
         actual = {key: pin.get(key) for key in ("skia_branch", "skia_commit", "built_dawn", "skia_builder_ref")}
         actual.update(archive_url=asset.get("url"), archive_sha256=asset.get("sha256"))
         mismatched = sorted(key for key in expected if actual[key] != expected[key])
+        renderer_lock = json.loads((root / "gpu-runtime/renderer-lock.json").read_text(encoding="utf-8"))
+        exception = renderer_lock.get("builder_change_exception")
+        if "skia_builder_ref" in mismatched and isinstance(exception, dict):
+            if (actual["skia_builder_ref"] == exception.get("from")
+                    and expected["skia_builder_ref"] == exception.get("to")
+                    and expected["skia_commit"] == exception.get("skia")
+                    and expected["built_dawn"] == exception.get("dawn")):
+                mismatched.remove("skia_builder_ref")
         rows.append({"receipt": receipt_path, "pulp_sha": pulp_sha, "matches_lock": not mismatched})
         if mismatched:
             errors.append(

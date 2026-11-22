@@ -937,6 +937,19 @@ def prepare_dependencies(deps: dict[str, dict[str, Any]], deps_dir: Path, skia_d
     return roots
 
 
+def recorded_historical_skia_assets(repo: Path) -> set[str]:
+    """Read historical renderer assets from the independently reviewed lock."""
+    lock_path = repo / "gpu-runtime/renderer-lock.json"
+    if not lock_path.is_file():
+        return set()
+    lock = load_json(lock_path)
+    assets = lock.get("historical_skia_assets", [])
+    if not isinstance(assets, list) or any(not isinstance(asset, str) or not SHA256.fullmatch(asset)
+                                           for asset in assets):
+        raise PlanError(f"{lock_path}: historical_skia_assets must contain SHA-256 digests")
+    return set(assets)
+
+
 def render_build_info(template: str, receipt: dict[str, Any], version: str, config: str, timestamp: str) -> str:
     stamp = f"{version} ({config}, {receipt['pulp_sha']}, {timestamp})"
     values = {
@@ -1422,11 +1435,7 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
     closure_pinned = set(deps)
     declared_deps = declared_dependencies(declared, units, closure_pinned)
     all_deps = {**deps, **declared_deps}
-    historical_skia_assets = set()
-    if transferred(repo) and isinstance(all_deps.get("skia"), dict):
-        historical = all_deps["skia"].get("asset_sha256")
-        if isinstance(historical, str):
-            historical_skia_assets.add(historical)
+    historical_skia_assets = recorded_historical_skia_assets(repo) if transferred(repo) else set()
     roots = prepare_dependencies(all_deps, deps_dir, skia_dir, skia_asset_sha256, repo,
                                  historical_skia_assets)
     generated = prepare_generated(repo, build_receipt, units, generated_dir)
