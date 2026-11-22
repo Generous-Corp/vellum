@@ -41,6 +41,72 @@ INSTALLED_PAYLOAD_ROOT = "lib/vellum-installs/"
 ACTIVE_PAYLOAD_LINK = "lib/vellum/"
 
 
+def validate_installed_source_imports(prefix: Path, root: Path, env: dict[str, str], *, only: str | None = None) -> None:
+    vellum = str(prefix / "bin/vellum")
+
+    def command(project: Path, *args: str, status: str, diagnostic: str = "") -> dict:
+        result = subprocess.run(
+            [vellum, *args, "--json"], cwd=project, env=env,
+            text=True, capture_output=True, check=False,
+        )
+        payload = json.loads(result.stdout)
+        if payload.get("status") != status or (result.returncode == 0) != payload.get("ok"):
+            raise ValidationError(f"Expected {status}, got {result.stdout}{result.stderr}")
+        if diagnostic and diagnostic not in {item["code"] for item in payload["diagnostics"]}:
+            raise ValidationError(f"Expected diagnostic {diagnostic}, got {result.stdout}")
+        return payload
+
+    for lane, filename, fixture, malformed in (
+        ("pencil", "panel.pen", json.dumps({
+            "version": "2.1",
+            "children": [{
+                "type": "frame", "id": "panel", "name": "Sample Panel",
+                "width": 160, "height": 100, "fill": "#123456",
+                "children": [{"type": "text", "id": "caption", "content": "Sample Label"}],
+            }],
+        }), "{"),
+        ("designmd", "DESIGN.md", "---\ncolors:\n  primary: '#123456'\n---\n# Sample System\n",
+         "---\ncolors: [\n---\n"),
+    ):
+        if only is not None and lane != only:
+            continue
+        project = root / f"{lane}-project"
+        command(root, "create", f"{lane} sample", "--directory", str(project), status="created")
+        source = root / filename
+        source.write_text(fixture, encoding="utf-8")
+        command(project, "import", lane, str(source), status="imported")
+        materialized = project / "ui/generated/main.materialized.json"
+        tokens = project / "tokens/imported/main.tokens.json"
+        lock = project / "design/import.lock.json"
+        if lane == "pencil":
+            document = json.loads(materialized.read_text(encoding="utf-8"))
+            panel = document["root"]["children"][0]
+            if (
+                panel["name"] != "Sample Panel"
+                or panel["children"][0]["text"] != "Sample Label"
+                or panel["properties"]["layout"]["width"] != 160
+                or panel["properties"]["paint"]["backgroundColor"] != "#123456"
+            ):
+                raise ValidationError("Pencil import did not preserve the frame and its label")
+        else:
+            values = json.loads(tokens.read_text(encoding="utf-8"))
+            if materialized.exists() or values["main.primary"]["$value"] != "#123456":
+                raise ValidationError("DESIGN.md import did not produce token-only output")
+        command(project, "design", "check", status="design_clean")
+        command(project, "reimport", "--source", str(source), status="reimport_unchanged")
+        before = lock.read_bytes()
+        source.write_text(malformed, encoding="utf-8")
+        command(project, "reimport", "--source", str(source), status=f"invalid_{lane}")
+        if lock.read_bytes() != before:
+            raise ValidationError(f"Malformed {lane} input advanced the import lock")
+        if lane == "designmd":
+            source.write_text(fixture.replace("colors:", "unknown-setting: true\ncolors:"), encoding="utf-8")
+            command(project, "reimport", "--source", str(source), status="reimported",
+                    diagnostic="designmd.unknown-key")
+            if "unknown-setting" in tokens.read_text(encoding="utf-8"):
+                raise ValidationError("DESIGN.md imported an unknown key as a token")
+
+
 def installed_payload_name(relative: str) -> str:
     """The archive-payload name of an installed file.
 
@@ -741,6 +807,7 @@ def validate(
         native_package_produced = False
         custom_component_produced = False
         if native_enabled:
+            validate_installed_source_imports(prefix, root, journey_env)
             for name, arguments in {
                 "build": ["build"],
                 "run": ["run", "--self-test", "--no-build"],
