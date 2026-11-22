@@ -103,6 +103,10 @@
         ]
       },
       {
+        "script": "scripts/check_react_runtime.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/template_guard.py"
       },
       {
@@ -354,6 +358,10 @@
         "script": "authoring/adapters/illustrator/test_illustrator_to_svg.py"
       },
       {
+        "script": "scripts/check_react_runtime.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/template_guard.py"
       },
       {
@@ -418,8 +426,10 @@
     "tools/mirror/consumer/threejs-demo/asset_failure_test.cmake": "cmake:tools/mirror/consumer/threejs-demo/CMakeLists.txt",
     "tools/mirror/consumer/threejs-demo/texture_capture_test.py": "cmake:tools/mirror/consumer/threejs-demo/capture_test.cmake",
     "tools/mirror/consumer/threejs-demo/texture_capture_negative_test.cmake": "cmake:tools/mirror/consumer/threejs-demo/CMakeLists.txt",
+    "tools/mirror/provider_symbol_census.py": "cmake:tools/mirror/RunMirrorConsumer.cmake",
     "tools/provenance/test_collect_release_evidence.py": "workflow:provenance.yml",
     "tools/provenance/test_deadline_warning.py": "workflow:provenance.yml",
+    "tools/provenance/test_deadline_warning_gate.py": "workflow:provenance.yml",
     "tools/provenance/test_finalize_authority_reconciliation.py": "workflow:provenance.yml",
     "tools/provenance/test_observatory.py": "workflow:provenance.yml",
     "tools/provenance/test_observatory_mirror_import.py": "workflow:provenance.yml",

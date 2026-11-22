@@ -5,6 +5,17 @@ function(vellum_rmlui_add_test name source)
     target_link_libraries(${name} PRIVATE ${ARGN})
     target_compile_definitions(${name} PRIVATE
         VELLUM_RMLUI_TEST_FIXTURES="${_vellum_rmlui_fixtures}")
+    # Windows has no rpath: a test that calls into a shared library (such as
+    # vellum-rmlui-core.dll) fails to start with STATUS_DLL_NOT_FOUND unless
+    # the DLL sits beside the executable. The executable itself is passed too
+    # so the copy never receives an empty list.
+    if(WIN32)
+        add_custom_command(TARGET ${name} POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "$<TARGET_RUNTIME_DLLS:${name}>" "$<TARGET_FILE:${name}>"
+                "$<TARGET_FILE_DIR:${name}>"
+            COMMAND_EXPAND_LISTS)
+    endif()
 endfunction()
 
 vellum_rmlui_add_test(vellum-rmlui-backend-test backend_test.cpp VellumRmlUi::Core)

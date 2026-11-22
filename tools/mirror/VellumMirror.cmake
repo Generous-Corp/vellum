@@ -382,6 +382,16 @@ if(TARGET pulp-view-core AND APPLE)
         "${PROJECT_SOURCE_DIR}/framework/core/view/include")
 endif()
 
+if(TARGET pulp-view-core AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(X11 REQUIRED)
+    target_sources(pulp-view-core PRIVATE
+        "${PROJECT_SOURCE_DIR}/framework/core/view/src/plugin_view_host.cpp"
+        "${PROJECT_SOURCE_DIR}/framework/core/view/platform/linux/gpu_plugin_editor_host_x11.cpp")
+    target_include_directories(pulp-view-core PRIVATE
+        "${PROJECT_SOURCE_DIR}/framework/core/view/include")
+    target_link_libraries(pulp-view-core PRIVATE X11::X11)
+endif()
+
 # Windows owns the HWND child editor host. Its Dawn surface is created after
 # attachment, when the child has its final parent and DPI context.
 if(TARGET pulp-view-core AND WIN32)
@@ -530,15 +540,18 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
                 list(APPEND _provider_unit_links "${_provider_link}")
             endif()
         endforeach()
+        # gpu-runtime-device-provider is the single provider-owned device
+        # archive. A closure may also name the hidden gpu-runtime-device
+        # target; linking both creates duplicate Dawn/device definitions and
+        # leaves provider consumers with undefined ABI symbols. The provider
+        # target supplies the one archive directly.
+        list(FILTER _provider_whole EXCLUDE REGEX "^gpu-runtime-device$")
+        list(FILTER _provider_unit_links EXCLUDE REGEX "^gpu-runtime-device$")
+        list(FILTER _third_party EXCLUDE REGEX "^gpu-runtime-device$")
         list(REMOVE_DUPLICATES _provider_whole)
         list(REMOVE_DUPLICATES _provider_unit_links)
         target_link_libraries(vellum-skia-dawn-provider PRIVATE
             "$<LINK_LIBRARY:WHOLE_ARCHIVE,${_provider_whole}>")
-        target_link_options(vellum-skia-dawn-provider PRIVATE
-            "LINKER:-unexported_symbols_list,${VELLUM_MIRROR_UNEXPORTS}")
-        set_property(TARGET vellum-skia-dawn-provider APPEND PROPERTY LINK_DEPENDS
-            "${VELLUM_MIRROR_UNEXPORTS}")
-        add_dependencies(vellum-skia-dawn-provider vellum-mirror-third-party-unexports)
         if(_provider_unit_links)
             target_link_libraries(vellum-skia-dawn-provider PRIVATE
                 ${_provider_unit_links})

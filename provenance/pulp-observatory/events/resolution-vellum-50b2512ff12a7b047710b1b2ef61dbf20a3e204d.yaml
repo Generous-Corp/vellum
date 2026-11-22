@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-50b2512ff12a7b047710b1b2ef61dbf20a3e204d",
+  "kind": "resolution",
+  "created_at": "2026-11-22T09:55:00Z",
+  "resolves": "vellum-50b2512ff12a7b047710b1b2ef61dbf20a3e204d",
+  "disposition": "port-required",
+  "rationale": "Source commit 50b2512ff12a7b047710b1b2ef61dbf20a3e204d changes packages/vellum-design-ir/src/fig-file/container.mjs, packages/vellum-design-ir/test/fig-decoder.test.js; cumulative decompression cap is absent from Pulp and is tracked by pulp#12758.",
+  "owner": "@danielraffel",
+  "linked_commits": [
+    "50b2512ff12a7b047710b1b2ef61dbf20a3e204d"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/issues/12758"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}

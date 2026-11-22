@@ -3,3 +3,5 @@
 # line-ending conversion on checkout, which Git for Windows does by default,
 # makes a Windows configure refuse its own sources.
 * -text
+
+fixtures/canvas/pulp-raster-parity.pam binary

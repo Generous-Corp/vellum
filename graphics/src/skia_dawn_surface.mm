@@ -580,6 +580,24 @@ bool draw_rectangle(SkCanvas& canvas, const PaintCommand& command, float opacity
             return false;
         }
     }
+    if (command.border_width > 0.0F && command.border_color.alpha > 0.0F) {
+        // A CSS border lies inside the box, so the stroke is centred half a
+        // width in from each edge and cannot exceed the box.
+        const float width = std::min(command.border_width,
+                                     std::min(rect.width(), rect.height()) * 0.5F);
+        const float inset = width * 0.5F;
+        const auto inner = rect.makeInset(inset, inset);
+        SkPaint border;
+        border.setAntiAlias(true);
+        border.setStyle(SkPaint::kStroke_Style);
+        border.setStrokeWidth(width);
+        border.setColor4f(sk_color(command.border_color, opacity));
+        if (is_rounded(command.corner_radii)) {
+            canvas.drawRRect(rounded_rect(inner, command.corner_radii, -inset), border);
+        } else {
+            canvas.drawRect(inner, border);
+        }
+    }
     return true;
 }
 
@@ -590,6 +608,7 @@ bool batchable_rectangle(const PaintCommand& command, float scale) {
         !is_identity(command.transform) || command.opacity != 1.0F ||
         command.fill.alpha != 1.0F || !command.fill_gradients.empty() ||
         !command.box_shadows.empty() || is_rounded(command.corner_radii) ||
+        command.border_width > 0.0F ||
         command.corner_radius != 0.0F || command.bounds.width <= 0.0F ||
         command.bounds.height <= 0.0F) {
         return false;
