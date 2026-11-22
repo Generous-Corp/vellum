@@ -382,6 +382,16 @@ if(TARGET pulp-view-core AND APPLE)
         "${PROJECT_SOURCE_DIR}/framework/core/view/include")
 endif()
 
+if(TARGET pulp-view-core AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(X11 REQUIRED)
+    target_sources(pulp-view-core PRIVATE
+        "${PROJECT_SOURCE_DIR}/framework/core/view/src/plugin_view_host.cpp"
+        "${PROJECT_SOURCE_DIR}/framework/core/view/platform/linux/gpu_plugin_editor_host_x11.cpp")
+    target_include_directories(pulp-view-core PRIVATE
+        "${PROJECT_SOURCE_DIR}/framework/core/view/include")
+    target_link_libraries(pulp-view-core PRIVATE X11::X11)
+endif()
+
 # Windows owns the HWND child editor host. Its Dawn surface is created after
 # attachment, when the child has its final parent and DPI context.
 if(TARGET pulp-view-core AND WIN32)
