@@ -9,6 +9,7 @@
 #
 # Sets, in the caller's scope:
 #   <prefix>_MILESTONE          the source milestone (chrome/mNNN)
+#   <prefix>_RELEASE_TAG        the immutable skia-builder release tag (chrome/mNNN-attested.N)
 #   <prefix>_ASSET              the release asset's file name
 #   <prefix>_URL                the asset's download URL
 #   <prefix>_SHA256             the asset's SHA-256
@@ -79,9 +80,14 @@ function(gpu_runtime_read_renderer_lock)
             "gpu-runtime: renderer lock milestone is not chrome/mNNN: ${_milestone}")
     endif()
     _gpu_runtime_lock_get(_release_tag "${_json}" release_tag)
-    if(NOT _release_tag MATCHES "^chrome/m[0-9]+-[A-Za-z0-9][A-Za-z0-9.-]*$")
+    if(NOT _release_tag MATCHES "^chrome/m[0-9]+-attested[.][0-9]+$")
         message(FATAL_ERROR
             "gpu-runtime: renderer lock release tag is malformed: ${_release_tag}")
+    endif()
+    string(FIND "${_release_tag}" "${_milestone}-" _tag_prefix_at)
+    if(NOT _tag_prefix_at EQUAL 0)
+        message(FATAL_ERROR
+            "gpu-runtime: renderer lock release tag ${_release_tag} is not a tag of milestone ${_milestone}")
     endif()
     _gpu_runtime_lock_get(_repository "${_json}" builder repository)
     if(NOT _repository MATCHES "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")

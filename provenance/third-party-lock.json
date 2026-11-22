@@ -218,7 +218,7 @@
         "builder": {
           "repository": "https://github.com/danielraffel/skia-builder",
           "commit": "1b97010d2f025b4331a9c0db9481c440d1f33042",
-          "evidence": "The build-provenance attestation for the archive was signed by build-skia.yml on refs/heads/main at this commit (skia-builder run 40626447857, attempt 1, GitHub-hosted)."
+          "evidence": "The build-provenance attestation for the archive was signed by build-skia.yml on refs/heads/main at this commit (skia-builder run 44427178277, attempt 1, GitHub-hosted)."
         }
       },
       "headers": {

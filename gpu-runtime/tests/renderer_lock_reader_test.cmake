@@ -37,6 +37,7 @@ set(_digest_skia "${R_SHA256_libskia.a}")
 string(TOUPPER "${_digest_skia}" _digest_skia_upper)
 set(_cases
     "schema|\"gpu-runtime.renderer-lock.v2\"|\"gpu-runtime.renderer-lock.v0\""
+    "release-tag-milestone|\"${_release_tag}\"|\"chrome/m1-attested.1\""
     "milestone|\"${_milestone}\"|\"main\""
     "digest|\"${_digest_skia}\"|\"${_digest_skia}0\""
     "uppercase|\"${_digest_skia}\"|\"${_digest_skia_upper}\""

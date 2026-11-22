@@ -97,7 +97,8 @@ def renderer_asset(lock_path: Path) -> tuple[str, str, str]:
     milestone, release_tag = lock["milestone"], lock["release_tag"]
     asset, sha256 = platform["asset"], platform["sha256"]
     require(repository == BUILDER and bool(re.fullmatch(r"chrome/m[0-9]+", milestone))
-            and bool(re.fullmatch(r"chrome/m[0-9]+-[A-Za-z0-9][A-Za-z0-9.-]*", release_tag))
+            and bool(re.fullmatch(r"chrome/m[0-9]+-attested[.][0-9]+", release_tag))
+            and release_tag.startswith(milestone + "-")
             and bool(re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", asset)) and bool(SHA.fullmatch(sha256)),
             "renderer lock names an unexpected skia-builder asset")
     return "/".join((repository, "releases/download", release_tag, asset)), asset, sha256

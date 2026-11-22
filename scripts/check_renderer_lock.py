@@ -47,7 +47,7 @@ def digests_in(text: str) -> set[str]:
     return {match.lower() for match in ANY_HEX_64.findall(text)}
 HEX_40 = re.compile(r"^[0-9a-f]{40}$")
 MILESTONE = re.compile(r"\bchrome/m[0-9]+\b")
-RELEASE_TAG = re.compile(r"^chrome/m[0-9]+-[A-Za-z0-9][A-Za-z0-9.-]*$")
+RELEASE_TAG = re.compile(r"^chrome/m[0-9]+-attested[.][0-9]+$")
 
 # Build inputs that must read the lock rather than restate it.
 READERS = {
@@ -76,7 +76,10 @@ def load_lock(root: Path, problems: list[str]) -> dict | None:
     if not isinstance(lock.get("milestone"), str) or not MILESTONE.fullmatch(lock["milestone"]):
         problems.append(f"{LOCK}: milestone is not chrome/mNNN")
     if not isinstance(lock.get("release_tag"), str) or not RELEASE_TAG.fullmatch(lock["release_tag"]):
-        problems.append(f"{LOCK}: release_tag is not an immutable chrome/mNNN-* tag")
+        problems.append(f"{LOCK}: release_tag is not an immutable chrome/mNNN-attested.N tag")
+    elif isinstance(lock.get("milestone"), str) and \
+            not lock["release_tag"].startswith(lock["milestone"] + "-"):
+        problems.append(f"{LOCK}: release_tag {lock['release_tag']} is not a tag of milestone {lock['milestone']}")
     builder = lock.get("builder") or {}
     sources = lock.get("sources") or {}
     for label, value in (("builder.commit", builder.get("commit")),
@@ -162,6 +165,14 @@ def check_third_party_lock(root: Path, lock: dict, problems: list[str]) -> None:
             problems.append(f"{relative}: {name} source commit differs from the lock")
     if identities.get("skia", {}).get("ref") != f"refs/heads/{lock['milestone']}":
         problems.append(f"{relative}: skia source ref is not refs/heads/{lock['milestone']}")
+    try:
+        attested = json.loads((root / RECORDS[1]).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        attested = {}  # check_attestation reports the unreadable record
+    run_id = str(attested.get("build_provenance", {}).get("run", {}).get("run_id"))
+    evidence = identities.get("builder", {}).get("evidence", "")
+    if not re.search(rf"\brun {re.escape(run_id)}\b", evidence):
+        problems.append(f"{relative}: builder evidence does not name attestation run {run_id}")
     rows = [row for row in data["dependencies"]
             if row.get("name") == "Skia Graphite and Dawn renderer toolchain"]
     if len(rows) != 1 or rows[0].get("version") != lock["release_tag"] \

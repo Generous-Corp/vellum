@@ -1006,11 +1006,12 @@ def renderer_pin_errors(
     exported under; it keeps its identity, origin and blob checks.
     """
     lock = json.loads((root / "provenance/third-party-lock.json").read_text(encoding="utf-8"))
+    renderer_lock = json.loads((root / "gpu-runtime/renderer-lock.json").read_text(encoding="utf-8"))
     renderer = lock["runtime_toolchain_dependencies"]["renderer"]
     artifact = renderer["artifact"]
     identities = renderer["source_identities"]
     expected = {
-        "skia_branch": identities["skia"]["ref"].removeprefix("refs/heads/"),
+        "skia_branch": renderer_lock["milestone"],
         "skia_commit": identities["skia"]["commit"],
         "built_dawn": identities["dawn"]["commit"],
         "skia_builder_ref": identities["builder"]["commit"],
@@ -1039,7 +1040,6 @@ def renderer_pin_errors(
         actual = {key: pin.get(key) for key in ("skia_branch", "skia_commit", "built_dawn", "skia_builder_ref")}
         actual.update(archive_url=asset.get("url"), archive_sha256=asset.get("sha256"))
         mismatched = sorted(key for key in expected if actual[key] != expected[key])
-        renderer_lock = json.loads((root / "gpu-runtime/renderer-lock.json").read_text(encoding="utf-8"))
         exception = renderer_lock.get("builder_change_exception")
         if "skia_builder_ref" in mismatched and isinstance(exception, dict):
             if (actual["skia_builder_ref"] == exception.get("from")
