@@ -119,7 +119,7 @@ def source_argument(arguments: list[str], command: str) -> tuple[int, Path] | No
     options_with_values = {
         "--project", "--source-type", "--as", "--source-key",
         "--framework-version", "--cli-api", "--target",
-        "--capture-envelope", "--interaction-plan",
+        "--capture-envelope", "--interaction-plan", "--frame",
         "--source-archive", "--source-archive-sha256",
         "--source-archive-name", "--source-archive-member",
     }

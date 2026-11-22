@@ -9,7 +9,11 @@ export const FIG_FILE_PARSER_VERSION = '0.1.0';
 export const FIG_FILE_COMPAT_SCHEMA_VERSION = '0.3';
 
 /** Decode one local Figma .fig file into Vellum's canonical DesignIR. */
-export function decodeFigFile(bytes, { sourceKey = 'main', frame, page } = {}) {
+export function decodeFigFile(bytes, options) {
+    return decodeFigSource(bytes, options).document;
+}
+
+export function decodeFigSource(bytes, { sourceKey = 'main', frame, page } = {}) {
     const container = unpackFig(bytes);
     const schema = readSchema(new ByteReader(container.schemaBytes));
     const decoder = makeDecoder(schema);
@@ -27,8 +31,17 @@ export function decodeFigFile(bytes, { sourceKey = 'main', frame, page } = {}) {
         exportedAt: '1970-01-01T00:00:00Z',
     });
     const sourceHash = `sha256:${sha256(bytes)}`;
-    addPluginIds(envelope.root);
-    return normalizeImport(decodeFigmaPluginExport(envelope, { sourceHash, sourceKey }));
+    preparePluginNode(envelope.root);
+    envelope.diagnostics = envelope.diagnostics.map(({ detail, ...diagnostic }) => ({
+        ...diagnostic,
+        kind: 'capture_partial',
+        message: detail || diagnostic.code,
+    }));
+    const document = normalizeImport(decodeFigmaPluginExport(envelope, { sourceHash, sourceKey }));
+    const embeddedAssets = new Map(envelope.asset_manifest.assets
+        .filter((asset) => container.images.has(asset.hash))
+        .map((asset) => [asset.local_path, container.images.get(asset.hash)]));
+    return { document, embeddedAssets, frame: selector };
 }
 
 function firstFrame(scene) {
@@ -46,8 +59,11 @@ function sha256(bytes) {
     return createHash('sha256').update(bytes).digest('hex');
 }
 
-function addPluginIds(node) {
+function preparePluginNode(node) {
     if (!node || typeof node !== 'object') return;
     if (node.node_id && !node.figma_node_id) node.figma_node_id = node.node_id;
-    for (const child of node.children ?? []) addPluginIds(child);
+    // The offline decoder attaches a compatibility caption for Pulp audio widgets.
+    // Expanded text nodes already carry the visible caption.
+    delete node.label;
+    for (const child of node.children ?? []) preparePluginNode(child);
 }

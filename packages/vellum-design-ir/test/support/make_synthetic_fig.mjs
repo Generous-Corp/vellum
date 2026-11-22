@@ -82,6 +82,9 @@ const D = {
   Matrix: 8,
   NodeChange: 9,
   Message: 10,
+  GuidPath: 11,
+  SymbolOverride: 12,
+  SymbolData: 13,
 };
 
 const defs = [];
@@ -127,6 +130,8 @@ defs[D.NodeType] = { name: 'NodeType', kind: 0, fields: [
   { name: 'FRAME', type: 0, isArray: false, value: 2 },
   { name: 'TEXT', type: 0, isArray: false, value: 3 },
   { name: 'VECTOR', type: 0, isArray: false, value: 4 },
+  { name: 'INSTANCE', type: 0, isArray: false, value: 5 },
+  { name: 'SYMBOL', type: 0, isArray: false, value: 6 },
 ]};
 // A node's affine placement. m02/m12 are the translation column — the
 // frame-relative x/y styleFor reads, and (composed down the tree) the geometry
@@ -162,9 +167,22 @@ defs[D.NodeChange] = { name: 'NodeChange', kind: 2, fields: [
   { name: 'stackHorizontalPadding', type: T.FLOAT, isArray: false, value: 15 },
   { name: 'stackVerticalPadding', type: T.FLOAT, isArray: false, value: 16 },
   { name: 'fontSize', type: T.FLOAT, isArray: false, value: 17 },
+  { name: 'symbolData', type: D.SymbolData, isArray: false, value: 18 },
 ]};
 defs[D.Message] = { name: 'Message', kind: 2, fields: [
   { name: 'nodeChanges', type: D.NodeChange, isArray: true, value: 1 },
+]};
+
+defs[D.GuidPath] = { name: 'GuidPath', kind: 2, fields: [
+  { name: 'guids', type: D.GUID, isArray: true, value: 1 },
+]};
+defs[D.SymbolOverride] = { name: 'SymbolOverride', kind: 2, fields: [
+  { name: 'guidPath', type: D.GuidPath, isArray: false, value: 1 },
+  { name: 'textData', type: D.TextData, isArray: false, value: 2 },
+]};
+defs[D.SymbolData] = { name: 'SymbolData', kind: 2, fields: [
+  { name: 'symbolID', type: D.GUID, isArray: false, value: 1 },
+  { name: 'symbolOverrides', type: D.SymbolOverride, isArray: true, value: 2 },
 ]};
 
 function writeSchema(w) {
@@ -243,6 +261,18 @@ function writeNode(w, n) {
     if (n.padX !== undefined) { w.varUint(15); w.float(n.padX); }
     if (n.padY !== undefined) { w.varUint(16); w.float(n.padY); }
   }
+  if (n.symbol) {
+    const { master, textLayer, caption } = n.symbol;
+    w.varUint(18); // NodeChange.symbolData
+    w.varUint(1); guid(w, 0, master);
+    w.varUint(2); w.varUint(1); // One override.
+    w.varUint(1); // SymbolOverride.guidPath
+    w.varUint(1); w.varUint(1); guid(w, 0, textLayer); w.varUint(0);
+    w.varUint(2); // SymbolOverride.textData
+    w.varUint(1); w.string(caption); w.varUint(0);
+    w.varUint(0); // end SymbolOverride
+    w.varUint(0); // end SymbolData
+  }
   w.varUint(0); // end NodeChange
 }
 
@@ -309,13 +339,21 @@ const NODES = [
   { s: 0, l: 5, type: 1, name: 'Empty Page', parent: [0, 0], pos: 'b' },
 ];
 
-function buildCanvasFig(compression) {
+const INSTANCE_NODES = [
+  { s: 0, l: 15, type: 5, name: 'Badge instance', parent: [0, 2], pos: 'd',
+    size: [100, 24], symbol: { master: 16, textLayer: 17, caption: 'Ready' } },
+  { s: 0, l: 16, type: 6, name: 'Badge', size: [100, 24] },
+  { s: 0, l: 17, type: 3, name: 'Caption', parent: [0, 16],
+    size: [100, 24], text: 'Pending' },
+];
+
+function buildCanvasFig(compression, nodes) {
   const schemaW = new Writer();
   writeSchema(schemaW);
   const msgW = new Writer();
   msgW.varUint(1); // Message.nodeChanges field id
-  msgW.varUint(NODES.length);
-  for (const n of NODES) writeNode(msgW, n);
+  msgW.varUint(nodes.length);
+  for (const n of nodes) writeNode(msgW, n);
   msgW.varUint(0); // end Message
 
   const schemaChunk = zlib.deflateRawSync(schemaW.buffer());
@@ -392,11 +430,12 @@ function zip(entries) {
 }
 
 /** A tiny, format-faithful .fig. `compression` is 'deflate' (any Node) or 'zstd'. */
-export function makeSyntheticFig({ compression = 'deflate' } = {}) {
+export function makeSyntheticFig({ compression = 'deflate', instance = false, paddingBytes = 0 } = {}) {
   return zip([
-    ['canvas.fig', buildCanvasFig(compression)],
+    ['canvas.fig', buildCanvasFig(compression, instance ? [...NODES, ...INSTANCE_NODES] : NODES)],
     ['meta.json', Buffer.from(JSON.stringify({ file_name: 'Synthetic Fixture' }))],
     [`images/${IMAGE_HASH}`, PNG_1x1],
+    ...(paddingBytes ? [['padding', Buffer.alloc(paddingBytes)]] : []),
   ]);
 }
 
