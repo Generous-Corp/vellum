@@ -1389,6 +1389,30 @@ def illustrator_command(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def standalone_asset_import(args: argparse.Namespace) -> dict[str, Any]:
+    from vellum_import_assets import AssetImportError, import_jsx, validate_preconverted_svg
+
+    source = Path(args.source).expanduser()
+    try:
+        if args.source_type == "preconverted-svg":
+            if not args.validate_only:
+                raise AssetImportError("preconverted-svg requires --validate-only")
+            if not args.manifest:
+                raise AssetImportError("preconverted-svg requires --manifest <control-map.json>")
+            data = validate_preconverted_svg(source, Path(args.manifest).expanduser())
+            return result("import preconverted-svg", ok=True, status="validated",
+                          message="validated preconverted SVG + control-map sidecar (no files generated)", data=data)
+        data = import_jsx(
+            source, emit=args.emit, mode=args.mode,
+            output=Path(args.output).expanduser() if args.output else None,
+            source_out=Path(args.source_out).expanduser() if args.source_out else None,
+        )
+        return result("import jsx", ok=True, status="imported",
+                      message=f"Imported JSX ({args.mode}, {args.emit})", data=data)
+    except AssetImportError as error:
+        raise CliFailure(str(error), status="asset_import_refused", exit_code=EXIT_PROJECT) from error
+
+
 def invoke_backend(
     command: str, root: Path | None, lock: dict[str, Any], forwarded: list[str]
 ) -> tuple[dict[str, Any], int]:
@@ -1532,13 +1556,18 @@ def parser() -> argparse.ArgumentParser:
         "import": [
             ("source", {"nargs": "*"}),
             ("--file", {"action": "append", "help": "add an ordered Figma plugin JSON export"}),
-            ("--source-type", {"choices": ["fig", "figma", "figma-plugin", "design-ir", "html", "claude-design", "pencil", "designmd", "v0"], "default": "figma"}),
+            ("--source-type", {"choices": ["fig", "figma", "figma-plugin", "design-ir", "html", "claude-design", "pencil", "designmd", "v0", "jsx", "preconverted-svg"], "default": "figma"}),
             ("--as", {"dest": "source_key", "default": "main"}),
             ("--interaction-plan", {}),
             ("--frame", {"help": "select a Figma frame by GUID or name"}),
             ("--outline", {"action": "store_true", "help": "list pages and frames in a local .fig file"}),
             ("--out", {"dest": "output", "metavar": "SVG"}),
             ("--provenance", {}),
+            ("--manifest", {"help": "control-map sidecar for preconverted SVG"}),
+            ("--validate-only", {"action": "store_true", "help": "validate an import without generating files"}),
+            ("--emit", {"choices": ["js", "ir-json", "materialized-runtime"], "default": "js"}),
+            ("--mode", {"choices": ["live", "baked"], "default": "live"}),
+            ("--source-out", {"help": "output directory for materialized runtime source"}),
             ("--page", {"help": "Figma page name for frame lookup, or Illustrator page number"}),
             ("--timeout", {"type": int, "default": 60}),
         ],
@@ -1607,7 +1636,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         if args.command == "import" and isinstance(args.source, list):
             if len(args.source) == 2 and args.source[0] == "illustrator":
                 args.source, args.illustrator_input = args.source
-            elif len(args.source) == 2 and args.source[0] in {"pencil", "designmd", "v0"}:
+            elif len(args.source) == 2 and args.source[0] in {"pencil", "designmd", "v0", "jsx", "preconverted-svg"}:
                 args.source_type, args.source = args.source
             elif len(args.source) == 1:
                 args.source = args.source[0]
@@ -1619,6 +1648,13 @@ def main(argv: Iterable[str] | None = None) -> int:
                     status="invalid_arguments", exit_code=EXIT_USAGE,
                 )
         if args.command == "import":
+            if args.source_type in {"jsx", "preconverted-svg"}:
+                if args.source_type == "preconverted-svg" and args.validate_only is False:
+                    raise CliFailure(
+                        "preconverted-svg requires --validate-only",
+                        status="invalid_arguments", exit_code=EXIT_USAGE,
+                    )
+            
             is_illustrator = args.source == "illustrator" and (
                 hasattr(args, "illustrator_input") or args.source_type not in {"pencil", "designmd", "v0"}
             )
@@ -1631,7 +1667,8 @@ def main(argv: Iterable[str] | None = None) -> int:
                     status="invalid_arguments", exit_code=EXIT_USAGE,
                 )
             is_plugin = args.source_type in {"figma", "figma-plugin"}
-            if args.frame is not None and (is_illustrator or not (is_fig or is_plugin)):
+            is_standalone_asset = args.source_type in {"jsx", "preconverted-svg"}
+            if args.frame is not None and (is_illustrator or (not is_standalone_asset and not (is_fig or is_plugin))):
                 raise CliFailure(
                     "--frame requires a local Figma .fig file or plugin envelope.",
                     status="invalid_fig_frame", exit_code=EXIT_USAGE,
@@ -1642,7 +1679,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                     "--outline requires a local Figma .fig source and takes no frame or page selector.",
                     status="invalid_fig_outline", exit_code=EXIT_USAGE,
                 )
-            if args.page is not None and not is_illustrator and (not is_fig or args.frame is None):
+            if args.page is not None and not is_illustrator and not is_standalone_asset and (not is_fig or args.frame is None):
                 raise CliFailure(
                     "--page requires a local Figma .fig frame selector or an Illustrator input.",
                     status="invalid_arguments", exit_code=EXIT_USAGE,
@@ -1684,6 +1721,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             payload = design_command(args)
         elif args.command == "compare":
             payload = compare_command(args)
+        elif args.command == "import" and args.source_type in {"jsx", "preconverted-svg"}:
+            payload = standalone_asset_import(args)
         elif args.command == "import" and is_illustrator:
             payload = illustrator_command(args)
         elif args.command == "import" and args.outline:
