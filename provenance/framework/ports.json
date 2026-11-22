@@ -1013,6 +1013,19 @@
       ]
     },
     {
+      "framework_path": "framework/core/view/platform/linux/gpu_plugin_editor_host_x11.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "platforms": [
+        "linux-x64"
+      ],
+      "reason": "The Linux X11 plug-in editor host: a reparented child window that renders the View tree with Skia Graphite on Dawn/Vulkan. Written for Vellum, not taken from Pulp plugin-view-host sources."
+    },
+    {
       "framework_path": "framework/core/render/src/graphite_raster_options.hpp",
       "change": "added",
       "target": null,
