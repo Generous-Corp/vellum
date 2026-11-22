@@ -13,7 +13,23 @@ The installed DesignIR backend connects the public Python `vellum` CLI to
   `assets`, and `diagnostics` fields;
 - canonical `https://vellum.dev/schemas/design-ir/v1` JSON.
 
-The `--source-type figma` route decodes that pinned JSON envelope directly.
+The `figma` and `figma-plugin` source types both decode the pinned envelope.
+Use `--frame` with a node GUID or a unique case-insensitive frame name to
+import that frame as the root. Reimport pins the selected node GUID.
+
+```sh
+vellum import --source-type figma-plugin ./selection.pulp.json --frame "Overview"
+vellum import --source-type figma-plugin --file ./idle.pulp.json --file ./expanded.pulp.json
+vellum reimport --source ./idle.pulp.json --file ./expanded.pulp.json
+```
+
+Supply one JSON envelope per state in display order. The first frame is active.
+The materialized root keeps the other decoded trees in the ordered
+`dev.vellum.figma-plugin.states.v1` extension. Runtime state switching requires a
+consumer of that extension. The importer snapshots the merged envelope and
+copies assets from their individual export directories. Conflicting asset IDs
+or paths stop the import. Reimport takes the source envelopes in the same order.
+
 The current Pulp emitter's audio-free node vocabulary is exactly `frame`,
 `text`, `ellipse`, `image`, and `vector`. The `frame` and `text` node kinds map
 directly into the retained native tree, while unsupported fields on either are
@@ -28,8 +44,8 @@ and diagnosed. Bare 64-hex Pulp asset hashes normalize to `sha256:<hex>` and
 are verified on import and on an unchanged reimport.
 
 The route fails closed on audio-widget kinds, audio bindings, unknown node or
-diagnostic kinds, synthetic multi-selection roots, and unpinned parser/schema
-versions. Pulp's name-based extractor can promote names such as `dial`,
+diagnostic kinds, and unpinned parser/schema versions. A synthetic
+multi-selection root requires an explicit frame selection. Pulp's name-based extractor can promote names such as `dial`,
 `slider`, `level`, or `meter` into audio widgets; until Pulp has an explicit
 generic-export mode, such an export is rejected rather than guessed back into a
 generic control.
@@ -52,19 +68,24 @@ assets into the project. It uses no Figma login or network connection.
 Zstd-compressed saves require Node.js 22.15 or newer. Decoded content follows
 the materialization limits described above.
 
-The macOS native SDK also imports Pencil and OpenPencil node-tree JSON
-(including `.pen` files) and Google DESIGN.md token specifications.
+The macOS native SDK also imports local v0 TSX, Pencil and OpenPencil node-tree
+JSON (including `.pen` files), and Google DESIGN.md token specifications.
 
 ```sh
+vellum import v0 ./panel.tsx
 vellum import pencil ./panel.pen
 vellum import designmd ./DESIGN.md
 vellum reimport --source ./DESIGN.md
 ```
 
+The v0 route uses the static JSX parser for host elements, inline styles and
+supported Tailwind layout classes. It preserves class strings and reports
+partial capture for dynamic JSX. Pass a local TSX export.
+
 Import one source per project. Pencil produces a retained tree and a token
 file. DESIGN.md produces tokens and parser diagnostics without generating a
 screen. A reference to an unknown token stops the import before project files
-change. Both routes keep the original input as a revision snapshot for
+change. These routes keep the original input as a revision snapshot for
 reimport and `vellum design check`.
 
 `.pulp.zip` is unpacked by the installed Python dispatcher with no external
