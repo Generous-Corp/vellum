@@ -955,6 +955,20 @@
       "pulp_commits": [],
       "framework_blob": null,
       "reason": "Pulp's Three.js web-compat shim, with its print markers renamed from PULP_THREE_SHIM / PULP_THREEJS to VELLUM_THREE_SHIM / VELLUM_THREEJS to match Vellum's smoke tests. The bytes are Pulp's file put through the transfer rename plus those markers."
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/gpu_plugin_editor_host_win.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "The Win32 plug-in view host: a child HWND that creates a Dawn/D3D12 surface after attachment and renders the View tree with Skia Graphite. Written for Vellum as the Windows counterpart to the macOS GPU editor host.",
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ]
     }
   ]
 }
