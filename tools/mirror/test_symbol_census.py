@@ -63,6 +63,13 @@ def classes(*names: str) -> str:
 
 
 class MirrorRuntimeIdentityTest(unittest.TestCase):
+    def test_two_runtime_identities_use_disjoint_macho_and_objc_names(self) -> None:
+        cmake = (HERE / "VellumMirror.cmake").read_text(encoding="utf-8")
+        self.assertIn('OUTPUT_NAME "vellum-mirror-${_vellum_mirror_unit}${VELLUM_RUNTIME_IDENTITY_SUFFIX}"', cmake)
+        self.assertIn('OUTPUT_NAME "vellum-skia-dawn-provider${VELLUM_RUNTIME_IDENTITY_SUFFIX}"', cmake)
+        self.assertIn("PULP_VIEW_OBJC_SUFFIX=${VELLUM_RUNTIME_OBJC_SUFFIX}", cmake)
+        self.assertIn("string(SHA256 _vellum_runtime_identity_hash", cmake)
+
     @unittest.skipUnless(os.environ.get("VELLUM_RUNTIME_IDENTITY_BUILD"),
                          "requires a built macOS mirror runtime")
     def test_dylib_and_objc_names_include_build_identity(self) -> None:
