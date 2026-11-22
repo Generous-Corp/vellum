@@ -493,6 +493,23 @@ class VerifyMirrorExportTests(unittest.TestCase):
         self.assertError(errors, "commit map lacks the row")
         self.assertError(errors, "1 files lack a blob-origin record for this receipt")
 
+    def base_for(self, name: str) -> Path:
+        path = self.base / f"case-{name}"
+        path.mkdir()
+        return path
+
+    def test_origin_records_must_come_from_a_landed_receipt_for_the_same_pulp_path(self) -> None:
+        # recorded_origins accepts an origin carried by any LANDED receipt
+        # (incremental exports), but never one from an unlanded receipt, and
+        # never one that names a different Pulp path for the same blob.
+        for field, value in (("export_receipt", "provenance/mirror/receipts/unlanded.json"),
+                             ("pulp_path", "core/other/elsewhere.cpp")):
+            fixture = Fixture(self.base_for(field))
+            fixture.origins["records"][0][field] = value
+            fixture.reland()
+            self.assertError(fixture.errors(),
+                             "1 files lack a blob-origin record for this receipt")
+
     def test_receipt_shape_is_strict(self) -> None:
         fixture = Fixture(self.base)
         fixture.reland(pulp_repository="/Users/someone/pulp", rename={"from_prefix": "", "to_prefix": ""})
