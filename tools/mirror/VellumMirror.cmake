@@ -237,7 +237,7 @@ function(_vellum_mirror_add_dependency name)
                 target_compile_options("${_provided}" PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${_option}>")
             endforeach()
         endif()
-        if(_key STREQUAL "SDL3_STATIC" AND APPLE)
+        if(_provided STREQUAL "SDL3-static" AND APPLE)
             foreach(_sdl_class IN ITEMS
                     Cocoa_PasteboardDataProvider SDL3AppDelegate SDL3Application
                     SDL3Cocoa_WindowListener SDL3METAL_PaletteData SDL3METAL_RenderData

@@ -80,10 +80,12 @@ class MirrorRuntimeIdentityTest(unittest.TestCase):
 
     def test_sdl_objc_rename_uses_the_registered_provided_target(self) -> None:
         cmake = (HERE / "VellumMirror.cmake").read_text(encoding="utf-8")
-        start = cmake.index('        if(_key STREQUAL "SDL3_STATIC" AND APPLE)')
+        match = re.search(r"        if\([^\n]*APPLE\)\n            foreach\(_sdl_class", cmake)
+        self.assertIsNotNone(match)
+        start = match.start()
         end = cmake.index("        endif()", start) + len("        endif()")
         condition = re.sub(
-            r'target_compile_definitions\("\$\{_provided\}" PRIVATE.*?\n                \)',
+            r'target_compile_definitions\("\$\{_provided\}" PRIVATE.*?\)',
             'set(_sdl_rename_taken TRUE)',
             cmake[start:end],
             flags=re.DOTALL,
