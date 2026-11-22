@@ -895,7 +895,8 @@ def restore_patched(name: str, root: Path, paths: list[str]) -> None:
 
 
 def prepare_dependencies(deps: dict[str, dict[str, Any]], deps_dir: Path, skia_dir: Path | None,
-                         skia_asset_sha256: str | None, repo: Path | None = None) -> dict[str, Path]:
+                         skia_asset_sha256: str | None, repo: Path | None = None,
+                         accepted_skia_assets: set[str] | None = None) -> dict[str, Path]:
     roots: dict[str, Path] = {}
     for name, entry in sorted(deps.items()):
         recipe = DEPENDENCIES[name]
@@ -906,7 +907,8 @@ def prepare_dependencies(deps: dict[str, dict[str, Any]], deps_dir: Path, skia_d
         elif recipe["kind"] == "archive":
             if skia_dir is None or not skia_asset_sha256:
                 raise PlanError(f"closure needs {name} but no extracted Skia/Dawn archive was given")
-            if entry["asset_sha256"] != skia_asset_sha256:
+            accepted = accepted_skia_assets or set()
+            if entry["asset_sha256"] != skia_asset_sha256 and entry["asset_sha256"] not in accepted:
                 raise PlanError(
                     f"closure was exported against {name} archive {entry['asset_sha256']}, "
                     f"but Vellum locks {skia_asset_sha256}")
@@ -1419,7 +1421,14 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
     deps = external_dependencies(units)
     closure_pinned = set(deps)
     declared_deps = declared_dependencies(declared, units, closure_pinned)
-    roots = prepare_dependencies({**deps, **declared_deps}, deps_dir, skia_dir, skia_asset_sha256, repo)
+    all_deps = {**deps, **declared_deps}
+    historical_skia_assets = set()
+    if transferred(repo) and isinstance(all_deps.get("skia"), dict):
+        historical = all_deps["skia"].get("asset_sha256")
+        if isinstance(historical, str):
+            historical_skia_assets.add(historical)
+    roots = prepare_dependencies(all_deps, deps_dir, skia_dir, skia_asset_sha256, repo,
+                                 historical_skia_assets)
     generated = prepare_generated(repo, build_receipt, units, generated_dir)
     # GPU device types are not part of the installed surface: the installed
     # copy of each choke header carries an #error guard (gpu_surface_guard.py).
@@ -1507,7 +1516,9 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
             for row in skia:
                 # The target links the archive Vellum locks, not merely one
                 # whose headers happen to match.
-                if row.get("asset_sha256") != skia_asset_sha256:
+                accepted = historical_skia_assets
+                if (row.get("asset_sha256") != skia_asset_sha256
+                        and row.get("asset_sha256") not in accepted):
                     raise PlanError(
                         f"{unit}/{name} links skia archive {row.get('asset_sha256')}, "
                         f"but Vellum locks {skia_asset_sha256}")

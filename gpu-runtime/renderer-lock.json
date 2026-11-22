@@ -5,6 +5,12 @@
     "repository": "https://github.com/danielraffel/skia-builder",
     "commit": "1b97010d2f025b4331a9c0db9481c440d1f33042"
   },
+  "builder_change_exception": {
+    "from": "312f05e24a5d5a45d4a3e70ca70ff3ccff1b4d97",
+    "to": "1b97010d2f025b4331a9c0db9481c440d1f33042",
+    "skia": "be7d7c3e996e567eda7dc9774274f7a0103cdb8c",
+    "dawn": "1716e88cc9e58398fab5d4473f7f2e858667b677"
+  },
   "sources": {
     "skia": "be7d7c3e996e567eda7dc9774274f7a0103cdb8c",
     "dawn": "1716e88cc9e58398fab5d4473f7f2e858667b677"
