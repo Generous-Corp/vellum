@@ -23,6 +23,19 @@ class DeadlineWarningGateTests(unittest.TestCase):
         self.assertEqual(deadline_warning_gate.due_within({}), [])
         self.assertEqual(deadline_warning_gate.due_within({"due_soon": []}), [])
 
+    def test_count_pressure_names_oldest_five(self) -> None:
+        summary = {"pending_count": 16, "pending_limit": 20,
+                   "pending": [{"event_id": str(i), "deadline": f"2026-11-2{i}T00:00:00Z"}
+                                for i in range(6)]}
+        pressured, oldest = deadline_warning_gate.count_pressure(summary)
+        self.assertTrue(pressured)
+        self.assertEqual(oldest, ["0", "1", "2", "3", "4"])
+
+    def test_count_below_warning_passes(self) -> None:
+        pressured, oldest = deadline_warning_gate.count_pressure({"pending_count": 15})
+        self.assertFalse(pressured)
+        self.assertEqual(oldest, [])
+
     def test_cli_returns_nonzero_for_warning(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "summary.json"
