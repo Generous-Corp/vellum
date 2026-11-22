@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { decodeFigFile } from '../src/fig-file/import.js';
+import { decodeFigFile, decodeFigSource } from '../src/fig-file/import.js';
 import { loadSource } from '../bin/backend-source.js';
 import { validateDesignIR } from '../src/index.js';
 import * as zlib from 'node:zlib';
@@ -38,6 +38,16 @@ test('a default import persists the resolved frame GUID so reimport pins it', as
     });
     assert.deepEqual(pinned.document, loaded.document);
     assert.equal(pinned.sourceArtifact.frame, loaded.sourceArtifact.frame);
+});
+
+test('duplicate frame names require a page or GUID', () => {
+    const bytes = makeSyntheticFig({ duplicateFrameName: true });
+    assert.throws(
+        () => decodeFigSource(bytes, { frame: 'Paint Lab' }),
+        /ambiguous.*0:10.*0:2/,
+    );
+    assert.equal(decodeFigSource(bytes, { frame: 'Paint Lab', page: 'Empty Page' }).frame, '0:2');
+    assert.equal(decodeFigSource(bytes, { frame: '0:10' }).frame, '0:10');
 });
 
 test('a zstd-compressed .fig decodes where Node has zstd, and is refused clearly where it does not', () => {

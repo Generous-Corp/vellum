@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <string>
@@ -40,12 +41,20 @@ class VellumRenderer final : public RenderInterface {
 
     // `surface` must outlive the renderer. clear_rgba is straight (not
     // premultiplied) RGBA, red in the high byte, as for SoftRenderer.
+    using Clock = std::function<std::chrono::steady_clock::time_point()>;
+
     explicit VellumRenderer(vellum::graphics::SkiaDawnSurface& surface,
-                            std::uint32_t clear_rgba = 0x000000ffu);
+                            std::uint32_t clear_rgba = 0x000000ffu,
+                            Clock clock = {});
 
     void begin_frame(std::uint32_t width, std::uint32_t height) override;
     void submit(const DrawCommand& command) override;
     void end_frame() override;
+    void on_attach() override;
+    void on_detach() override;
+    void on_visibility_changed(bool visible) override;
+    void on_idle() override;
+    void on_close() override;
 
     void set_image_decoder(ImageDecoder decoder) {
         decoder_ = std::move(decoder);
@@ -68,6 +77,7 @@ class VellumRenderer final : public RenderInterface {
     [[nodiscard]] std::size_t skipped_draws() const noexcept {
         return skipped_;
     }
+    [[nodiscard]] std::size_t cached_texture_count() const noexcept { return textures_.size(); }
 
   private:
     std::shared_ptr<const vellum::graphics::MeshTexture> texture_for(const DrawCommand& command);
@@ -88,8 +98,15 @@ class VellumRenderer final : public RenderInterface {
     struct CachedTexture {
         std::shared_ptr<const std::string> source;
         std::shared_ptr<const vellum::graphics::MeshTexture> texture;
+        bool decoded = false; // built by the image decoder, not from raw RGBA
     };
     std::unordered_map<const std::string*, CachedTexture> textures_;
+    Clock clock_;
+    std::chrono::steady_clock::time_point texture_expiry_{};
+    bool texture_grace_active_ = false;
+    static constexpr std::chrono::milliseconds kTextureGracePeriod{250};
+
+    void collect_expired_textures();
 };
 
 } // namespace vellum::rmlui
