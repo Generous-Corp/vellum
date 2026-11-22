@@ -370,7 +370,7 @@ test('unzip charges overlapping stored central-directory records', () => {
   const localFile = Buffer.concat([local, name, payload]);
   const central = [];
   for (let i = 0; i < 20; i++) {
-    const row = Buffer.alloc(47);
+    const row = Buffer.alloc(46);
     row.writeUInt32LE(0x02014b50, 0);
     row.writeUInt32LE(payload.length, 20);
     row.writeUInt32LE(payload.length, 24);
@@ -385,7 +385,7 @@ test('unzip charges overlapping stored central-directory records', () => {
   eocd.writeUInt16LE(20, 10);
   eocd.writeUInt32LE(centralBytes.length, 12);
   eocd.writeUInt32LE(localFile.length, 16);
-  assert.throws(() => unzip(Buffer.concat([localFile, centralBytes, eocd]), { remaining: payload.length * 10 }), RangeError);
+  assert.throws(() => unzip(Buffer.concat([localFile, centralBytes, eocd]), { remaining: payload.length * 10 }), /cumulative decompression budget/);
 });
 
 test('inner chunks draw on the same cumulative decompression budget', () => {
