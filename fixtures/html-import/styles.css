@@ -3,3 +3,12 @@ body { margin: 0; background: #f4f0e8; color: #222; font-family: sans-serif; }
 main { width: 640px; margin: 48px auto; padding: 32px; background: #fff; }
 .proof-panel { width: 180px; height: 80px; margin: 24px 0; }
 .mark { width: 32px; height: 32px; }
+
+main { border: 2px solid #475569; border-radius: 12px; }
+[data-vellum-id="html-proof-title"] { color: #b45309; font-family: "Courier New", monospace; }
+button {
+  background: linear-gradient(to top, rgba(20, 184, 166, 0.5), #0f766e),
+    radial-gradient(80% 60% at 50% 20%, #000, transparent 60%), #134e4a;
+  border: 1px solid #5eead4;
+  border-radius: 6px;
+}

@@ -185,6 +185,9 @@ export function applyPaintProp(
             return true;
         }
         case 'backgroundGradient': call('setBackgroundGradient', id, value as string); return true;
+        // The `background-color` longhand is a plain colour; React passes it
+        // as `style.backgroundColor`.
+        case 'backgroundColor': call('setBackground', id, _resolveVar(value) as string); return true;
         // CSS `background-image` longhand. The C++ `setBackground` bridge fn
         // only parses a color token (`set_background_color(parseHexColor(...))`),
         // so we must detect gradient strings here and route to the gradient

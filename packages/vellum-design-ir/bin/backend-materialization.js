@@ -51,6 +51,7 @@ export function generatedFiles(context) {
                 namespace: document.source.namespace,
                 snapshotHash: sourceHash,
                 sourceArtifactKind: sourceArtifact.kind,
+                ...(sourceArtifact.frame === undefined ? {} : { figFrame: sourceArtifact.frame }),
             },
         },
     };

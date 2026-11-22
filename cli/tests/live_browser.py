@@ -6,6 +6,8 @@ application registration and macOS reports a crash for the user's own Chrome
 on every run. Tests that launch a live browser therefore require a pinned
 browser named by VELLUM_CHROME_PATH (CI always sets one) and otherwise skip.
 A person who wants the installed browser sets VELLUM_TEST_ALLOW_SYSTEM_CHROME=1.
+That escape is ignored inside an agent sandbox, where the installed browser
+can never start.
 """
 from __future__ import annotations
 
@@ -16,12 +18,13 @@ from typing import Callable, Mapping
 
 PINNED_ENV = "VELLUM_CHROME_PATH"
 ESCAPE_ENV = "VELLUM_TEST_ALLOW_SYSTEM_CHROME"
+SANDBOX_ENV = "CODEX_SANDBOX"
 
 
 def live_browser_skip_reason(environ: Mapping[str, str] | None = None) -> str | None:
     """Return why a live-browser test must skip, or None when it may run."""
     env = os.environ if environ is None else environ
-    if env.get(ESCAPE_ENV) == "1":
+    if env.get(ESCAPE_ENV) == "1" and not env.get(SANDBOX_ENV):
         return None
     if env.get(PINNED_ENV):
         # A named browser is never skipped: chrome_path() rejects one that is
