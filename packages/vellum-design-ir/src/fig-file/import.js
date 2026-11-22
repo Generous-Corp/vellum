@@ -46,7 +46,7 @@ export function decodeFigSource(bytes, { sourceKey = 'main', frame, page } = {})
         asset.content_hash = `sha256:${sha256(bytes)}`;
     }
     const document = normalizeImport(decodeFigmaPluginExport(envelope, { sourceHash, sourceKey }));
-    return { document, embeddedAssets };
+    return { document, embeddedAssets, frame: selector };
 }
 
 function firstFrame(scene) {

@@ -111,12 +111,15 @@ export async function loadSource(sourcePath, { captureEnvelope, figFrame, source
             fail('invalid_fig', `Figma .fig source could not be decoded: ${error.message}`);
         }
         const sourceHash = `sha256:${sha256(sourceBytes)}`;
-        const revision = validateRevision(decoded.document.source.revision);
+        const { frame: resolvedFrame, ...decodedParts } = decoded;
+        const revision = validateRevision(decodedParts.document.source.revision);
         return {
-            archiveBytes: null, backendDiagnostics: [], ...decoded, revision,
+            archiveBytes: null, backendDiagnostics: [], ...decodedParts, revision,
+            // Persist the resolved GUID even when --frame was omitted, so reimport
+            // cannot drift to a different "first frame" after the file is edited.
             sourceArtifact: {
                 kind: 'fig', name: basename(file), sha256: sourceHash,
-                ...(figFrame === undefined ? {} : { frame: figFrame }),
+                frame: resolvedFrame,
             },
             sourceBytes, sourceHash, sourceName: basename(file),
         };
