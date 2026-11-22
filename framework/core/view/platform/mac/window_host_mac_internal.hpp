@@ -16,6 +16,7 @@
 #include <vellum/view/input_events.hpp>
 #include <vellum/view/plugin_view_host.hpp> // kEditorHostClear{R,G,B}
 #include <vellum/view/view.hpp>  // View::CursorStyle (set_ns_cursor_for_style)
+#include <vellum/platform/test_visibility.hpp>
 
 #include <cstdint>
 

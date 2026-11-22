@@ -1,5 +1,4 @@
 #include <vellum/view/widget_bridge.hpp>
-#include <vellum/view/parameter_binding.hpp>
 #include <vellum/canvas/bundled_fonts.hpp>
 #include <vellum/view/data_display.hpp>
 #include <vellum/view/widgets.hpp>
@@ -316,21 +315,7 @@ std::unordered_map<View*, WidgetBridge*>& document_navigation_owners() {
 WidgetBridge::WidgetBridge(ScriptEngine& engine, View& root, state::StateStore& store,
                            render::GpuSurface* gpu_surface,
                            CapabilitySet granted_capabilities)
-    : WidgetBridge(engine, root, &store, nullptr, gpu_surface, granted_capabilities) {}
-
-WidgetBridge::WidgetBridge(ScriptEngine& engine, View& root, value::ParamModel& params,
-                           render::GpuSurface* gpu_surface,
-                           CapabilitySet granted_capabilities)
-    : WidgetBridge(engine, root, nullptr, &params, gpu_surface, granted_capabilities) {}
-
-WidgetBridge::WidgetBridge(ScriptEngine& engine, View& root, state::StateStore* store,
-                           value::ParamModel* params, render::GpuSurface* gpu_surface,
-                           CapabilitySet granted_capabilities)
-    : engine_(engine), root_(root),
-      owned_store_(store ? nullptr : std::make_unique<state::StateStore>()),
-      store_(store ? *store : *owned_store_),
-      owned_params_(params ? nullptr : std::make_unique<StateStoreParamModel>(store_)),
-      params_(params ? *params : *owned_params_), has_store_(store != nullptr),
+    : engine_(engine), root_(root), store_(store),
       granted_capabilities_(granted_capabilities), gpu_surface_(gpu_surface),
       widgets_(owned_widgets_),
       callback_alive_(std::make_shared<BridgeCallbackState>(&root_)) {
@@ -351,6 +336,31 @@ WidgetBridge::WidgetBridge(ScriptEngine& engine, View& root, state::StateStore* 
     // most as long as the bridge.
     repaint_callback_ = [&root] { root.request_repaint(); };
     register_api();
+    // Report every focus change under this root to script. The root hears about
+    // each descendant's change, so one pair of hooks covers the whole tree and
+    // no per-widget registration is needed. The script side turns the event
+    // into focus / blur / focusin / focusout and updates activeElement,
+    // :focus-within and :focus-visible.
+    {
+        auto alive = callback_alive_;
+        auto* eng = &engine_;
+        auto notify = [alive, eng](View& view, bool gained, FocusCause cause) {
+            if (view.id().empty())
+                return;
+            BridgeCallbackScope scope(alive);
+            const bool visible = gained && cause != FocusCause::pointer;
+            const char* cause_name = cause == FocusCause::pointer    ? "pointer"
+                                     : cause == FocusCause::keyboard ? "keyboard"
+                                                                     : "programmatic";
+            dispatch_event(alive, eng, view.id(), gained ? "focus" : "blur",
+                           std::string("{cause:'") + cause_name +
+                               "',focusVisible:" + (visible ? "true" : "false") + "}");
+        };
+        root_.on_descendant_focus_event = notify;
+        root_.on_focus_event = [notify, root = &root_](bool gained, FocusCause cause) {
+            notify(*root, gained, cause);
+        };
+    }
     eval_or_throw(engine_, "kJSPreamble", dispatch_prelude_js() + kJSPreamblePart2);
     const auto eval_prelude = [this](const char* name, const auto& prelude) {
         eval_or_throw(engine_, name, preludes::source(prelude));
@@ -440,8 +450,6 @@ WidgetBridge::~WidgetBridge() {
         callback_alive_->retire_dispatch();
     }
     release_all_param_gesture_routes();
-    // Ends a realm replacement deferred and no session took.
-    deliver_deferred_model_gesture_ends();
     // Saved starting layouts belong to widgets this bridge no longer reaches.
     {
         std::vector<std::uint64_t> ids;
@@ -933,20 +941,35 @@ View* WidgetBridge::widget(const std::string& id) {
 }
 
 void WidgetBridge::sync_from_store() {
-    // Convention: a knob, fader or toggle whose id is a parameter's name shows
-    // that parameter.
     for (auto& [id, state] : widgets_) {
         View* view = state.view;
-        const auto param = params_.resolve(id);
-        if (!param.valid())
-            continue;
-        const auto normalized = static_cast<float>(params_.normalized(param));
-        if (auto* knob = dynamic_cast<Knob*>(view))
-            knob->set_value(normalized);
-        else if (auto* fader = dynamic_cast<Fader*>(view))
-            fader->set_value(normalized);
-        else if (auto* toggle = dynamic_cast<Toggle*>(view))
-            toggle->set_on(normalized > 0.5f);
+        if (auto* knob = dynamic_cast<Knob*>(view)) {
+            // Try to find a parameter matching this widget's id
+            // Convention: widget id matches parameter name
+            for (size_t i = 0; i < store_.param_count(); ++i) {
+                auto* info = &store_.all_params()[i];
+                if (info && info->name == id) {
+                    knob->set_value(store_.get_normalized(info->id));
+                    break;
+                }
+            }
+        } else if (auto* fader = dynamic_cast<Fader*>(view)) {
+            for (size_t i = 0; i < store_.param_count(); ++i) {
+                auto* info = &store_.all_params()[i];
+                if (info && info->name == id) {
+                    fader->set_value(store_.get_normalized(info->id));
+                    break;
+                }
+            }
+        } else if (auto* toggle = dynamic_cast<Toggle*>(view)) {
+            for (size_t i = 0; i < store_.param_count(); ++i) {
+                auto* info = &store_.all_params()[i];
+                if (info && info->name == id) {
+                    toggle->set_on(store_.get_normalized(info->id) > 0.5f);
+                    break;
+                }
+            }
+        }
     }
 }
 

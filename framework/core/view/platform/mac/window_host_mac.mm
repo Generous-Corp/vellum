@@ -63,7 +63,7 @@
 // window_host_mac_geometry.mm; use them via vellum::view::mac_geometry.
 using namespace vellum::view::mac_geometry;
 
-extern "C" void vellum_mac_text_input_client_category_anchor();
+extern "C" void pulp_mac_text_input_client_category_anchor();
 
 // ── VellumMirrorView: CoreGraphics NSView (CPU rendering path) ───────────────────────
 
@@ -108,7 +108,7 @@ extern "C" void vellum_mac_text_input_client_category_anchor();
 - (instancetype)initWithFrame:(NSRect)frame {
     self = [super initWithFrame:frame];
     if (self) {
-        vellum_mac_text_input_client_category_anchor();
+        pulp_mac_text_input_client_category_anchor();
         // Ensure the content view tracks the window's content rect
         // so AppKit resizes our frame when the user drags the window edge.
         // Without this, the view's bounds stay at the original frame and Yoga
@@ -272,10 +272,10 @@ extern "C" void vellum_mac_text_input_client_category_anchor();
     // pump and passes a no-op).
     vellum::view::WheelHost host;
     host.request_repaint = [self] { [self setNeedsDisplay:YES]; };
-    vellum::view::deliver_mouse_wheel(
-        *self.rootView, pt, static_cast<float>(event.scrollingDeltaX),
-        static_cast<float>(-event.scrollingDeltaY),
-        modifiers_from_ns_flags(event.modifierFlags), host);
+    const vellum::view::WheelAttributes attributes{modifiers_from_ns_flags(event.modifierFlags),
+                                                 event.hasPreciseScrollingDeltas == YES};
+    vellum::view::deliver_mouse_wheel(*self.rootView, pt, static_cast<float>(event.scrollingDeltaX),
+                                    static_cast<float>(-event.scrollingDeltaY), attributes, host);
 }
 
 - (void)mouseDown:(NSEvent*)event {
@@ -316,7 +316,8 @@ extern "C" void vellum_mac_text_input_client_category_anchor();
                                    ? _dragTargetCapture.live_in(*root)
                                    : nullptr;
                 if (!root || !target ||
-                    !vellum::view::transfer_input_focus(*root, target)) {
+                    !vellum::view::transfer_input_focus(*root, target,
+                                                      vellum::view::FocusCause::pointer)) {
                     _dragTargetCapture.reset();
                     _focusedView = root
                                        ? vellum::view::focused_input_under_root(*root)
@@ -891,32 +892,14 @@ extern "C" void vellum_mac_text_input_client_category_anchor();
             else
                 next = vellum::view::View::focus_next(*self.rootView, old);
             if (next && next != old) {
-                vellum::view::ViewCapture next_capture;
-                next_capture.set(next);
-                if (old) {
-                    old->release_input_focus();
-                    old->on_focus_changed(false);
-                }
-                auto* liveRoot = self.rootView;
-                if (!liveRoot) {
-                    _focusedView = nullptr;
-                    [self setNeedsDisplay:YES];
-                    return;
-                }
-                next = next_capture.live_in(*liveRoot);
-                if (!next) {
-                    _focusedView = nullptr;
-                    [self setNeedsDisplay:YES];
-                    return;
-                }
-                _focusedView = next;
-                _focusedView->on_focus_changed(true);
-                liveRoot = self.rootView;
-                _focusedView = liveRoot
-                                   ? next_capture.live_in(*liveRoot)
-                                   : nullptr;
-                if (_focusedView)
-                    _focusedView->claim_input_focus();
+                // The same transfer a click uses: the previous holder blurs,
+                // the new one gains, and each side's ancestors are told, with
+                // the cause recorded as keyboard.
+                if (auto* liveRoot = self.rootView)
+                    vellum::view::transfer_input_focus(*liveRoot, next,
+                                                     vellum::view::FocusCause::keyboard);
+                _focusedView =
+                    self.rootView ? vellum::view::focused_input_under_root(*self.rootView) : nullptr;
             }
             [self setNeedsDisplay:YES];
             return;
@@ -1007,6 +990,18 @@ extern "C" void vellum_mac_text_input_client_category_anchor();
     }
 }
 
+// A modifier key went down or up with no other key. Tell the focused view and
+// any view a pointer press is captured by, so Shift pressed mid-drag takes
+// effect without the pointer moving.
+- (void)flagsChanged:(NSEvent*)event {
+    if (self.rootView) {
+        if (vellum::view::deliver_modifier_keys_changed(*self.rootView,
+                                                      modifiers_from_ns_flags(event.modifierFlags)))
+            [self setNeedsDisplay:YES];
+    }
+    [super flagsChanged:event];
+}
+
 // Symmetric key-up so released keys reach handlers that need both edges — most
 // importantly musical-typing note-off (without this, computer-keyboard notes
 // stick). Routes the global-key hook (is_down=false) then the focused view.
@@ -1051,14 +1046,7 @@ extern "C" void vellum_mac_text_input_client_category_anchor();
     }
     if (inspector_cursor >= 0)
         return static_cast<vellum::view::View::CursorStyle>(inspector_cursor);
-    // Nothing under the pointer leaves the current cursor alone. Anything
-    // painted there, a disabled view included, is resolved by hover_cursor_at,
-    // which answers the default cursor over a disabled view.
-    {
-        vellum::view::View::DisabledHitTestScope include_disabled;
-        if (!vellum::view::hover_target_at(*self.rootView, pt)) return std::nullopt;
-    }
-    return vellum::view::hover_cursor_at(*self.rootView, pt);
+    return vellum::view::hover_cursor_under(*self.rootView, pt);
 }
 
 // AppKit asks the owner of a NSTrackingCursorUpdate area what cursor to show
@@ -1101,6 +1089,9 @@ extern "C" void vellum_mac_text_input_client_category_anchor();
 - (void)refreshHoverCursor {
     if (!self.rootView || !_hoverCursor.has_pointer()) return;
     if (_pointerOverNativeChild) return;
+    // The frame may have slid a different view under a pointer that did not
+    // move; bring hover state in line before resolving the cursor.
+    vellum::view::reevaluate_stationary_hover(*self.rootView);
     auto style = [self resolveHoverCursorAt:_hoverCursor.pointer()];
     if (!style) return;
     if (auto changed = _hoverCursor.poll_resolved(*style))
@@ -1125,9 +1116,8 @@ extern "C" void vellum_mac_text_input_client_category_anchor();
                 // Don't consume — let normal hover handling continue for cursor changes
             }
 
-            if (auto* combo = self.rootView
-                    ? vellum::view::enabled_open_popup_in(*self.rootView)
-                    : nullptr) {
+            if (auto* combo =
+                    self.rootView ? vellum::view::enabled_open_popup_in(*self.rootView) : nullptr) {
                 float cx = 0, cy = 0;
                 auto* v = static_cast<vellum::view::View*>(combo);
                 while (v) { cx += v->bounds().x; cy += v->bounds().y; v = v->parent(); }
@@ -1709,7 +1699,7 @@ public:
                 mac_menu::install_application_menu(
                     menu_commands_, [] { vellum::view::mac_lifecycle::request_cocoa_app_stop(); });
                 show();
-                [NSApp activateIgnoringOtherApps:YES];
+                vellum::platform::activate_app_for_window();
             }
             [NSApp run];
             vellum::view::mac_lifecycle::pump_cocoa_main_thread_until(ready_to_return);
@@ -1752,7 +1742,7 @@ public:
             if (const char* env = std::getenv("PULP_PARTIAL_RENDERING_DEBUG")) {
                 partial_rendering_debug_ = (env[0] == '1');
             }
-            // Partial repaint, default OFF: only when
+            // FU-2 partial repaint (WI-17), default OFF: only when
             // PULP_PARTIAL_REPAINT=1 does the host clip the repaint to the
             // damaged rect and blit a retained scene target. Unset ⇒ the
             // unconditional full-repaint path below is untouched.
@@ -1865,7 +1855,7 @@ public:
     void adopt_foreground_role() {
         if (foreground_role_adopted_) return;
         foreground_role_adopted_ = true;
-        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+        [NSApp setActivationPolicy:vellum::platform::foreground_activation_policy()];
         mac_menu::install_application_menu(
             menu_commands_, [] { vellum::view::mac_lifecycle::request_cocoa_app_stop(); });
     }
@@ -2200,7 +2190,7 @@ public:
             if (!options_initially_hidden_) {
                 show();
                 [window_ makeFirstResponder:metal_view_];
-                [NSApp activateIgnoringOtherApps:YES];
+                vellum::platform::activate_app_for_window();
             }
             [NSApp run];
             vellum::view::mac_lifecycle::pump_cocoa_main_thread_until(ready_to_return);
@@ -2358,7 +2348,7 @@ private:
     // clipped to" against the unconditional repaint that still ships.
     render::DirtyTracker tracker_;
     bool partial_rendering_debug_ = false;
-    // Partial repaint: when true (PULP_PARTIAL_REPAINT=1) the host clips the
+    // FU-2 (WI-17): when true (PULP_PARTIAL_REPAINT=1) the host clips the
     // repaint to the damaged rect and blits a retained persistent-scene target.
     // Default false ⇒ the unconditional full-repaint path is unchanged.
     bool partial_repaint_enabled_ = false;
@@ -2541,7 +2531,7 @@ private:
         startup_report_.graphite_ms = vellum::view::host_elapsed_ms(graphite_start);
         configured_scale_ = static_cast<float>(scale);
 
-        // Put the surface in persistent-scene mode when partial repaint is
+        // FU-2: put the surface in persistent-scene mode when partial repaint is
         // enabled, so a clipped repaint is correct on the non-preserving Dawn
         // swapchain. If the backend can't retain a scene, disable partial
         // repaint entirely — we must never clip a non-preserving surface.
@@ -2661,7 +2651,7 @@ private:
         // after layout, before the GPU submit/present in render_frame.
         PULP_TRACE_SCOPE_NAMED("canvas", "paint");
 
-        // Partial repaint: clip the ENTIRE body — background fill included —
+        // FU-2 partial repaint: clip the ENTIRE body — background fill included —
         // to the damaged rect. Everything outside stays as the retained scene's
         // previous-frame pixels. Only reached when compute_effective_damage
         // returned a bounded (pixel-identical) rect. The clip is in root logical
@@ -2701,7 +2691,7 @@ private:
 
         // Inspector overlay is painted automatically via View::paint_overlays()
 
-        if (clip) canvas.restore_to_count(clip_saved);  // close the partial-repaint clip
+        if (clip) canvas.restore_to_count(clip_saved);  // close the FU-2 clip
     }
 
     bool render_frame(std::vector<uint8_t>* capture_pixels = nullptr,
@@ -2779,7 +2769,7 @@ private:
                 width_, height_, gpu_surface_->width(), gpu_surface_->height(), scale);
         }
 
-        // When partial repaint is enabled and this frame has a bounded
+        // FU-2: when partial repaint is enabled and this frame has a bounded
         // (non-full) dirty region, ask the pure damage model whether the region
         // can be clipped pixel-identically. A hazard (blur / backdrop-filter /
         // mask / transformed view reaching the damage) escalates to full → no
@@ -2870,7 +2860,7 @@ private:
                                         std::memory_order_relaxed);
         if (reached_output) {
             tracker_.clear();  // next frame starts clean
-            if (partial_repaint_enabled_) clear_pending_dirty();  // partial: no paint_root here
+            if (partial_repaint_enabled_) clear_pending_dirty();  // FU-2: no paint_root here
         } else if (partial_repaint_enabled_) {
             mark_dirty();  // failed present → drawable undefined → repaint in full
         }

@@ -1,6 +1,7 @@
 #include <vellum/view/hover_cursor.hpp>
 
 #include <vellum/view/overlay_dismissal.hpp>
+#include <vellum/view/pointer_dispatch.hpp>
 
 namespace vellum::view {
 
@@ -17,6 +18,15 @@ View::CursorStyle hover_cursor_at(View& root, Point p) {
     return target ? target->cursor() : View::CursorStyle::default_;
 }
 
+std::optional<View::CursorStyle> hover_cursor_under(View& root, Point p) {
+    {
+        View::DisabledHitTestScope include_disabled;
+        if (!hover_target_at(root, p))
+            return std::nullopt;
+    }
+    return hover_cursor_at(root, p);
+}
+
 std::optional<View::CursorStyle> HoverCursorTracker::poll_resolved(
     View::CursorStyle style) {
     if (published_ && style == last_) return std::nullopt;
@@ -27,6 +37,10 @@ std::optional<View::CursorStyle> HoverCursorTracker::poll_resolved(
 
 std::optional<View::CursorStyle> HoverCursorTracker::poll(View& root) {
     if (!has_pointer_) return std::nullopt;
+    // The frame that moved content under a still pointer must fix hover state
+    // as well as the cursor, and hover first so the cursor resolves against the
+    // same tree state the pointer now sees.
+    reevaluate_stationary_hover(root);
     return poll_resolved(hover_cursor_at(root, pointer_));
 }
 

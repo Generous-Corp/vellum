@@ -62,7 +62,7 @@ View* root_for_gesture_relationship_cleanup(View* view) {
 // root's generation so unrelated editors remain isolated.
 std::atomic<std::uint64_t> g_view_structure_generation{1};
 
-// Process-global count of views with subtree scene caching enabled. The vast
+// Process-global count of views with subtree caching enabled (FU-3). The vast
 // majority of trees never cache, and invalidate_subtree_caches_up() runs on
 // EVERY request_repaint()/set_bounds()/child-mutation — a hot mutation path.
 // This counter lets that walk early-out with a single relaxed load when no
@@ -364,7 +364,7 @@ TracingBadgeLayout tracing_badge_layout(float root_width, float text_width,
     return layout;
 }
 
-// ── Subtree scene cache ──────────────────────────────────────────────────
+// ── Subtree scene cache (FU-3) ───────────────────────────────────────────
 void View::set_subtree_cached(bool v) {
     if (subtree_cached_ == v) return;
     subtree_cached_ = v;
@@ -438,6 +438,19 @@ void apply_pointer(MouseEvent& e, const View::SimulatedPointer& p) {
 }
 
 }  // namespace
+
+bool View::focus_within() const {
+    const RootInteractionState* state = const_cast<View*>(this)->existing_interaction();
+    const View* focused = state ? state->focused_input : nullptr;
+    for (const View* v = focused; v != nullptr; v = v->parent_)
+        if (v == this)
+            return true;
+    return false;
+}
+
+bool View::simulate_modifier_keys(Modifiers modifiers) {
+    return deliver_modifier_keys_changed(*this, modifiers);
+}
 
 void View::simulate_click(Point root_pos) {
     simulate_click(root_pos, SimulatedPointer{});
@@ -655,6 +668,9 @@ void View::simulate_drag(Point start, Point end, int steps,
 }
 
 static void collect_focusable(View& root, std::vector<View*>& out) {
+    // A disabled view and its subtree are not in the tab order.
+    if (!root.enabled())
+        return;
     if (root.focusable()) out.push_back(&root);
     for (size_t i = 0; i < root.child_count(); ++i)
         collect_focusable(*root.child_at(i), out);
@@ -2652,6 +2668,18 @@ void View::simulate_hover(Point root_pos) {
     for (auto it = hover_path.rbegin(); it != hover_path.rend(); ++it)
         (*it)->set_hovered(true);
 
+    // Remember what this pass established, so a later frame can tell whether
+    // the content under a stationary pointer has changed. A point outside the
+    // surface (hosts pass one on pointer exit) means no pointer.
+    {
+        RootInteractionState& state = interaction();
+        state.hover_pointer = root_pos;
+        state.hover_pointer_valid = local_bounds().contains(root_pos);
+        state.hover_target.set(target);
+        if (!target)
+            state.hover_target.reset();
+    }
+
     if (vellum::view::motion::input_recording_enabled()) {
         const std::string id = target ? target->id() : std::string();
         std::vector<std::pair<std::string, double>> coords;
@@ -2664,14 +2692,12 @@ void View::simulate_hover(Point root_pos) {
         // sub-region of itself the pointer is over (e.g. the
         // inspector ToolStrip's per-button tooltip, which set_hovered() alone
         // can't drive because on_mouse_enter carries no coordinate). Convert
-        // the root-space point into the target's local space by subtracting
-        // its accumulated bounds origin up the parent chain.
-        float ox = 0.0f, oy = 0.0f;
-        for (View* v = target; v; v = v->parent()) {
-            ox += v->bounds().x;
-            oy += v->bounds().y;
-        }
-        target->on_hover_move(Point{root_pos.x - ox, root_pos.y - oy});
+        // the root-space point with the same scale- and scroll-aware walk the
+        // press and move verbs use, so a row inside a scrolled list sees where
+        // the pointer is in the row, not in the unscrolled content.
+        const Point local = point_to_local(root_pos, target, this);
+        interaction().hover_local = local;
+        target->on_hover_move(local);
     }
 }
 

@@ -16,7 +16,7 @@
 #include <limits>
 #include <string>
 
-extern "C" void vellum_mac_text_input_client_category_anchor() {}
+extern "C" void pulp_mac_text_input_client_category_anchor() {}
 
 @interface VellumMirrorView (TextInputClient) <NSTextInputClient>
 @end

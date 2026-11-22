@@ -166,6 +166,13 @@ class SkiaSurfaceImpl : public SkiaSurface {
         backend_ctx.fQueue = *queue_ptr;
 
         skgpu::graphite::ContextOptions ctx_options;
+        // Graphite defaults to 4x internal MSAA.  That path is not reliable on
+        // Intel Metal when a plugin is hosted in a DAW: Dawn emits an MSL
+        // pipeline that the Intel driver rejects (the editor then presents a
+        // black surface).  Pulp performs its own analytic antialiasing, so a
+        // single-sample internal target preserves the visible result and keeps
+        // the renderer compatible across Intel and Apple GPUs.
+        ctx_options.fInternalMultisampleCount = skgpu::graphite::SampleCount::k1;
         context_ = skgpu::graphite::ContextFactory::MakeDawn(backend_ctx, ctx_options);
 
         if (!context_) {
@@ -222,7 +229,7 @@ class SkiaSurfaceImpl : public SkiaSurface {
         // Images this frame draws are kept for it even past the byte budget.
         canvas::ImageFileCache::instance().begin_frame(recorder_.get());
 
-        // Persistent-scene mode: draw into the retained scene surface,
+        // Persistent-scene mode (FU-2): draw into the retained scene surface,
         // not the swapchain. The scene keeps last frame's pixels, so the host
         // can clip the repaint to the damaged rect and everything else stays.
         // The presentable drawable is wrapped later, at end_frame, for the blit.
@@ -349,7 +356,7 @@ class SkiaSurfaceImpl : public SkiaSurface {
 
         if (!recorder_ || !context_) return finish_frame(FrameOutcome::failed);
 
-        // Persistent-scene mode: the frame drew into the retained scene
+        // Persistent-scene mode (FU-2): the frame drew into the retained scene
         // surface. Record a 1:1 blit of the scene onto the presentable drawable
         // into the SAME recorder, so the single snap() below carries both the
         // scene draws and the blit. Offscreen (no presentable surface) needs no
@@ -719,7 +726,7 @@ private:
     // Offscreen fallback (used when no native surface is attached)
     sk_sp<SkSurface> offscreen_surface_;
 
-    // Persistent-scene target. When persistent_scene_ is on, the frame is
+    // Persistent-scene target (FU-2). When persistent_scene_ is on, the frame is
     // drawn here and RETAINED across frames; end_frame blits it to the drawable.
     bool persistent_scene_ = false;
     sk_sp<SkSurface> scene_surface_;
