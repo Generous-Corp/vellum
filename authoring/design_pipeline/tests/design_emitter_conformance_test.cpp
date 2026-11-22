@@ -46,6 +46,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <unistd.h>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -56,6 +57,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <stdexcept>
 #include <string_view>
 #include <typeinfo>
 #include <vector>
@@ -336,7 +338,7 @@ constexpr unsigned char kTinyPng[] = {
 class StagedAssets {
   public:
     explicit StagedAssets(const DesignIR& ir)
-        : dir_(std::filesystem::temp_directory_path() / ("vellum-emitter-conformance-" + std::to_string(std::rand()))) {
+        : dir_(make_unique_dir()) {
         std::set<std::string> paths;
         const auto visit = [&](auto& self, const IRNode& node) -> void {
             if (const auto it = node.attributes.find("asset_path"); it != node.attributes.end())
@@ -366,6 +368,15 @@ class StagedAssets {
     }
 
   private:
+    // mkdtemp creates the directory exclusively, so two test processes (or two
+    // fixtures) never share one and a destructor never removes another's files.
+    static fs::path make_unique_dir() {
+        std::string pattern = (fs::temp_directory_path() / "vellum-emitter-conformance-XXXXXX").string();
+        if (!mkdtemp(pattern.data()))
+            throw std::runtime_error("cannot create a unique staging directory");
+        return pattern;
+    }
+
     fs::path dir_;
 };
 
