@@ -1,4 +1,4 @@
-#import <vellum/view/platform/ios_au_editor_controller.h>
+#import <integrations/vellum-auv3-ios/ios_au_editor_controller.h>
 
 #import "au_audio_unit.h"
 

@@ -3,7 +3,8 @@
 #import <TargetConditionals.h>
 
 #if TARGET_OS_IOS
-#import <CoreAudioKit/CoreAudioKit.h>
+#import <AudioToolbox/AudioToolbox.h>
+#import <UIKit/UIKit.h>
 
 typedef BOOL (^VellumAUv3ResizeRequest)(CGSize size);
 
@@ -17,20 +18,20 @@ typedef BOOL (^VellumAUv3ResizeRequest)(CGSize size);
 - (void)detachEditor;
 @end
 
-// Use a plug-in-specific subclass as the extension's principal class.
-@interface VellumAUv3EditorController : AUViewController <AUAudioUnitFactory>
-
-// Read on main. Assignments from the factory queue are applied on main.
+// The extension controller supplies the AU-specific session and lifecycle hooks.
+@protocol VellumAUv3EditorControllerContract <NSObject>
 @property(nonatomic, strong) AUAudioUnit *boundUnit;
-
-// Override in the audio adapter. Return nil if the unit cannot be created.
-- (AUAudioUnit *)makeAudioUnitWithComponentDescription:(AudioComponentDescription)description
-                                                error:(NSError **)error;
-- (BOOL)editorLaunchAllowed;
-
-// Return a new, unattached session, or nil if the unit has no editor.
-// A session that retains resizeRequest must copy it and drop it on detach.
+@property(nonatomic) CGSize preferredContentSize;
+@property(nonatomic, readonly) UIView *view;
+@property(nonatomic, readonly, getter=isViewLoaded) BOOL viewLoaded;
 - (id<VellumAUv3EditorSession>)editorSessionForAudioUnit:(AUAudioUnit *)unit
                                          resizeRequest:(VellumAUv3ResizeRequest)resizeRequest;
+- (void)closeEditor;
+@end
+
+// UIKit-only container used by the extension controller.
+@interface VellumAUv3EditorContainer : UIView
+- (BOOL)openEditorForController:(id<VellumAUv3EditorControllerContract>)controller;
+- (void)closeEditor;
 @end
 #endif
