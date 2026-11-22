@@ -203,12 +203,15 @@ set(_vellum_rmlui_install_targets
 # as a normal View. The platform PluginViewHost implementations then provide
 # the native child window, paint surface, and event dispatch on Windows and
 # Linux without a second windowing backend.
+# The view core never depends on RmlUi: this optional library depends on it.
 if(TARGET pulp-view-core)
-    target_sources(pulp-view-core PRIVATE src/plugin_view.cpp)
-    target_include_directories(pulp-view-core PUBLIC
+    add_library(vellum-rmlui-plugin-view STATIC src/plugin_view.cpp)
+    add_library(VellumRmlUi::PluginView ALIAS vellum-rmlui-plugin-view)
+    target_compile_features(vellum-rmlui-plugin-view PUBLIC cxx_std_20)
+    target_include_directories(vellum-rmlui-plugin-view PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
-    target_link_libraries(pulp-view-core PUBLIC
-        vellum-rmlui-core vellum-rmlui-soft-renderer)
+    target_link_libraries(vellum-rmlui-plugin-view
+        PUBLIC pulp-view-core vellum-rmlui-core vellum-rmlui-soft-renderer)
 endif()
 
 if(VELLUM_RMLUI_NATIVE_HOST)
