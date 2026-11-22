@@ -975,16 +975,34 @@ def current_mirror_receipts(
         except (OSError, ValueError):
             return [], [], ["HEAD has no mirror/ tree to name the current export receipt"]
         successor_path = root / FRAMEWORK_TRANSFER_SUCCESSOR
-        try:
-            successor = json.loads(successor_path.read_text(encoding="utf-8")) if successor_path.is_file() else None
-        except (OSError, ValueError):
-            successor = None
-        named = (successor.get("export_receipt") if isinstance(successor, dict)
-                 else transfer.get("export_receipt") if isinstance(transfer, dict) else None)
-        if named not in receipts:
-            return [], receipts, [f"{FRAMEWORK_TRANSFER_RECORD} names {named!r}, which is not a landed receipt"]
-        head_tree = (successor.get("mirror_tree") if isinstance(successor, dict)
-                     else transfer.get("mirror_tree") if isinstance(transfer, dict) else None)
+        successor = None
+        if successor_path.is_file():
+            try:
+                successor = json.loads(successor_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                return [], receipts, [f"{FRAMEWORK_TRANSFER_SUCCESSOR} is malformed: {exc}"]
+            if not isinstance(successor, dict) or set(successor) != {"export_receipt", "mirror_tree"}:
+                return [], receipts, [f"{FRAMEWORK_TRANSFER_SUCCESSOR} is malformed"]
+            transfer_receipt = transfer.get("export_receipt") if isinstance(transfer, dict) else None
+            named = successor.get("export_receipt")
+            if transfer_receipt not in receipts:
+                return [], receipts, [f"{FRAMEWORK_TRANSFER_RECORD} names {transfer_receipt!r}, which is not a landed receipt"]
+            if named not in receipts:
+                return [], receipts, [f"{FRAMEWORK_TRANSFER_SUCCESSOR} names {named!r}, which is not a landed receipt"]
+            if receipts.index(named) <= receipts.index(transfer_receipt):
+                return [], receipts, [f"{FRAMEWORK_TRANSFER_SUCCESSOR} must name a receipt after {transfer_receipt}"]
+            try:
+                named_receipt = json.loads((root / named).read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                return [], receipts, [f"{FRAMEWORK_TRANSFER_SUCCESSOR} receipt is unreadable: {exc}"]
+            if not isinstance(named_receipt, dict) or named_receipt.get("mirror_tree") != successor.get("mirror_tree"):
+                return [], receipts, [f"{FRAMEWORK_TRANSFER_SUCCESSOR} mirror_tree does not match its receipt"]
+            head_tree = successor.get("mirror_tree")
+        else:
+            named = transfer.get("export_receipt") if isinstance(transfer, dict) else None
+            if named not in receipts:
+                return [], receipts, [f"{FRAMEWORK_TRANSFER_RECORD} names {named!r}, which is not a landed receipt"]
+            head_tree = transfer.get("mirror_tree") if isinstance(transfer, dict) else None
     current: list[str] = []
     older: list[str] = []
     for receipt_path in receipts:
@@ -1049,7 +1067,21 @@ def renderer_pin_errors(
         actual.update(archive_url=asset.get("url"), archive_sha256=asset.get("sha256"))
         mismatched = sorted(key for key in expected if actual[key] != expected[key])
         historical_assets = renderer_lock.get("historical_skia_assets", [])
-        if ("archive_sha256" in mismatched and actual["archive_sha256"] in historical_assets):
+        historical_valid = (isinstance(historical_assets, list)
+                            and all(isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{64}", value)
+                                    for value in historical_assets))
+        if not historical_valid:
+            errors.append(f"{label}: renderer-lock.json historical_skia_assets must be a list of 64-hex strings")
+            historical_assets = []
+        actual_sha = actual["archive_sha256"]
+        if not isinstance(actual_sha, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", actual_sha):
+            if "archive_sha256" not in mismatched:
+                mismatched.append("archive_sha256")
+        historical_url = actual["archive_url"]
+        url_valid = (isinstance(historical_url, str)
+                     and historical_url.startswith("https://github.com/danielraffel/skia-builder/releases/download/chrome/")
+                     and historical_url.endswith("/skia-build-mac-universal-gpu-release.zip"))
+        if ("archive_sha256" in mismatched and actual_sha in historical_assets and url_valid):
             mismatched.remove("archive_sha256")
             if "archive_url" in mismatched:
                 mismatched.remove("archive_url")
@@ -1604,8 +1636,8 @@ FRAMEWORK_PORTS = load_framework_ports().LEDGER
 FRAMEWORK_UNITS = load_framework_ports().UNITS
 # The files that only exist together with framework/.
 FRAMEWORK_RESPELL = load_port_respell().TABLE
-FRAMEWORK_DATA_FILES = (FRAMEWORK_TRANSFER_RECORD, FRAMEWORK_NAME_DEBT, FRAMEWORK_EXTERNAL_UPDATES, FRAMEWORK_PORTS,
-                        FRAMEWORK_UNITS, FRAMEWORK_RESPELL)
+FRAMEWORK_DATA_FILES = (FRAMEWORK_TRANSFER_RECORD, FRAMEWORK_TRANSFER_SUCCESSOR, FRAMEWORK_NAME_DEBT,
+                        FRAMEWORK_EXTERNAL_UPDATES, FRAMEWORK_PORTS, FRAMEWORK_UNITS, FRAMEWORK_RESPELL)
 
 
 def framework_ports_history_errors(root: Path, ports) -> list[str]:
@@ -2438,6 +2470,18 @@ def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
     proof = source_errors + identity.verify(raw, identity.git_tree(root, tree), transfer.get("rename", {}))
     checks["framework_transfer_proved"] = not proof
     errors.extend(f"framework transfer: {e}" for e in proof)
+    successor_path = root / FRAMEWORK_TRANSFER_SUCCESSOR
+    if successor_path.is_file():
+        try:
+            successor = json.loads(successor_path.read_text(encoding="utf-8"))
+            successor_receipt = json.loads((root / successor["export_receipt"]).read_text(encoding="utf-8"))
+            successor_raw = identity.git_tree(root, successor_receipt["mirror_tree"])
+            successor_framework = identity.git_tree(root, "HEAD:framework")
+            successor_proof = identity.verify(successor_raw, successor_framework, transfer.get("rename", {}))
+        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
+            successor_proof = [f"{FRAMEWORK_TRANSFER_SUCCESSOR}: cannot prove framework derivation: {exc}"]
+        checks["framework_successor_proved"] = not successor_proof
+        errors.extend(f"framework successor: {e}" for e in successor_proof)
     return errors, checks
 
 
