@@ -232,7 +232,8 @@ vellum_add_framework_test(widget-bridge-param-model
 # or a session bus a case exits 77 and ctest reports a skip. Each has a control
 # that must also pass (an unexported path, and a run with the resize and the
 # click left out).
-set(_vellum_linux_host_sources linux_atspi_tree_test.cpp linux_sdl_window_x11_test.cpp)
+set(_vellum_linux_host_sources linux_atspi_tree_test.cpp linux_sdl_window_x11_test.cpp
+    linux_plugin_view_host_x11_test.cpp)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET Vellum::MirrorView_core)
     find_package(X11 REQUIRED COMPONENTS Xtst)
     vellum_add_framework_test(linux-atspi-tree
@@ -241,6 +242,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET Vellum::MirrorView_core)
     vellum_add_framework_test(linux-sdl-window-x11
         SOURCES linux_sdl_window_x11_test.cpp
         UNITS Vellum::MirrorView_core)
+    vellum_add_framework_test(linux-plugin-view-host-x11
+        SOURCES linux_plugin_view_host_x11_test.cpp
+        UNITS Vellum::MirrorView_core)
+    target_link_libraries(vellum-framework-linux-plugin-view-host-x11-test PRIVATE X11::X11)
     target_link_libraries(vellum-framework-linux-sdl-window-x11-test PRIVATE X11::X11 X11::Xtst)
     add_test(NAME vellum.framework.linux-sdl-window-x11-control
         COMMAND vellum-framework-linux-sdl-window-x11-test --control)
@@ -252,7 +257,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET Vellum::MirrorView_core)
     set_tests_properties(vellum.framework.linux-atspi-tree-hang-control PROPERTIES
         PASS_REGULAR_EXPRESSION "bounded client call expired" LABELS "framework;linux-host" TIMEOUT 90)
     foreach(_linux_host_test IN ITEMS linux-atspi-tree linux-sdl-window-x11
-            linux-sdl-window-x11-control)
+            linux-sdl-window-x11-control linux-plugin-view-host-x11)
         set_tests_properties(vellum.framework.${_linux_host_test} PROPERTIES
             SKIP_RETURN_CODE 77 LABELS "framework;linux-host" TIMEOUT 90)
     endforeach()

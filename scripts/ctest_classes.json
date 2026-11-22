@@ -39,6 +39,7 @@
       "vellum.framework.knob-fine-drag",
       "vellum.framework.linux-atspi-tree",
       "vellum.framework.linux-atspi-tree-hang-control",
+      "vellum.framework.linux-plugin-view-host-x11",
       "vellum.framework.linux-sdl-window-x11",
       "vellum.framework.linux-sdl-window-x11-control",
       "vellum.framework.main-thread-timer",
