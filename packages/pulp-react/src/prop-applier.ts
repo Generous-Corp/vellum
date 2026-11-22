@@ -1134,6 +1134,13 @@ export function applyChangedProps(
             mutated = true;
             continue;
         }
+        // `<Modal open>` that loses its `open` prop closes, as an undefined
+        // `open` does on first render (applyOne: Boolean(undefined)).
+        if (key === 'open' && type === 'Modal') {
+            call('setVisible', id, false);
+            mutated = true;
+            continue;
+        }
         // A null selection value was already reset by applyOne above.
         if (isVirtualListType(type) && (key === 'selectionMode' || key === 'selected')
             && key in newProps) continue;

@@ -343,6 +343,53 @@ test('serializes bounded gradient, shadow, and attributed-run styles', () => {
     })).renderJSON(), /between 2 and 64 stops/);
 });
 
+function renderPaintStyle(style, tokenRefs) {
+    return JSON.parse(mount(() => jsx(View, {
+        id: 'paint', style, tokenRefs,
+    })).renderJSON()).tree.style;
+}
+
+const shadow = { offsetX: -2, offsetY: 3, blurRadius: 4, spreadRadius: 1, color: '#00000080' };
+
+test('retains one to eight box shadows and rejects a ninth', () => {
+    const shadows = Array.from({ length: 9 }, (_, offsetY) => ({ ...shadow, offsetY }));
+    for (const count of [1, 8]) {
+        const boxShadow = shadows.slice(0, count);
+        assert.deepEqual(renderPaintStyle({ boxShadow }).boxShadow, boxShadow);
+    }
+    assert.throws(() => renderPaintStyle({ boxShadow: shadows }), /between 1 and 8 shadows/);
+});
+
+test('rejects a nested box-shadow array at the invalid entry', () => {
+    assert.throws(() => renderPaintStyle({ boxShadow: [shadow, [shadow]] }),
+        /style\.boxShadow\[1\] must be a plain object/);
+});
+
+test('retains a solid border and rejects malformed fields', () => {
+    const border = { width: 2.5, style: 'solid', color: '#a1B2c380' };
+    assert.deepEqual(renderPaintStyle({ border }).border, border);
+    for (const [fields, error] of [
+        [{ width: -1 }, /border\.width must be a non-negative finite number/],
+        [{ width: '2px' }, /border\.width must be a non-negative finite number/],
+        [{ style: 'dashed' }, /border\.style must be solid/],
+        [{ color: 'red' }, /border\.color must be a hex color/],
+        [{ color: '#12345g' }, /border\.color must be a hex color/],
+    ]) {
+        assert.throws(() => renderPaintStyle({ border: { ...border, ...fields } }), error);
+    }
+});
+
+test('rejects box-shadow token slots on multiple shadows', () => {
+    const tokenRefs = {
+        boxShadow: { path: 'shadow.color', layer: 'import', value: shadow.color },
+    };
+    const single = { boxShadow: [shadow] };
+    const multiple = { boxShadow: [shadow, { ...shadow, color: '#ffffff' }] };
+    assert.throws(() => renderPaintStyle(multiple, tokenRefs),
+        /tokenRefs\.boxShadow is not a token slot/);
+    assert.deepEqual(renderPaintStyle(single, tokenRefs).boxShadow, single.boxShadow);
+});
+
 test('serializes and validates the gradient vocabulary', () => {
     const stops = [{ position: 0, color: '#ff0000' }, { position: 1, color: '#0000ff' }];
     const twoCircle = {

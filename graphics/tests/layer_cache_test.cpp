@@ -202,6 +202,8 @@ void equality_covers_every_field() {
         {"shadow spread", [](PaintCommand& c) { c.box_shadows[0].spread_radius = 4.0F; }},
         {"shadow colour", [](PaintCommand& c) { c.box_shadows[0].color.green = 0.5F; }},
         {"shadow count", [](PaintCommand& c) { c.box_shadows.clear(); }},
+        {"border width", [](PaintCommand& c) { c.border_width = 2.0F; }},
+        {"border colour", [](PaintCommand& c) { c.border_color.green = 0.5F; }},
         {"corner_radius", [](PaintCommand& c) { c.corner_radius = 5.0F; }},
         {"text", [](PaintCommand& c) { c.text = "u"; }},
         {"font_size", [](PaintCommand& c) { c.font_size = 20.0F; }},

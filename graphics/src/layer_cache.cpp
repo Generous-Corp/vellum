@@ -16,7 +16,7 @@ namespace {
 // PaintCommand field: a field they skip lets a cached image survive a change
 // to it. This size changes when a field is added; update both functions, and
 // the field-coverage test in layer_cache_test.cpp, then this number.
-static_assert(sizeof(PaintCommand) == 496,
+static_assert(sizeof(PaintCommand) == 512,
               "PaintCommand changed: update paint_commands_equal and hash_command");
 static_assert(sizeof(TextStyle) == 56 && sizeof(TextRun) == 88,
               "TextStyle or TextRun changed: update same_style, same_runs and hash_command");
@@ -203,6 +203,7 @@ bool same_paint(const PaintCommand& a, const PaintCommand& b) {
     return a.kind == b.kind && a.node_id == b.node_id && same_color(a.fill, b.fill) &&
            same_gradients(a.fill_gradients, b.fill_gradients) &&
            same_shadows(a.box_shadows, b.box_shadows) &&
+           same_float(a.border_width, b.border_width) && same_color(a.border_color, b.border_color) &&
            same_float(a.corner_radius, b.corner_radius) && a.text == b.text &&
            same_float(a.font_size, b.font_size) && a.font_family == b.font_family &&
            a.font_weight == b.font_weight && same_float(a.letter_spacing, b.letter_spacing) &&
@@ -304,6 +305,8 @@ std::uint64_t hash_command(const PaintCommand& command) {
         hash.real(shadow.spread_radius);
         hash.color(shadow.color);
     }
+    hash.real(command.border_width);
+    hash.color(command.border_color);
     hash.real(command.corner_radius);
     hash.text(command.text);
     hash.real(command.font_size);
