@@ -70,7 +70,7 @@ string(JOIN "|" _vellum_runtime_identity_seed
 string(SHA256 _vellum_runtime_identity_hash "${_vellum_runtime_identity_seed}")
 string(SUBSTRING "${_vellum_runtime_identity_hash}" 0 12 VELLUM_RUNTIME_IDENTITY_TAG)
 set(VELLUM_RUNTIME_IDENTITY_TAG "${VELLUM_RUNTIME_IDENTITY_TAG}" CACHE INTERNAL
-    "Identity of the Vellum runtime closure")
+    "Identity of the Vellum runtime closure" FORCE)
 set(VELLUM_RUNTIME_IDENTITY_SUFFIX "-${VELLUM_RUNTIME_IDENTITY_TAG}")
 set(VELLUM_RUNTIME_OBJC_SUFFIX "_${VELLUM_RUNTIME_IDENTITY_TAG}")
 message(STATUS "Vellum: runtime closure identity ${VELLUM_RUNTIME_IDENTITY_TAG}")

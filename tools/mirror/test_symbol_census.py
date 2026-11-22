@@ -70,6 +70,13 @@ class MirrorRuntimeIdentityTest(unittest.TestCase):
         self.assertIn("PULP_VIEW_OBJC_SUFFIX=${VELLUM_RUNTIME_OBJC_SUFFIX}", cmake)
         self.assertIn("string(SHA256 _vellum_runtime_identity_hash", cmake)
 
+    def test_recomputed_identity_replaces_a_stale_cache_entry(self) -> None:
+        cmake = (HERE / "VellumMirror.cmake").read_text(encoding="utf-8")
+        start = cmake.index('set(VELLUM_RUNTIME_IDENTITY_TAG "${VELLUM_RUNTIME_IDENTITY_TAG}"')
+        stmt = cmake[start:cmake.index(")\n", start)]
+        self.assertIn("CACHE INTERNAL", stmt)
+        self.assertRegex(stmt, r"\bFORCE\b")
+
     @unittest.skipUnless(os.environ.get("VELLUM_RUNTIME_IDENTITY_BUILD"),
                          "requires a built macOS mirror runtime")
     def test_dylib_and_objc_names_include_build_identity(self) -> None:
