@@ -120,7 +120,7 @@ bool style_key_consumed(std::string_view type, std::string_view key, const Style
         return use.lays_out_children;
     }
     if (key == "backgroundGradient" || key == "backgroundLinearGradient" ||
-        key == "backgroundGradients" || key == "boxShadow") return true;
+        key == "backgroundGradients" || key == "boxShadow" || key == "border") return true;
     if (!text) {
         for (std::size_t side = 0; side < kBorderWidths.size(); ++side) {
             if (key == kBorderWidths[side].UTF8String || key == kBorderColors[side].UTF8String) {
@@ -459,11 +459,17 @@ bool parse_box_shadow(
     std::string* error) {
     id raw = style[@"boxShadow"];
     if (raw == nil) return true;
-    if (![raw isKindOfClass:NSDictionary.class]) {
-        set_error(error, "boxShadow must be an object");
+    NSArray* layers = [raw isKindOfClass:NSArray.class] ? raw : @[raw];
+    if (layers.count == 0U || layers.count > 8U) {
+        set_error(error, "boxShadow must contain between 1 and 8 shadows");
         return false;
     }
-    NSDictionary* source = raw;
+    for (id layer : layers) {
+      if (![layer isKindOfClass:NSDictionary.class]) {
+        set_error(error, "boxShadow entries must be objects");
+        return false;
+      }
+      NSDictionary* source = layer;
     const auto color = parse_color(source[@"color"]);
     if (!color) {
         set_error(error, "boxShadow requires a color");
@@ -484,7 +490,32 @@ bool parse_box_shadow(
         set_error(error, "boxShadow blurRadius and spreadRadius must be non-negative");
         return false;
     }
-    output.push_back(shadow);
+      output.push_back(shadow);
+    }
+    return true;
+}
+
+bool parse_border(NSDictionary* style, float& width, vellum::graphics::Color& color,
+                  std::string* error) {
+    id raw = style[@"border"];
+    if (raw == nil) return true;
+    if (![raw isKindOfClass:NSDictionary.class]) {
+        set_error(error, "border must be an object");
+        return false;
+    }
+    NSDictionary* source = raw;
+    if (source[@"style"] != nil && (![source[@"style"] isKindOfClass:NSString.class] ||
+        ![source[@"style"] isEqualToString:@"solid"])) {
+        set_error(error, "border.style must be solid");
+        return false;
+    }
+    if (!number_field(source, @"width", 0.0F, width, "border.width", error) || width < 0.0F) {
+        set_error(error, "border.width must be non-negative");
+        return false;
+    }
+    const auto parsed = parse_color(source[@"color"]);
+    if (!parsed) { set_error(error, "border requires a color"); return false; }
+    color = *parsed;
     return true;
 }
 
@@ -2596,6 +2627,7 @@ bool materialize_node(
         .value_or(vellum::graphics::Color::rgba(0.0F, 0.0F, 0.0F, 0.0F));
     if (!parse_linear_gradient(style, output.fill_gradients, error) ||
         !parse_box_shadow(style, output.box_shadows, error) ||
+        !parse_border(style, output.border_width, output.border_color, error) ||
         !parse_corner_radii(style, output.corner_radius, output.corner_radii, error) ||
         !parse_opacity(style, output.opacity, error)) {
         return false;
