@@ -381,6 +381,12 @@ function validateLinearGradient(value, path, { coincidentStops = false } = {}) {
 }
 
 function validateBoxShadow(value, path) {
+    if (Array.isArray(value)) {
+        if (value.length === 0 || value.length > 8) {
+            throw new TypeError(`${path} must contain between 1 and 8 shadows`);
+        }
+        return value.map((shadow, index) => validateBoxShadow(shadow, `${path}[${index}]`));
+    }
     const shadow = paintStyleObject(
         value, path, ['offsetX', 'offsetY', 'blurRadius', 'spreadRadius', 'color']);
     for (const name of ['offsetX', 'offsetY']) {
@@ -395,6 +401,19 @@ function validateBoxShadow(value, path) {
         throw new TypeError(`${path}.color must be a hex color`);
     }
     return cloneJson(shadow, path);
+}
+
+function validateBorder(value, path) {
+    const border = paintStyleObject(value, path, ['width', 'style', 'color']);
+    finitePaintNumber(border.width, `${path}.width`, { optional: true, nonNegative: true });
+    if (border.style !== undefined && border.style !== 'solid') {
+        throw new TypeError(`${path}.style must be solid`);
+    }
+    if (typeof border.color !== 'string' ||
+        !/^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$/.test(border.color)) {
+        throw new TypeError(`${path}.color must be a hex color`);
+    }
+    return cloneJson(border, path);
 }
 
 function pathKeyword(value, path, names) {
@@ -747,6 +766,10 @@ function validateStyle(style, path) {
             result[name] = validateBoxShadow(value, `${path}.style.${name}`);
             continue;
         }
+        if (name === 'border') {
+            result[name] = validateBorder(value, `${path}.style.${name}`);
+            continue;
+        }
         if (!['string', 'number', 'boolean'].includes(typeof value)) {
             throw new TypeError(`${path}.style.${name} is not serializable`);
         }
@@ -785,7 +808,10 @@ function tokenSlotColor(slot, type, style, pathProperties) {
     if (slot === 'color') return ['style.color', style?.color];
     if (type === 'text-run') return undefined;
     if (slot === 'backgroundColor') return ['style.backgroundColor', style?.backgroundColor];
-    if (slot === 'boxShadow') return ['style.boxShadow.color', style?.boxShadow?.color];
+    if (slot === 'boxShadow') {
+        const shadow = Array.isArray(style?.boxShadow) ? style.boxShadow[0] : style?.boxShadow;
+        return ['style.boxShadow.color', shadow?.color];
+    }
     if (stop) {
         const layer = stop[1] === 'backgroundLinearGradient'
             ? style?.backgroundLinearGradient
