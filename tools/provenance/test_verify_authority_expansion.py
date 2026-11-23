@@ -84,6 +84,7 @@ class Tests(unittest.TestCase):
         self, acknowledgement_sha256: str, *, commit: str = "1" * 40,
         tree: str = "2" * 40, completion_sha256: str = "4" * 64,
     ) -> dict:
+        snapshot = {"schema_version": 3, "kind": "github-open-pull-request-snapshot", "repositories": []}
         return {
             "schema_version": 1,
             "kind": "vellum-authority-promotion-attestation",
@@ -842,6 +843,7 @@ class Tests(unittest.TestCase):
         self, acknowledgement_sha256: str, *, commit: str, tree: str,
         receipt: str, receipt_sha256: str,
     ) -> dict:
+        snapshot = {"schema_version": 3, "kind": "github-open-pull-request-snapshot", "repositories": []}
         return {
             "schema_version": 1,
             "kind": "vellum-mirror-promotion-attestation",
@@ -864,6 +866,11 @@ class Tests(unittest.TestCase):
             "mirror_receipt_sha256": receipt_sha256,
             "release_source_commit": commit,
             "parity": "not-proven-deferred-to-matrix-refreeze",
+            "open_pr_snapshot": snapshot,
+            "open_pr_snapshot_commit": commit,
+            "open_pr_snapshot_sha256": hashlib.sha256(
+                (json.dumps(snapshot, sort_keys=True) + "\n").encode()
+            ).hexdigest(),
         }
 
     def mirror_promotion_fixture(self) -> dict:
@@ -1677,6 +1684,46 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
             verifier.validate_open_pr_snapshot(snapshot, acceptance, matrix, amendment),
         )
 
+    def test_tag_uses_selection_snapshot_even_when_a_later_pr_is_open(self) -> None:
+        selected = {"repositories": [], "selection": "2a01d9d6"}
+        later_live = {"repositories": [{"repository": "Generous-Corp/vellum", "pulls": [{"number": 701}]}]}
+        self.assertIs(
+            verifier.authority_open_pr_snapshot(
+                release_tag="v0.2.2", recorded=selected, live=later_live
+            ),
+            selected,
+        )
+        self.assertIs(
+            verifier.authority_open_pr_snapshot(
+                release_tag=None, recorded=selected, live=later_live
+            ),
+            later_live,
+        )
+
+    def test_signed_tag_snapshot_is_required_and_digest_bound(self) -> None:
+        self.assertTrue(any("snapshot is missing" in error for error in
+                            verifier.validate_promotion_open_pr_snapshot({}, "1" * 40)))
+        snapshot = {"schema_version": 3, "kind": "github-open-pull-request-snapshot", "repositories": []}
+        data = {
+            "open_pr_snapshot": snapshot,
+            "open_pr_snapshot_commit": "1" * 40,
+            "open_pr_snapshot_sha256": "0" * 64,
+        }
+        self.assertTrue(any("digest differs" in error
+                            for error in verifier.validate_promotion_open_pr_snapshot(data, "1" * 40)))
+
+    def test_selection_overlap_still_refuses(self) -> None:
+        acknowledgement = self.exact_boundary_acknowledgement()
+        acceptance = self.pulp_exact_boundary_acceptance(acknowledgement)
+        matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        route = next(row for row in verifier.exact_route_rows(matrix, amendment)
+                     if row["repository"] == "Generous-Corp/pulp")
+        snapshot = self.open_pr_snapshot({"repository": "Generous-Corp/pulp", "number": 42,
+                                          "head_commit": "8" * 40, "paths": [route["path"]]})
+        errors = verifier.validate_open_pr_snapshot(snapshot, acceptance, matrix, amendment)
+        self.assertTrue(any("live overlap Generous-Corp/pulp#42 is absent" in error for error in errors))
+
     def release_bump_case(self):
         """The bot's bump of 0.1.10 to 0.1.11, judged while v0.1.10's release readiness runs."""
         acknowledgement = self.exact_boundary_acknowledgement()
@@ -1781,13 +1828,13 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
             self.assertTrue(any("is not the version bump away from v0.1.10" in e for e in check(pull=hidden)))
 
     def test_tag_scoped_audit_accepts_the_bump_and_refuses_other_overlaps(self) -> None:
-        # A release or dry-run tag enforces the live audit (the scope test
-        # below), and there #287's content rule decides the open bump: a
+        # The signed tag carries the frozen snapshot, and the content rule
+        # still decides the open bump: a
         # #188-shaped bump passes, a non-bump overlap of the same route fails.
         scope = ProvenanceWorkflowScopeTests()
         for ref in ("refs/tags/v0.1.11", "refs/tags/dry-run/v0.1.11/1-1"):
             with self.subTest(ref=ref):
-                self.assertEqual(scope.scope(ref), ("true", False))
+                self.assertEqual(scope.scope(ref), ("false", True))
         evidence, pull, check = self.release_bump_case()
         self.assertEqual(check(), [])
         other = pull | {"number": 277}
@@ -2857,7 +2904,7 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
 
 
 class ProvenanceWorkflowScopeTests(unittest.TestCase):
-    """The live open-PR audit is tag-scoped; the observatory is its own job."""
+    """Branches use live overlap state while release tags use their signed snapshot."""
 
     WORKFLOW = ROOT / ".github/workflows/provenance.yml"
 
@@ -2880,15 +2927,15 @@ class ProvenanceWorkflowScopeTests(unittest.TestCase):
         audit, _, evidence = completed.stdout.strip().partition(" ")
         return audit, "--defer-live-open-pr-audit" in evidence.split()
 
-    def test_live_open_pr_audit_runs_only_on_release_and_dry_run_tags(self) -> None:
+    def test_live_open_pr_audit_runs_on_main_pushes_and_pretag_replay(self) -> None:
         for ref, event, enforced in (
-            ("refs/heads/main", "push", False),
+            ("refs/heads/main", "push", True),
             ("refs/pull/7/merge", "pull_request", False),
             ("refs/heads/gh-readonly-queue/main/pr-7-abc", "merge_group", False),
             ("refs/tags/authority/x", "push", False),
             ("refs/tags/publish-rehearsal/1-1", "push", False),
-            ("refs/tags/v0.1.11", "push", True),
-            ("refs/tags/dry-run/v0.1.11/1-1", "push", True),
+            ("refs/tags/v0.1.11", "push", False),
+            ("refs/tags/dry-run/v0.1.11/1-1", "push", False),
         ):
             with self.subTest(ref=ref):
                 audit, deferred = self.scope(ref, event)

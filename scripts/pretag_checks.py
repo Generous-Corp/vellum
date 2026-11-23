@@ -189,13 +189,15 @@ def git(*args: str, cwd: Path) -> str:
 
 
 class Runner:
-    def __init__(self, root: Path, tag: str, commit: str, temp: Path, check_runs_commit: str | None = None) -> None:
+    def __init__(self, root: Path, tag: str, commit: str, temp: Path, check_runs_commit: str | None = None,
+                 snapshot_output: Path | None = None) -> None:
         if not TAG.fullmatch(tag) or not SHA.fullmatch(commit):
             raise PretagError("the tag must be vMAJOR.MINOR.PATCH and the commit a full SHA")
         self.root, self.tag, self.commit, self.temp = root, tag, commit, temp
         # A commit that exists only locally has no check runs on GitHub; a caller that
         # rehearses one reads the runs of a real commit instead (release_canary.py).
         self.check_runs_commit = check_runs_commit
+        self.snapshot_output = snapshot_output
         self.outputs: dict[str, str] = {}
         token = os.environ.get("GH_TOKEN", "")
         self.expressions = {
@@ -209,6 +211,7 @@ class Runner:
             **os.environ, "GITHUB_REF": f"refs/tags/{tag}", "GITHUB_REF_NAME": tag, "GITHUB_REF_TYPE": "tag",
             "GITHUB_SHA": commit, "GITHUB_REPOSITORY": REPOSITORY, "GITHUB_EVENT_NAME": "push",
             "GITHUB_WORKSPACE": str(root), "RUNNER_TEMP": str(temp),
+            "VELLUM_PRETAG_REPLAY": "1",
             # Job-level env of the jobs these steps belong to, as a tag push sets it.
             "VELLUM_TARGET_SHA": commit, "VELLUM_GIT_BASE": ZERO,
             "RELEASE_TAG": tag, "SOURCE_COMMIT": commit,
@@ -281,6 +284,12 @@ class Runner:
                     return 1
         finally:
             git("tag", "-d", self.tag, cwd=self.root)
+        if self.snapshot_output is not None:
+            snapshot = self.temp / "open-pr-snapshot.json"
+            if not snapshot.is_file():
+                raise PretagError("the pre-tag authority replay did not record an open-PR snapshot")
+            self.snapshot_output.parent.mkdir(parents=True, exist_ok=True)
+            self.snapshot_output.write_bytes(snapshot.read_bytes())
         print(f"every content check the {self.tag} pipeline runs on {self.commit} passes")
         return 0
 
@@ -292,10 +301,13 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--check-runs-commit", help="read this commit's check runs, not the tagged commit's "
                         "(for a rehearsal on a commit that exists only locally)")
+    parser.add_argument("--snapshot-output", type=Path,
+                        help="copy the pre-tag authority open-PR snapshot to this path")
     args = parser.parse_args(argv)
     try:
         with tempfile.TemporaryDirectory(prefix="pretag-") as temporary:
-            return Runner(args.root.resolve(), args.tag, args.commit, Path(temporary), args.check_runs_commit).main()
+            return Runner(args.root.resolve(), args.tag, args.commit, Path(temporary), args.check_runs_commit,
+                          args.snapshot_output.resolve() if args.snapshot_output else None).main()
     except (OSError, subprocess.CalledProcessError, PretagError) as error:
         print(f"pretag checks refused: {error}", file=sys.stderr)
         return 1

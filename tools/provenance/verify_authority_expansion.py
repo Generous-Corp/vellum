@@ -767,6 +767,35 @@ PROMOTION_COMMON_SCALARS = {
         "full-design-import-render-v1-exact-boundary-acknowledgement-1"
     ),
 }
+PROMOTION_SNAPSHOT_KEYS = frozenset({
+    "open_pr_snapshot", "open_pr_snapshot_commit", "open_pr_snapshot_sha256",
+})
+
+
+def validate_promotion_open_pr_snapshot(
+    data: Any, release_source_commit: str | None,
+) -> list[str]:
+    """Validate the open-PR snapshot bound into a signed release attestation."""
+    errors: list[str] = []
+    if not isinstance(data, dict) or not PROMOTION_SNAPSHOT_KEYS.issubset(data):
+        return ["release readiness: signed-tag open-PR snapshot is missing"]
+    if data.get("open_pr_snapshot_commit") != release_source_commit:
+        errors.append("release readiness: signed-tag open-PR snapshot commit differs")
+    snapshot = data.get("open_pr_snapshot")
+    if not isinstance(snapshot, dict):
+        errors.append("release readiness: signed-tag open-PR snapshot is not an object")
+    else:
+        digest = hashlib.sha256((json.dumps(snapshot, sort_keys=True) + "\n").encode("utf-8")).hexdigest()
+        if data.get("open_pr_snapshot_sha256") != digest:
+            errors.append("release readiness: signed-tag open-PR snapshot digest differs")
+    return errors
+
+
+def authority_open_pr_snapshot(
+    *, release_tag: str | None, recorded: Any, live: Any,
+) -> Any:
+    """Choose the immutable release snapshot or the live branch snapshot."""
+    return recorded if release_tag is not None else live
 
 
 def release_source_key(data: Any) -> str:
@@ -793,7 +822,10 @@ def validate_promotion_shape(
         "release_source_commit" if "release_source_commit" in extra_keys
         else "parity_release_source_commit"
     )
-    if not exact_keys(data, set(PROMOTION_COMMON_KEYS) | extra_keys, where, errors):
+    allowed = set(PROMOTION_COMMON_KEYS) | extra_keys
+    if isinstance(data, dict) and PROMOTION_SNAPSHOT_KEYS.issubset(data):
+        allowed |= PROMOTION_SNAPSHOT_KEYS
+    if not exact_keys(data, allowed, where, errors):
         return errors
     for key, expected in {**PROMOTION_COMMON_SCALARS, **extra_scalars}.items():
         if not exact_scalar(data[key], expected):
@@ -3381,6 +3413,8 @@ def validate_release_readiness(
     if promotion_error is not None:
         errors.append(promotion_error)
         return errors
+    if release_tag is not None:
+        errors.extend(validate_promotion_open_pr_snapshot(promotion_data, release_source_commit))
     if mirror_promotion:
         errors.extend(
             "release readiness: " + error
@@ -3509,6 +3543,21 @@ def verify(
         acknowledgement_data = load_json(acknowledgement)
         matrix_data = load_json(matrix)
         boundary_amendment_data = load_json(boundary_amendment)
+        effective_open_pr_snapshot = open_pr_snapshot
+        if release_readiness and release_tag is not None and os.environ.get("VELLUM_PRETAG_REPLAY") != "1":
+            effective_open_pr_snapshot = None
+            if promotion_attestation is not None and promotion_attestation.is_file():
+                try:
+                    signed_promotion = load_json(promotion_attestation)
+                except ValueError:
+                    signed_promotion = None
+                if isinstance(signed_promotion, dict):
+                    effective_open_pr_snapshot = signed_promotion.get("open_pr_snapshot")
+        effective_open_pr_snapshot = authority_open_pr_snapshot(
+            release_tag=release_tag if release_readiness and os.environ.get("VELLUM_PRETAG_REPLAY") != "1" else None,
+            recorded=effective_open_pr_snapshot,
+            live=open_pr_snapshot,
+        )
         delivery_retired, retirement_errors = validate_delivery_repository_retirement(root)
         promotion_errors = list(retirement_errors)
         exact_acknowledgement_path = (
@@ -3527,7 +3576,7 @@ def verify(
                 exact_acknowledgement_data,
                 boundary_amendment_data,
                 check_runs,
-                open_pr_snapshot,
+                effective_open_pr_snapshot,
                 defer_live_open_pr_audit,
                 delivery_retired,
                 pulp_main_ref,

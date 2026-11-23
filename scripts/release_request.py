@@ -626,7 +626,8 @@ def select(root: Path, commit: str, tag_exists: bool, existing_tags: list[str] |
                           f"the commit that landed version {tag[1:]}", landed, cursor)
 
 
-def attestation(root: Path, commit: str, attested_at: str, tag: str) -> dict[str, Any]:
+def attestation(root: Path, commit: str, attested_at: str, tag: str,
+                open_pr_snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
     """The promotion attestation for `commit`, validated as the release-readiness gate will.
 
     With a parity completion record at `commit` it is the authority promotion
@@ -663,6 +664,12 @@ def attestation(root: Path, commit: str, attested_at: str, tag: str) -> dict[str
         "exact_boundary_acknowledgement_id": "full-design-import-render-v1-exact-boundary-acknowledgement-1",
         "exact_boundary_acknowledgement_sha256": hashlib.sha256(acknowledgement).hexdigest(),
     }
+    if open_pr_snapshot is not None:
+        data["open_pr_snapshot_commit"] = commit
+        data["open_pr_snapshot"] = open_pr_snapshot
+        data["open_pr_snapshot_sha256"] = hashlib.sha256(
+            (json.dumps(open_pr_snapshot, sort_keys=True) + "\n").encode("utf-8")
+        ).hexdigest()
     if git_exists(root, commit, vae.PARITY_COMPLETION_PATH.as_posix()):
         completion = git_show(root, commit, vae.PARITY_COMPLETION_PATH.as_posix())
         data.update({
@@ -762,6 +769,7 @@ def main(argv: list[str]) -> int:
     attest.add_argument("--commit", required=True)
     attest.add_argument("--attested-at", required=True)
     attest.add_argument("--tag", required=True)
+    attest.add_argument("--open-pr-snapshot-json", type=Path)
     attest.add_argument("--dry-run-tag", help="wrap the attestation of --tag for this release dry-run tag")
     freeze = sub.add_parser("freeze")
     freeze.add_argument("--tag", required=True)
@@ -771,7 +779,13 @@ def main(argv: list[str]) -> int:
             print(json.dumps(freeze_ruleset(args.tag), indent=2, sort_keys=True))
             return 0
         if args.command == "attestation":
-            data = attestation(ROOT, args.commit, args.attested_at, args.tag)
+            snapshot = None
+            if args.open_pr_snapshot_json is not None:
+                try:
+                    snapshot = json.loads(args.open_pr_snapshot_json.read_text(encoding="utf-8"))
+                except (OSError, ValueError) as error:
+                    raise ReleaseRequestError(f"cannot read open-PR snapshot: {error}") from error
+            data = attestation(ROOT, args.commit, args.attested_at, args.tag, snapshot)
             if args.dry_run_tag is not None:
                 data = dry_run_attestation(data, args.dry_run_tag, args.tag)
             print(json.dumps(data, indent=2, sort_keys=True))

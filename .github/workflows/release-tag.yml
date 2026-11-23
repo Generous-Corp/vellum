@@ -120,7 +120,17 @@ jobs:
           TAG: ${{ steps.select.outputs.tag }}
         run: |
           set -euo pipefail
-          python3 -I scripts/pretag_checks.py --tag "$TAG" --commit "$GITHUB_SHA"
+          python3 -I scripts/pretag_checks.py --tag "$TAG" --commit "$GITHUB_SHA" \
+            --snapshot-output "$RUNNER_TEMP/open-pr-snapshot.json"
+
+      - name: Preserve the selection open-PR snapshot for signing
+        if: steps.select.outputs.tag != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-open-pr-snapshot
+          path: ${{ runner.temp }}/open-pr-snapshot.json
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Release the selection
         id: release
@@ -175,6 +185,12 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Fetch the selection open-PR snapshot
+        uses: actions/download-artifact@v4
+        with:
+          name: release-open-pr-snapshot
+          path: ${{ runner.temp }}
 
       # Every repository script runs with `python3 -I`: isolated mode keeps the
       # script's own directory and the working directory off sys.path, so no
@@ -319,7 +335,9 @@ jobs:
           version="${tag#v}"
           python3 -I scripts/release_request.py freeze --tag "$tag" > "$RUNNER_TEMP/freeze.json"
           python3 -I scripts/release_request.py attestation --commit "$GITHUB_SHA" \
-            --attested-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --tag "$tag" > "$RUNNER_TEMP/promotion-attestation.json"
+            --attested-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --tag "$tag" \
+            --open-pr-snapshot-json "$RUNNER_TEMP/open-pr-snapshot.json" \
+            > "$RUNNER_TEMP/promotion-attestation.json"
           printf 'tag=%s\nversion=%s\n' "$tag" "$version" >> "$GITHUB_OUTPUT"
 
       - name: Sign the tag

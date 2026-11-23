@@ -531,13 +531,11 @@ jobs:
           release_readiness=()
           repository_evidence=(--repository "$GITHUB_REPOSITORY")
           # live-open-pr-audit-scope: begin
-          # The live open-PR overlap audit asks whether a release is cut while
-          # unaccepted work overlapping the expansion is open. It is judged on
-          # release and release dry-run tags only. Every other run (a pull
-          # request, the merge queue, a main push, an authority tag) defers
-          # it: there it would only mirror which pull request is open.
+          # Release tags use the snapshot bound into their signed attestation.
+          # Main pushes keep the live overlap audit. The pre-tag replay uses the
+          # live path to create the snapshot that the release later signs.
           live_open_pr_audit=false
-          if [[ "$GITHUB_REF" == refs/tags/v[0-9]* || "$GITHUB_REF" == refs/tags/dry-run/* ]]; then
+          if [[ ("$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/*) || "${VELLUM_PRETAG_REPLAY:-}" == 1 ]]; then
             live_open_pr_audit=true
           fi
           if [[ "$live_open_pr_audit" != true ]]; then
