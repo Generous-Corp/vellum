@@ -48,8 +48,9 @@ public:
             publish_gpu_surface(gpu_.get(), GpuSurfaceState::ready);
             gpu_ready_ = true;
         } else {
-            gpu_.reset(); skia_.reset();
-            publish_gpu_surface(nullptr, GpuSurfaceState::unavailable);
+            invalidate_gpu_surface();
+            skia_.reset();
+            gpu_.reset();
         }
     }
     ~MacPluginViewHost() override {
@@ -58,6 +59,7 @@ public:
         view_.pointTransform = nil;
         [view_ prepareForTeardown];
         view_.rootView = nullptr;
+        invalidate_gpu_surface();
         skia_.reset();
         gpu_.reset();
         [view_ removeFromSuperview];
