@@ -379,6 +379,7 @@ function __installNativeGpuCommandAugmentation() {
         pipeline.vertex = init.vertex || null;
         pipeline.fragment = init.fragment || null;
         pipeline.primitive = init.primitive || null;
+        pipeline.depthStencil = init.depthStencil || null;
         return pipeline;
     };
 
@@ -438,6 +439,7 @@ function __installNativeGpuCommandAugmentation() {
                 vertex: pipelineDescriptor.vertex || null,
                 fragment: pipelineDescriptor.fragment || null,
                 primitive: pipelineDescriptor.primitive || null,
+                depthStencil: pipelineDescriptor.depthStencil || null,
                 bindGroupLayouts: createAutoBindGroupLayouts(pipelineDescriptor)
             });
         };

@@ -19,6 +19,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from install_core import InstallError, RUNTIME_IMAGES_MANIFEST, runtime_images
 from verify_sdk_artifact import (
     payload_contamination_findings,
     should_scan_payload_content,
@@ -39,6 +40,239 @@ class ValidationError(RuntimeError):
 
 INSTALLED_PAYLOAD_ROOT = "lib/vellum-installs/"
 ACTIVE_PAYLOAD_LINK = "lib/vellum/"
+
+
+def validate_installed_source_imports(prefix: Path, root: Path, env: dict[str, str], *, only: str | None = None) -> None:
+    vellum = str(prefix / "bin/vellum")
+
+    def command(project: Path, *args: str, status: str, diagnostic: str = "") -> dict:
+        result = subprocess.run(
+            [vellum, *args, "--json"], cwd=project, env=env,
+            text=True, capture_output=True, check=False,
+        )
+        payload = json.loads(result.stdout)
+        if payload.get("status") != status or (result.returncode == 0) != payload.get("ok"):
+            raise ValidationError(f"Expected {status}, got {result.stdout}{result.stderr}")
+        if diagnostic and diagnostic not in {item["code"] for item in payload["diagnostics"]}:
+            raise ValidationError(f"Expected diagnostic {diagnostic}, got {result.stdout}")
+        return payload
+
+    for lane, filename, fixture, malformed in (
+        ("pencil", "panel.pen", json.dumps({
+            "version": "2.1",
+            "children": [{
+                "type": "frame", "id": "panel", "name": "Sample Panel",
+                "width": 160, "height": 100, "fill": "#123456",
+                "children": [{"type": "text", "id": "caption", "content": "Sample Label"}],
+            }],
+        }), "{"),
+        ("designmd", "DESIGN.md", """---
+colors:
+  primary: '#123456'
+  accent: '{colors.primary}'
+  highlight: '{colors.accent}'
+typography:
+  body:
+    fontFamily: 'Sample Sans'
+    fontSize: '14px'
+components:
+  panel:
+    typography: '{typography.body}'
+---
+# Sample System
+""", "---\ncolors: [\n---\n"),
+    ):
+        if only is not None and lane != only:
+            continue
+        project = root / f"{lane}-project"
+        command(root, "create", f"{lane} sample", "--directory", str(project), status="created")
+        source = root / filename
+        initial = fixture
+        diagnostic = ""
+        if lane == "designmd":
+            initial = fixture.replace("colors:", "unknown-setting: true\ncolors:")
+            diagnostic = "designmd.unknown-key"
+        source.write_text(initial, encoding="utf-8")
+        command(project, "import", lane, str(source), status="imported", diagnostic=diagnostic)
+        materialized = project / "ui/generated/main.materialized.json"
+        tokens = project / "tokens/imported/main.tokens.json"
+        lock = project / "design/import.lock.json"
+        if lane == "pencil":
+            document = json.loads(materialized.read_text(encoding="utf-8"))
+            panel = document["root"]["children"][0]
+            if (
+                panel["name"] != "Sample Panel"
+                or panel["children"][0]["text"] != "Sample Label"
+                or panel["properties"]["layout"]["width"] != 160
+                or panel["properties"]["paint"]["backgroundColor"] != "#123456"
+            ):
+                raise ValidationError("Pencil import did not preserve the frame and its label")
+        else:
+            values = json.loads(tokens.read_text(encoding="utf-8"))
+            if (materialized.exists() or values["main.primary"]["$value"] != "#123456"
+                    or "main.unknown-setting" in values):
+                raise ValidationError("DESIGN.md import did not produce token-only output")
+            layers = json.loads((project / "tokens/generated/main.layers.json").read_text(encoding="utf-8"))
+            primitive = layers["layers"]["primitive"]
+            if (primitive["main.highlight"] != "#123456"
+                    or primitive["main.components.panel.typography"]["fontSize"] != "14px"):
+                raise ValidationError("DESIGN.md did not resolve the color and typography references")
+            run([
+                sys.executable, "-B", "-c",
+                "from pathlib import Path; import sys; sys.path.insert(0, sys.argv[1]); "
+                "from vellum_manifest import imported_materialized_design; "
+                "assert imported_materialized_design(Path(sys.argv[2])) is None",
+                str(prefix / "lib/vellum"), str(project),
+            ], cwd=project, env=env)
+        command(project, "design", "check", status="design_clean")
+        command(project, "reimport", "--source", str(source), status="reimport_unchanged")
+        before = lock.read_bytes()
+        source.write_text(malformed, encoding="utf-8")
+        command(project, "reimport", "--source", str(source), status=f"invalid_{lane}")
+        if lock.read_bytes() != before:
+            raise ValidationError(f"Malformed {lane} input advanced the import lock")
+        if lane == "designmd":
+            source.write_text(initial.replace("{colors.accent}", "{colors.missing}"), encoding="utf-8")
+            command(project, "reimport", "--source", str(source), status="invalid_designmd",
+                    diagnostic="designmd.broken-ref")
+            if lock.read_bytes() != before:
+                raise ValidationError("An unresolved DESIGN.md token advanced the import lock")
+        source.write_text(fixture.replace("#123456", "#654321"), encoding="utf-8")
+        command(project, "reimport", "--source", str(source), status="reimported")
+        command(project, "design", "check", status="design_clean")
+        if lock.read_bytes() == before:
+            raise ValidationError(f"Changed {lane} input did not advance the import lock")
+
+
+
+def validate_installed_frame_import(prefix: Path, root: Path, env: dict[str, str], lane: str) -> None:
+    def command(project: Path, *args: str, status: str) -> None:
+        result = subprocess.run(
+            [str(prefix / "bin/vellum"), *args, "--json"], cwd=project, env=env,
+            text=True, capture_output=True, check=False,
+        )
+        payload = json.loads(result.stdout)
+        if payload.get("status") != status or (result.returncode == 0) != payload.get("ok"):
+            raise ValidationError(f"Expected {status}, got {result.stdout}{result.stderr}")
+
+    def node(kind: str, name: str, node_id: str, **fields: object) -> dict:
+        return {"type": kind, "name": name, "figma_node_id": node_id, **fields}
+
+    def envelope(frame: dict, **fields: object) -> str:
+        return json.dumps({
+            "$schema": "https://pulp.dev/schemas/figma-plugin-export-v1.json",
+            "format_version": "2026.05-figma-plugin-v1",
+            "parser_version": "0.1.0",
+            "compat_schema_version": "0.3",
+            "provenance": {
+                "adapter": "figma-plugin", "version": "0.2.0", "source_uri": "figma://sample/1:1",
+            },
+            "root": frame,
+            **fields,
+        })
+
+    project = root / f"{lane}-project"
+    command(root, "create", f"{lane} sample", "--directory", str(project), status="created")
+    lock = project / "design/import.lock.json"
+    materialized = project / "ui/generated/main.materialized.json"
+
+    if lane == "v0":
+        source = root / "sample.tsx"
+        tsx = ('export default function Sample() { return ('
+               '<div className="flex-row overflow-hidden" '
+               'style={{ width: 160, backgroundColor: "#123456" }}>'
+               '<span>Sample Label</span></div>); }')
+        source.write_text(tsx, encoding="utf-8")
+        command(project, "import", "v0", str(source), status="imported")
+        frame = json.loads(materialized.read_text(encoding="utf-8"))["root"]
+        if (frame["properties"]["layout"]["direction"] != "row"
+                or frame["properties"]["layout"]["width"] != 160
+                or frame["extensions"]["native"]["attributes"]["className"] != "flex-row overflow-hidden"
+                or frame["properties"]["paint"]["backgroundColor"] != "#123456"
+                or frame["children"][0]["text"] != "Sample Label"):
+            raise ValidationError("v0 import did not retain Tailwind layout, paint and JSX text")
+        reimport = ("reimport", "--source", str(source))
+        broken = "export default function Sample() { return null; }"
+        changed = tsx.replace("#123456", "#654321")
+        invalid = "invalid_v0"
+    elif lane == "figma-plugin":
+        source = root / "selection.pulp.json"
+        selected = node("frame", "Selected", "1:3", children=[
+            node("text", "Caption", "1:4", content="Selected label"),
+        ])
+        wrapper = node("frame", "Container", "1:1", children=[
+            node("frame", "Other", "1:2"), selected,
+        ])
+        source.write_text(envelope(wrapper), encoding="utf-8")
+        args = ("import", "--source-type", "figma-plugin", str(source))
+        command(project, *args, "--frame", "Missing", status="invalid_fig_frame")
+        if lock.exists():
+            raise ValidationError("Missing Figma frame created an import lock")
+        command(project, *args, "--frame", "Selected", status="imported")
+        frame = json.loads(materialized.read_text(encoding="utf-8"))["root"]
+        if frame["name"] != "Selected" or frame["children"][0]["text"] != "Selected label":
+            raise ValidationError("Figma frame selector did not replace the exported root")
+        reimport = ("reimport", "--source", str(source))
+        broken = envelope({**wrapper, "children": []})
+        changed = envelope({**wrapper, "children": [{**selected, "name": "Renamed"}]})
+        invalid = "invalid_fig_frame"
+    else:
+        primary = root / "primary.pulp.json"
+        intermediate = root / "intermediate.pulp.json"
+        last = root / "last"
+        last.mkdir()
+        source = last / "state.pulp.json"
+        asset = b"sample asset"
+        (last / "assets").mkdir()
+        (last / "assets/sample.txt").write_bytes(asset)
+        manifest = {"version": 1, "assets": [{
+            "asset_id": "sample-asset", "local_path": "assets/sample.txt", "mime": "text/plain",
+            "content_hash": hashlib.sha256(asset).hexdigest(),
+        }]}
+        primary.write_text(envelope(node("frame", "First", "1:1")), encoding="utf-8")
+        intermediate.write_text(envelope(node("frame", "Second", "1:1")), encoding="utf-8")
+        third = envelope(node("frame", "Third", "1:1", children=[
+            node("text", "Caption", "1:2", content="Third label"),
+        ]), asset_manifest=manifest)
+        source.write_text(third, encoding="utf-8")
+        files = ("--file", str(intermediate), "--file", str(source))
+        command(project, "import", "--source-type", "figma-plugin", "--file", str(primary),
+                *files, status="imported")
+        frame = json.loads(materialized.read_text(encoding="utf-8"))["root"]
+        alternates = frame["extensions"]["dev.vellum.figma-plugin.states.v1"]["alternateFrames"]
+        if (frame["name"] != "First" or [item["name"] for item in alternates] != ["Second", "Third"]
+                or alternates[-1]["children"][0]["text"] != "Third label"):
+            raise ValidationError("Figma state import did not preserve the ordered frame trees")
+        reimport = ("reimport", "--source", str(primary), *files)
+        if (project / "assets/generated/main/files/assets/sample.txt").read_bytes() != asset:
+            raise ValidationError("Figma state import did not copy the asset beside the alternate envelope")
+        before = lock.read_bytes()
+        collision = {"version": 1, "assets": [{
+            **manifest["assets"][0], "content_hash": hashlib.sha256(b"different").hexdigest(),
+        }]}
+        intermediate.write_text(
+            envelope(node("frame", "Second", "1:1"), asset_manifest=collision), encoding="utf-8",
+        )
+        command(project, *reimport, status="invalid_figma_plugin")
+        if lock.read_bytes() != before:
+            raise ValidationError("Colliding Figma assets advanced the import lock")
+        intermediate.write_text(envelope(node("frame", "Second", "1:1")), encoding="utf-8")
+        broken = envelope(node("knob", "Invalid", "1:1"))
+        changed = third.replace("Third label", "Changed label")
+        invalid = "invalid_figma_plugin"
+
+    command(project, "design", "check", status="design_clean")
+    command(project, *reimport, status="reimport_unchanged")
+    before = lock.read_bytes()
+    source.write_text(broken, encoding="utf-8")
+    command(project, *reimport, status=invalid)
+    if lock.read_bytes() != before:
+        raise ValidationError(f"Invalid {lane} input advanced the import lock")
+    source.write_text(changed, encoding="utf-8")
+    command(project, *reimport, status="reimported")
+    command(project, "design", "check", status="design_clean")
+    if lock.read_bytes() == before:
+        raise ValidationError(f"Changed {lane} input did not advance the import lock")
 
 
 def installed_payload_name(relative: str) -> str:
@@ -305,11 +539,13 @@ def validate_installed_mirror(
     consumer = build / "vellum-mirror-consumer"
     consumer_output = run([str(consumer), origin], cwd=root).stdout.strip()
 
+    manifest = sdk_prefix / RUNTIME_IMAGES_MANIFEST
+    images = runtime_images(manifest.read_bytes() if manifest.exists() else None)
     run([
         sys.executable, str(SUPPORT_ROOT / "graphics/tests/test_dawn_provider_topology.py"),
         str(consumer), str(sdk_prefix / "lib/libvellum-gpu.dylib"),
-        str(sdk_prefix / "lib/libvellum-skia-dawn-provider.dylib"),
-        str(mirror / "lib/libvellum-mirror-canvas.dylib"),
+        str(sdk_prefix / images["provider"]),
+        str(sdk_prefix / images["canvas"]),
     ], cwd=root)
 
     inertness_path = root / "mirror-inertness.json"
@@ -726,6 +962,9 @@ def validate(
         if not zip_snapshot_verified:
             raise ValidationError("installed CLI create --from figma ZIP journey did not complete")
 
+        for lane in ("figma-plugin", "figma-states"):
+            validate_installed_frame_import(prefix, root, journey_env, lane)
+
         native_enabled = all(
             verification["claims"]["targets"]["macos"]["commands"][name]
             for name in ("build", "run", "test", "capture", "package")
@@ -741,6 +980,8 @@ def validate(
         native_package_produced = False
         custom_component_produced = False
         if native_enabled:
+            validate_installed_source_imports(prefix, root, journey_env)
+            validate_installed_frame_import(prefix, root, journey_env, "v0")
             for name, arguments in {
                 "build": ["build"],
                 "run": ["run", "--self-test", "--no-build"],
@@ -1028,7 +1269,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             args.view_audio_archive.resolve() if args.view_audio_archive else None,
             require_gpu_claims=args.require_gpu_claims,
         )
-    except (OSError, json.JSONDecodeError, ValidationError) as error:
+    except (OSError, json.JSONDecodeError, InstallError, ValidationError) as error:
         print(f"vellum-installed-sdk-validation: {error}", file=sys.stderr)
         return 1
     rendered = json.dumps(evidence, indent=2, sort_keys=True) + "\n"

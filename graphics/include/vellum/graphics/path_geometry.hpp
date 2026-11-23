@@ -13,10 +13,6 @@ namespace vellum::graphics {
 inline constexpr std::size_t kMaxPathCommands = 4096U;
 /// The most values one `PathGeometry` may hold: 64 KiB of `float` data.
 inline constexpr std::size_t kMaxPathValues = 16384U;
-/// The longest SVG path data string `parse_svg_path_data` accepts, in bytes.
-inline constexpr std::size_t kMaxPathDataBytes = 64U * 1024U;
-/// The most entries a stroke dash array may hold.
-inline constexpr std::size_t kMaxPathDashes = 64U;
 /// The most dashes a stroke may draw, estimated as `path_length_bound` times
 /// the number of dash ("on") intervals per period divided by the period. Skia
 /// silently draws nothing past one million, so the cap sits well below it.

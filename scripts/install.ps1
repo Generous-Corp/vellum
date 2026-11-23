@@ -29,6 +29,7 @@ function Install-Payload([string]$Payload) {
     $bin = Join-Path $InstallDir "bin"
     New-Item -ItemType Directory -Force -Path $library, $bin | Out-Null
     Copy-Item (Join-Path $Payload "vellum_cli.py") (Join-Path $library "vellum_cli.py") -Force
+    Copy-Item (Join-Path $Payload "vellum_illustrator.py") (Join-Path $library "vellum_illustrator.py") -Force
     Copy-Item (Join-Path $Payload "vellum_backend.py") (Join-Path $library "vellum_backend.py") -Force
     Copy-Item (Join-Path $Payload "vellum_manifest.py") (Join-Path $library "vellum_manifest.py") -Force
     Copy-Item (Join-Path $Payload "vellum_png.py") (Join-Path $library "vellum_png.py") -Force
@@ -146,6 +147,7 @@ python "%VELLUM_SDK_ROOT%\vellum_cli.py" %*
 if ($LocalRoot) {
     if ($Archive -or $Checksums -or $Version) { throw "-LocalRoot cannot be combined with artifact or release options." }
     $cli = Join-Path $LocalRoot "cli\vellum_cli.py"
+    $illustrator = Join-Path $LocalRoot "cli\vellum_illustrator.py"
     $dispatcher = Join-Path $LocalRoot "cli\vellum_backend.py"
     $manifestReader = Join-Path $LocalRoot "cli\vellum_manifest.py"
     $pngTools = Join-Path $LocalRoot "cli\vellum_png.py"
@@ -159,7 +161,7 @@ if ($LocalRoot) {
     $agentManifest = Join-Path $LocalRoot ".agents\skills\vellum-app-authoring\manifest.v1.json"
     $templates = Join-Path $LocalRoot "templates\basic"
     $designIrPackage = Join-Path $LocalRoot "packages\vellum-design-ir"
-    if (!(Test-Path $cli) -or !(Test-Path $dispatcher) -or !(Test-Path $manifestReader) -or !(Test-Path $pngTools) -or !(Test-Path $imageCompare) -or !(Test-Path $cdpAdmission) -or !(Test-Path $cdpClient) -or !(Test-Path $browserModule) -or !(Test-Path $interactionModule) -or !(Test-Path $agentSkill) -or
+    if (!(Test-Path $cli) -or !(Test-Path $illustrator) -or !(Test-Path $dispatcher) -or !(Test-Path $manifestReader) -or !(Test-Path $pngTools) -or !(Test-Path $imageCompare) -or !(Test-Path $cdpAdmission) -or !(Test-Path $cdpClient) -or !(Test-Path $browserModule) -or !(Test-Path $interactionModule) -or !(Test-Path $agentSkill) -or
         !(Test-Path $agentManifest) -or !(Test-Path $htmlSourceModule) -or !(Test-Path $templates) -or !(Test-Path $designIrPackage)) {
         throw "Local root lacks the CLI, dispatcher, agent instructions, templates, or DesignIR package."
     }
@@ -167,6 +169,7 @@ if ($LocalRoot) {
     New-Item -ItemType Directory -Path $temporary | Out-Null
     try {
         Copy-Item $cli (Join-Path $temporary "vellum_cli.py")
+        Copy-Item $illustrator (Join-Path $temporary "vellum_illustrator.py")
         Copy-Item (Join-Path $LocalRoot "cli\vellum_backend.py") (Join-Path $temporary "vellum_backend.py")
         Copy-Item (Join-Path $LocalRoot "cli\vellum_scenario.py") (Join-Path $temporary "vellum_scenario.py")
         Copy-Item (Join-Path $LocalRoot "cli\vellum_web_backend.py") (Join-Path $temporary "vellum_web_backend.py")
@@ -188,8 +191,8 @@ if ($LocalRoot) {
         $localMetadata = @'
 {
   "schema": "vellum.sdk-artifact.v1",
-  "framework_version": "0.2.0",
-  "cli_version": "0.2.0",
+  "framework_version": "0.2.3",
+  "cli_version": "0.2.3",
   "cli_api": 1,
   "source_commit": null,
   "target": "local-development",
@@ -218,7 +221,7 @@ if ($LocalRoot) {
   "verified": false,
   "artifact": null,
   "artifact_sha256": null,
-  "framework_version": "0.2.0",
+  "framework_version": "0.2.3",
   "target": "local-development",
   "source_commit": null
 }
@@ -233,7 +236,7 @@ if ($LocalRoot) {
 
 throw @"
 Verified archive and release installation are unavailable in PowerShell for
-Vellum v0.2.0. The application SDK currently supports macOS 15.0+ arm64; use
+Vellum v0.2.3. The application SDK currently supports macOS 15.0+ arm64; use
 scripts/install.sh there. That installer delegates archive verification,
 extraction, immutable storage, and activation to the canonical install_core.py.
 PowerShell currently supports only -LocalRoot development installs.

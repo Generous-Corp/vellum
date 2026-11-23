@@ -15,6 +15,7 @@ import sys
 import tempfile
 from typing import Any, Iterable
 
+from vellum_dev import build_input_digest, staleness, write_source_digest
 from vellum_manifest import (
     LOCK_NAME, LOCK_SCHEMA, ManifestError, imported_materialized_design,
     load_app_manifest, load_components_manifest,
@@ -190,23 +191,33 @@ def sdk_node(sdk: Path) -> Path:
 
 
 def copy_frameworks(sdk: Path, destination: Path) -> list[str]:
-    source = sdk / "sdk/lib"
-    mirror = sdk / "sdk/mirror/lib"
-    files = [
-        ("libvellum-authoring.dylib", source / "libvellum-authoring.dylib"),
-        ("libvellum-gpu.dylib", source / "libvellum-gpu.dylib"),
-        ("libvellum-skia-dawn-provider.dylib", source / "libvellum-skia-dawn-provider.dylib"),
-        ("libvellum-mirror-foundation.dylib", mirror / "libvellum-mirror-foundation.dylib"),
-        ("libvellum-mirror-state-core.dylib", mirror / "libvellum-mirror-state-core.dylib"),
-    ]
-    # The provider links the mirrored unit libraries it needs by @rpath, and
-    # that set grows as units land. Every installed unit library ships so the
-    # app never names one the bundle lacks.
-    if mirror.is_dir():
-        files += [
-            (path.name, path) for path in sorted(mirror.glob("libvellum-mirror-*.dylib"))
-            if path.name not in {"libvellum-mirror-foundation.dylib", "libvellum-mirror-state-core.dylib"}
+    prefix = (sdk / "sdk").resolve()
+    mirror = prefix / "mirror/lib"
+    manifest = prefix / "share/vellum/runtime-images.json"
+    if manifest.exists():
+        try:
+            images = json.loads(manifest.read_text(encoding="utf-8"))
+            runtime_paths = [
+                safe_relative(prefix, images[name], "runtime image")
+                for name in ("provider", "foundation", "state-core")
+            ]
+        except (OSError, ValueError, KeyError, TypeError, BackendFailure) as error:
+            raise BackendFailure(f"Invalid SDK runtime image manifest: {error}", status="invalid_sdk") from error
+    else:
+        # SDKs built before the runtime image manifest used stable filenames.
+        runtime_paths = [
+            prefix / "lib/libvellum-skia-dawn-provider.dylib",
+            *(mirror / f"libvellum-mirror-{unit}.dylib" for unit in ("foundation", "state-core")),
         ]
+    required = [
+        prefix / "lib/libvellum-authoring.dylib",
+        prefix / "lib/libvellum-gpu.dylib",
+        *runtime_paths,
+    ]
+    # The provider links the mirrored units by @rpath.
+    paths = required + [path for path in sorted(mirror.glob("libvellum-mirror-*.dylib"))
+                        if path not in required]
+    files = [(path.name, path) for path in paths]
     destination.mkdir(parents=True)
     for name, candidate in files:
         if not candidate.is_file():
@@ -217,6 +228,7 @@ def copy_frameworks(sdk: Path, destination: Path) -> list[str]:
 
 PACKAGED_FONT_NAMES = (
     "Inter-Regular.ttf",
+    "JetBrainsMono-Regular.ttf",
     "Jost-Regular.ttf",
     "Jost-Medium.ttf",
     "Jost-SemiBold.ttf",
@@ -346,6 +358,7 @@ def build_component_modules(
 
 def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
     project: Path = context["root"]
+    source_digest = build_input_digest(project)
     build_root = project / ".vellum/build/macos"
     app = build_root / f"{context['slug']}.app"
     staging = build_root / f".{context['slug']}.app.staging"
@@ -402,6 +415,12 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
     }
     with (contents / "Info.plist").open("wb") as output:
         plistlib.dump(info, output, sort_keys=True)
+    if build_input_digest(project) != source_digest:
+        raise BackendFailure(
+            "Project sources changed during the build; run vellum build again",
+            status="source_changed",
+        )
+    write_source_digest(resources, source_digest)
     if app.exists():
         shutil.rmtree(app)
     os.replace(staging, app)
@@ -417,6 +436,12 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
         "frameworks": framework_names,
         "components": installed_components,
     }
+
+
+def require_fresh_build(context: dict[str, Any], app: Path) -> None:
+    problem = staleness(app / "Contents/Resources", context["root"])
+    if problem:
+        raise BackendFailure(problem, status="build_stale")
 
 
 def ensure_app(context: dict[str, Any], sdk: Path, no_build: bool = False) -> dict[str, Any]:
@@ -435,6 +460,7 @@ def ensure_app(context: dict[str, Any], sdk: Path, no_build: bool = False) -> di
         } for item in context["components"]]
         if any(not Path(item["path"]).is_file() for item in components):
             raise BackendFailure("Built app is missing a declared custom component module", status="build_missing")
+        require_fresh_build(context, app)
         return {
             "app": app, "bundle": bundle, "executable": executable,
             "source_map": source_map, "frameworks": [], "components": components,

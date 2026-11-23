@@ -36,6 +36,11 @@ struct SkiaDawnSurfaceTestAccess final {
     static std::optional<Rect> measure_layer_text_extent(
         const PaintCommand& command, std::string_view directory, std::string* error);
 
+    // The code points the shaper found no face for when it shaped `command`,
+    // ascending.
+    static std::vector<std::uint32_t> unresolved_code_points(
+        const PaintCommand& command, std::string_view directory, std::string* error);
+
     // Sets the newest scene version the surface redraws from damage alone
     // (`kDamageModelSceneVersion` by default). Raising it lets a test drive
     // the partial-redraw path with version-2 fields such as opacity, which
@@ -44,6 +49,20 @@ struct SkiaDawnSurfaceTestAccess final {
     // exact images.
     static void set_damage_model_version(SkiaDawnSurface& surface,
                                          std::uint32_t version) noexcept;
+
+    // The device-pixel rectangles the damage overlay outlines on the next
+    // presented image or capture: the last frame's damage, or its whole frame
+    // for a full repaint. Empty while the overlay is off.
+    static std::vector<PixelRect> damage_overlay_rects(const SkiaDawnSurface& surface);
+
+    // How many frames drawn into a native swapchain texture carried the
+    // overlay, counted where the swapchain is drawn whether or not a capture
+    // reads it back.
+    static std::uint64_t damage_overlay_presented(const SkiaDawnSurface& surface) noexcept;
+
+    // Whether the surface would redraw a scene of `version` from its damage.
+    static bool serves_partial_redraw(const SkiaDawnSurface& surface,
+                                      std::uint32_t version) noexcept;
 };
 
 }  // namespace vellum::graphics

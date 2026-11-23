@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-16T04:45:37Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-8e310c5768624deae6e4947f221ea87369e0112f",
+  "kind": "resolution",
+  "linked_commits": [
+    "8e310c5768624deae6e4947f221ea87369e0112f"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@claude-observatory-agent",
+  "rationale": "Merge carrying the Vellum-native retained image node: the public @vellum/ui Image props (fit, sampling, sourceRect) and the graphics, damage and materializer code behind them. The only API delta is that additive d.ts change; Pulp has no counterpart. Owner decision 2026-11-16 04:45Z, recorded in pulp-planning vellum-move/DECISIONS.md (framework-only for the 8 pending schema events, on the condition that each changes only API or schema Pulp consumers get from Vellum after the cutover), is the owner's sign-off for this schema-class observation; recorded here by an agent. Pulp search at origin/main ced536cbc56b (git grep -w over core tools test examples apple ship inspect) for ImageProps, ImageAsset and SceneAcceptance returns 0; control SkiaSurface on the same search returns 288 in 64 files. Any later resolution overrides this.",
+  "resolves": "vellum-8e310c5768624deae6e4947f221ea87369e0112f",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

@@ -1,5 +1,5 @@
 {
-  "schema": "vellum.framework-ports.v1",
+  "schema": "vellum.framework-ports.v2",
   "rows": [
     {
       "framework_path": "framework/core/platform/include/vellum/platform/alert.hpp",
@@ -297,6 +297,767 @@
       "pulp_commits": [],
       "framework_blob": null,
       "reason": "Script-visible WebGPU error scopes for the scripted binding: native device work runs in validation, out-of-memory and internal device scopes and routes what they catch to the script's own scope, so script sees its errors and the uncaptured-error callback stays quiet. Vellum wrote this; Pulp's binding runs no error scopes."
+    },
+    {
+      "framework_path": "framework/tools/cmake/VellumV8ConsumerDefines.cmake",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "The sealed V8 provider's consumer_defines, applied to the imported target so every translation unit that includes V8 headers compiles with the library's ABI. Pulp's tools/cmake/PulpV8ConsumerDefines.cmake respelled under Vellum names; the Pulp spelling would raise the framework name debt."
+    },
+    {
+      "framework_path": "framework/tools/cmake/VellumV8Provider.cmake",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Resolves the sealed V8 provider for VELLUM_ENABLE_V8 from Vellum's dependency lock: the digest-checked v8-builder archive, its manifest paired with the renderer lock's Skia and Dawn, and a per-file receipt. Vellum's counterpart to Pulp's tools/cmake/FindV8.cmake for its one platform."
+    },
+    {
+      "framework_path": "framework/core/render/include/vellum/render/render_pass.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/render/include/pulp/render/render_pass.hpp",
+      "pulp_commits": [
+        "8847d9e44b85928d87da567b77141efe0cab60d7"
+      ],
+      "framework_blob": "93dd98aff033f69337e0cb665595ea5f0fa65aac",
+      "reason": "Frame-level render pass manager: ordered background, content, effects, overlay and post-effect passes with a per-frame time budget and the whole-recording GPU render time, read by the inspector, the motion cost view and the UI preview. Distinct from the custom GPU pass API of Generous-Corp/vellum#432."
+    },
+    {
+      "framework_path": "framework/core/render/include/vellum/render/frame_trace_adapter.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Native emit API (plain C functions) from the renderer's frame trace to the framework's Perfetto session, so one trace carries the framework's and the renderer's tracks. Vellum wrote this; Pulp has no frame trace. It names no renderer type and compiles to no-op stubs unless VELLUM_ENABLE_TRACING is on. Scoped to macOS for now."
+    },
+    {
+      "framework_path": "framework/core/render/src/frame_trace_adapter.cpp",
+      "change": "added",
+      "target": "pulp-gpu-device",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Native emit API (plain C functions) from the renderer's frame trace to the framework's Perfetto session, so one trace carries the framework's and the renderer's tracks. Vellum wrote this; Pulp has no frame trace. It names no renderer type and compiles to no-op stubs unless VELLUM_ENABLE_TRACING is on. Scoped to macOS for now."
+    },
+    {
+      "framework_path": "framework/core/view/platform/linux/accessibility_linux.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/linux/accessibility_linux.cpp",
+      "pulp_commits": [
+        "128963148254baca63322422b235b05534c25a65",
+        "93eaaa306af0cc5f1d163e5ba86c6d3e1845bd70",
+        "32184fdc2d811004157d53dd30304fafd0990de2",
+        "1af113e8df3166dc017f091c872acf84b5e022d1",
+        "e4a38da27d30898b009da427c1a17a06a656faeb",
+        "e4dc4579c32efbf296d66570d4613f8437f6ba6b",
+        "ff6e529991f99b21e77f60d7ec41661520e92e57",
+        "cd6cb7a3fbfee8129f39e17c29a03b78665bdce4",
+        "b255fba1ce8fe22ac1745814ba57822bc8d416df",
+        "ccbbc32aa6d82469c9e37136b86f76f24174b5c1",
+        "6dcd52c7dd98c6fd07e198b47ba05fd24f1a3e9e",
+        "d42b36757edc8fb31fbc58e1f032e2f7d21dc600",
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c",
+        "dea26646879007087943a8429241799836535bf2",
+        "17a4ba368b6eaacd25443c50cc7b3440dfa7c611"
+      ],
+      "framework_blob": "43045f78e6dd9c4c6dfca6230bfe0780320dd797",
+      "platforms": [
+        "linux-x64"
+      ],
+      "reason": "AT-SPI2 accessibility provider that speaks the wire protocol over D-Bus, for the Linux window hosts."
+    },
+    {
+      "framework_path": "framework/core/view/platform/linux/text_accessibility_linux.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "platforms": [
+        "linux-x64"
+      ],
+      "reason": "Pulp's Linux text accessibility backend with the test-hook symbol respelled vellum_text_accessibility_role_linux (and its parameter role_value), which carries no Pulp spelling here."
+    },
+    {
+      "framework_path": "framework/core/view/platform/linux/drag_drop_linux.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/linux/drag_drop_linux.cpp",
+      "pulp_commits": [
+        "815869c11cf2693b638faac3bf965b82ceebeae9",
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
+      ],
+      "framework_blob": "4217fe5411a3dcfed552de4be043be7be9146705",
+      "platforms": [
+        "linux-x64"
+      ],
+      "reason": "Outbound file drags over the XDND source protocol on X11."
+    },
+    {
+      "framework_path": "framework/core/view/platform/linux/xdnd_parse.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/linux/xdnd_parse.hpp",
+      "pulp_commits": [
+        "50797f71c72db4cd94cf76c6c1604252a3c53e3b",
+        "18d9d4cf26128f3853b415645a8549f5706bfe02",
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
+      ],
+      "framework_blob": "deecb99854e7dc56e80c7d181c3149d6119e7170",
+      "reason": "XDND message and URI-list parsing shared by the X11 host and drag source."
+    },
+    {
+      "framework_path": "framework/core/view/platform/linux/xdnd_source.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/linux/xdnd_source.hpp",
+      "pulp_commits": [
+        "815869c11cf2693b638faac3bf965b82ceebeae9",
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
+      ],
+      "framework_blob": "b654f401fa0494cb68b524a28e208a295a74937c",
+      "reason": "XDND drag-source state machine for outbound file drags."
+    },
+    {
+      "framework_path": "framework/core/view/include/vellum/view/platform/atspi_mapping.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/include/pulp/view/platform/atspi_mapping.hpp",
+      "pulp_commits": [
+        "e4dc4579c32efbf296d66570d4613f8437f6ba6b",
+        "ff6e529991f99b21e77f60d7ec41661520e92e57",
+        "cd6cb7a3fbfee8129f39e17c29a03b78665bdce4",
+        "b255fba1ce8fe22ac1745814ba57822bc8d416df",
+        "ccbbc32aa6d82469c9e37136b86f76f24174b5c1",
+        "6dcd52c7dd98c6fd07e198b47ba05fd24f1a3e9e",
+        "f5c94010569725c790d66c856aadf9d1d9396811",
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
+      ],
+      "framework_blob": "1b9e99fbf5575e8cfe71f0a0f45a8115072ca173",
+      "reason": "AT-SPI2 role, state and interface constants the Linux accessibility provider maps onto."
+    },
+    {
+      "framework_path": "framework/core/platform/platform/linux/clipboard_linux.cpp",
+      "change": "added",
+      "target": "pulp-platform",
+      "origin": "pulp",
+      "pulp_path": "core/platform/platform/linux/clipboard_linux.cpp",
+      "pulp_commits": [
+        "128963148254baca63322422b235b05534c25a65",
+        "727559be1ef72ec58b4c8936476afbe713bff805",
+        "7a9a6d443e185e2a6bac546ca9f71020e3901ab0",
+        "dafe11558009958c1d2180230b540069185185fd",
+        "ff925f05f654f65798bf3d95642b692ce0a84e7c",
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
+      ],
+      "framework_blob": "a2e7c8d2653d7f0244210eace857e2b5e2940790",
+      "platforms": [
+        "linux-x64"
+      ],
+      "reason": "Linux clipboard backend selected by the platform unit's Linux source list."
+    },
+    {
+      "framework_path": "framework/core/platform/platform/linux/environment_linux.cpp",
+      "change": "added",
+      "target": "pulp-platform",
+      "origin": "pulp",
+      "pulp_path": "core/platform/platform/linux/environment_linux.cpp",
+      "pulp_commits": [
+        "48e95d54c5d5c2e6c7a03b568577a5c47b43b784",
+        "436c5ed2e8ed7c1380a8173def8ae3d10dac43ab",
+        "ff925f05f654f65798bf3d95642b692ce0a84e7c",
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
+      ],
+      "framework_blob": "78db0b9c68cfd2865331ae7c54db4c158f4bf8dd",
+      "platforms": [
+        "linux-x64"
+      ],
+      "reason": "Linux environment queries (appearance, locale, special directories) for the platform unit."
+    },
+    {
+      "framework_path": "framework/core/platform/platform/linux/file_dialog_portal_linux.cpp",
+      "change": "added",
+      "target": "pulp-platform",
+      "origin": "pulp",
+      "pulp_path": "core/platform/platform/linux/file_dialog_portal_linux.cpp",
+      "pulp_commits": [
+        "1aafcb782fbe83c73af4ef159288a58239c5f3df",
+        "ff925f05f654f65798bf3d95642b692ce0a84e7c",
+        "0ddb6168c5d74a2e05b4ed83d5e05bd6bf3ddb58",
+        "198c5affe531501a3542d94dd1d4c45f06ee6536"
+      ],
+      "framework_blob": "dc01b06fe8ffb8a0859c8982aff9b7dcca282296",
+      "platforms": [
+        "linux-x64"
+      ],
+      "reason": "File dialogs through the desktop portal over D-Bus on Linux."
+    },
+    {
+      "framework_path": "framework/core/events/platform/linux/avahi_backend.cpp",
+      "change": "added",
+      "target": "pulp-events",
+      "origin": "pulp",
+      "pulp_path": "core/events/platform/linux/avahi_backend.cpp",
+      "pulp_commits": [
+        "39728e3fd6adce1f970d72b2cbe1932e7b2727bf",
+        "79b67c1ca1f7cbb38b9740b9ed409cdc3d7a9ca9",
+        "d31069d8e3c641ea7943991427b1275f76cc2a56",
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
+      ],
+      "framework_blob": "99fbd76250261ce204f5a77fde29abfa5e776d65",
+      "platforms": [
+        "linux-x64"
+      ],
+      "reason": "Service discovery backend that loads libavahi-client at run time on Linux."
+    },
+    {
+      "framework_path": "framework/core/events/platform/linux/libnotify_backend.cpp",
+      "change": "added",
+      "target": "pulp-events",
+      "origin": "pulp",
+      "pulp_path": "core/events/platform/linux/libnotify_backend.cpp",
+      "pulp_commits": [
+        "087981c90b6833fe78cd894574089a703e981a35",
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
+      ],
+      "framework_blob": "a30be33ce322574177d91b82d268024169587207",
+      "platforms": [
+        "linux-x64"
+      ],
+      "reason": "Push notification backend that loads libnotify at run time on Linux."
+    },
+    {
+      "framework_path": "framework/core/platform/platform/linux/meminfo_pressure.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/platform/platform/linux/meminfo_pressure.hpp",
+      "pulp_commits": [
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
+      ],
+      "framework_blob": "8822e2f0944800c1fc96de92b8d3c607bae1986d",
+      "reason": "Memory-pressure parsing for the Linux environment backend."
+    },
+    {
+      "framework_path": "framework/core/view/include/vellum/view/platform/atspi_geometry.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/include/pulp/view/platform/atspi_geometry.hpp",
+      "pulp_commits": [
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
+      ],
+      "framework_blob": "cd6ab78a4ff5208cec031990f112f52a8ab3ad86",
+      "reason": "AT-SPI geometry helpers shared by the Linux accessibility provider."
+    },
+    {
+      "framework_path": "framework/core/view/platform/linux/atspi_property_policy.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/linux/atspi_property_policy.hpp",
+      "pulp_commits": [
+        "dea26646879007087943a8429241799836535bf2",
+        "17a4ba368b6eaacd25443c50cc7b3440dfa7c611"
+      ],
+      "framework_blob": "f6ba3b8f407c36f3b4b4df251335d95e264969c2",
+      "reason": "AT-SPI Properties.Get and Properties.Set error policy for the Linux accessibility provider."
+    },
+    {
+      "framework_path": "framework/core/view/platform/linux/atspi_text_offsets.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/linux/atspi_text_offsets.hpp",
+      "pulp_commits": [
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
+      ],
+      "framework_blob": "b5dd7f15bfd3d375e2a1ae707b17d7b0b69123e8",
+      "reason": "AT-SPI text offset helpers for the Linux accessibility provider."
+    },
+    {
+      "framework_path": "framework/core/view/platform/linux/xdnd_selection.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/linux/xdnd_selection.hpp",
+      "pulp_commits": [
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
+      ],
+      "framework_blob": "98b3fbea1c7d0cb88e0203c77dc03e621c2adf89",
+      "reason": "XDND selection parsing for the Linux drag and drop backend."
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/accessibility_win_events.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/win/accessibility_win_events.cpp",
+      "pulp_commits": [
+        "d42b36757edc8fb31fbc58e1f032e2f7d21dc600"
+      ],
+      "framework_blob": "59880307734e84d77210532f33b54049a8d8bed3",
+      "reason": "Windows host for the view layer: UI Automation accessibility, appearance, drag and drop, motion preferences and text accessibility.",
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/accessibility_win_fragment_lifecycle.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/win/accessibility_win_fragment_lifecycle.cpp",
+      "pulp_commits": [
+        "d42b36757edc8fb31fbc58e1f032e2f7d21dc600"
+      ],
+      "framework_blob": "f85743cd5950dd299a778b89e483e0fdfc60b450",
+      "reason": "Windows host for the view layer: UI Automation accessibility, appearance, drag and drop, motion preferences and text accessibility.",
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/accessibility_win_fragment_lifecycle.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/win/accessibility_win_fragment_lifecycle.hpp",
+      "pulp_commits": [
+        "d42b36757edc8fb31fbc58e1f032e2f7d21dc600"
+      ],
+      "framework_blob": "69972dc2efa8fc7e8558deb84a21cfd4ecc0d3dd",
+      "reason": "Windows host for the view layer: UI Automation accessibility, appearance, drag and drop, motion preferences and text accessibility."
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/accessibility_win_internal.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/win/accessibility_win_internal.hpp",
+      "pulp_commits": [
+        "d42b36757edc8fb31fbc58e1f032e2f7d21dc600"
+      ],
+      "framework_blob": "3f6a634c7ffbca829f66d6955aea89edbdbac727",
+      "reason": "Windows host for the view layer: UI Automation accessibility, appearance, drag and drop, motion preferences and text accessibility."
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/accessibility_win_providers.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/win/accessibility_win_providers.hpp",
+      "pulp_commits": [
+        "d42b36757edc8fb31fbc58e1f032e2f7d21dc600"
+      ],
+      "framework_blob": "c5e66fdb5b46cc3c201214788df5085fbcdcaeae",
+      "reason": "Windows host for the view layer: UI Automation accessibility, appearance, drag and drop, motion preferences and text accessibility."
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/accessibility_win_util.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/win/accessibility_win_util.hpp",
+      "pulp_commits": [
+        "d42b36757edc8fb31fbc58e1f032e2f7d21dc600"
+      ],
+      "framework_blob": "74a526c9733dc14e84a3fe5cd9d50da38533caeb",
+      "reason": "Windows host for the view layer: UI Automation accessibility, appearance, drag and drop, motion preferences and text accessibility."
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/appearance_win.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/win/appearance_win.cpp",
+      "pulp_commits": [
+        "128963148254baca63322422b235b05534c25a65"
+      ],
+      "framework_blob": "f552d644a1e1da5132b4f25186e0e9b0774d3e6a",
+      "reason": "Windows host for the view layer: UI Automation accessibility, appearance, drag and drop, motion preferences and text accessibility.",
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/drag_drop_win.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/win/drag_drop_win.cpp",
+      "pulp_commits": [
+        "6a45501dc407644b34033c2d1ae691034233d6e2",
+        "be915a27ae295db0591ffd3436ffa69d1fe9063a",
+        "a47436537a3c9ce4beecbbfe24aac3f19387a7c2",
+        "4d7d71c052bdc6646a72c9afb68c0908ab173990"
+      ],
+      "framework_blob": "66e93e1ac82e65bb9d172f379896fae34d72357a",
+      "reason": "Windows host for the view layer: UI Automation accessibility, appearance, drag and drop, motion preferences and text accessibility.",
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/motion_preferences_win.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/win/motion_preferences_win.cpp",
+      "pulp_commits": [
+        "322126790548baa8d193dfdad11361b503da1f7b"
+      ],
+      "framework_blob": "bcd30f68320c26b99e60a018edf4516eb27f6dc2",
+      "reason": "Windows host for the view layer: UI Automation accessibility, appearance, drag and drop, motion preferences and text accessibility.",
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/software_adapter_policy.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/win/software_adapter_policy.hpp",
+      "pulp_commits": [
+        "58074eb057d855d665725e1898d355a0a8a94049"
+      ],
+      "framework_blob": "d293d62aab614f2da936aaf307f2c6f9adfdebd7",
+      "reason": "Windows host for the view layer: UI Automation accessibility, appearance, drag and drop, motion preferences and text accessibility."
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/win_file_drag.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/win/win_file_drag.hpp",
+      "pulp_commits": [
+        "2c260fbbc2c9b3aefdd2730519310dfd9e11d264"
+      ],
+      "framework_blob": "d0ff3b53eb3fd31ea99ab5551aba01414832a201",
+      "reason": "Windows host for the view layer: UI Automation accessibility, appearance, drag and drop, motion preferences and text accessibility."
+    },
+    {
+      "framework_path": "framework/core/view/include/vellum/view/platform/uia_mapping.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/include/pulp/view/platform/uia_mapping.hpp",
+      "pulp_commits": [
+        "6dcd52c7dd98c6fd07e198b47ba05fd24f1a3e9e"
+      ],
+      "framework_blob": "f71efedffd638bf630595d14096e4ff3d2cbf89a",
+      "reason": "Headers the Windows view host includes: the UI Automation role mapping and Windows pointer input."
+    },
+    {
+      "framework_path": "framework/core/view/include/vellum/view/platform/win_pointer_input.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/include/pulp/view/platform/win_pointer_input.hpp",
+      "pulp_commits": [
+        "f5ebc1a5e20217b594ee2e71aefba73ba3f464cc"
+      ],
+      "framework_blob": "fc2adfff208a3118de9e633195d7c5926aac3ebf",
+      "reason": "Headers the Windows view host includes: the UI Automation role mapping and Windows pointer input."
+    },
+    {
+      "framework_path": "framework/core/platform/platform/win/child_process_win.cpp",
+      "change": "added",
+      "target": "pulp-platform",
+      "origin": "pulp",
+      "pulp_path": "core/platform/platform/win/child_process_win.cpp",
+      "pulp_commits": [
+        "32f8c737701a9f4e18ed2752e19b5289c6c64251",
+        "ff2df2782e7685e25228bb10627b8880f05912df",
+        "be915a27ae295db0591ffd3436ffa69d1fe9063a",
+        "a47436537a3c9ce4beecbbfe24aac3f19387a7c2"
+      ],
+      "framework_blob": "afd713de1380e10270f1f1b0eeee5ba76d38b89d",
+      "reason": "Windows host files for the platform and events layers.",
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/platform/include/vellum/platform/win/text_convert.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/platform/include/pulp/platform/win/text_convert.hpp",
+      "pulp_commits": [
+        "be915a27ae295db0591ffd3436ffa69d1fe9063a",
+        "a47436537a3c9ce4beecbbfe24aac3f19387a7c2"
+      ],
+      "framework_blob": "79fe73ec206043b04b37af9514b0bce37d6ef2f4",
+      "reason": "Windows host files for the platform and events layers."
+    },
+    {
+      "framework_path": "framework/core/platform/platform/win/duplex_channel_win.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/platform/platform/win/duplex_channel_win.hpp",
+      "pulp_commits": [
+        "ff2df2782e7685e25228bb10627b8880f05912df",
+        "c1f3799a7e1c53a0ac98327a59990197dbe5db08",
+        "be915a27ae295db0591ffd3436ffa69d1fe9063a"
+      ],
+      "framework_blob": "fcdf5bdb4f959ed813878a98c779c860098467a3",
+      "reason": "Windows host files for the platform and events layers."
+    },
+    {
+      "framework_path": "framework/core/platform/platform/win/clipboard_win.cpp",
+      "change": "added",
+      "target": "pulp-platform",
+      "origin": "pulp",
+      "pulp_path": "core/platform/platform/win/clipboard_win.cpp",
+      "pulp_commits": [
+        "ff925f05f654f65798bf3d95642b692ce0a84e7c"
+      ],
+      "framework_blob": "3044c97994e146cbdf2621b2a4a04f246eae7b15",
+      "reason": "Windows host files for the platform and events layers.",
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/platform/platform/win/environment_win.cpp",
+      "change": "added",
+      "target": "pulp-platform",
+      "origin": "pulp",
+      "pulp_path": "core/platform/platform/win/environment_win.cpp",
+      "pulp_commits": [
+        "ff925f05f654f65798bf3d95642b692ce0a84e7c"
+      ],
+      "framework_blob": "187d9cbb07fd034708c747d58f1ec7c2c8cee3a6",
+      "reason": "Windows host files for the platform and events layers.",
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/platform/platform/win/file_dialog_win.cpp",
+      "change": "added",
+      "target": "pulp-platform",
+      "origin": "pulp",
+      "pulp_path": "core/platform/platform/win/file_dialog_win.cpp",
+      "pulp_commits": [
+        "198c5affe531501a3542d94dd1d4c45f06ee6536",
+        "be915a27ae295db0591ffd3436ffa69d1fe9063a",
+        "a47436537a3c9ce4beecbbfe24aac3f19387a7c2"
+      ],
+      "framework_blob": "d9ec5764eba1ce1969b298c4017c116e628cbcd9",
+      "reason": "Windows host files for the platform and events layers.",
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/events/platform/win/winrt_toast_backend.cpp",
+      "change": "added",
+      "target": "pulp-events",
+      "origin": "pulp",
+      "pulp_path": "core/events/platform/win/winrt_toast_backend.cpp",
+      "pulp_commits": [
+        "ff925f05f654f65798bf3d95642b692ce0a84e7c"
+      ],
+      "framework_blob": "844e2fb1b9aaafff98d258b9dedee00777cdf488",
+      "reason": "Windows host files for the platform and events layers.",
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/view/src/plugin_view_host.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Vellum's plug-in view host factory: PluginViewHost::create and the factory registry, exported from the SDK so a plug-in editor can embed a Vellum view (owner decision 2026-11-20: Vellum owns the GPU plug-in editor host). Written for Vellum, not taken from Pulp's plugin_view_host sources."
+    },
+    {
+      "framework_path": "framework/core/view/platform/mac/gpu_plugin_editor_host_mac.mm",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "The macOS plug-in view host: a per-image Metal view that renders the View tree with Skia on Dawn into its CAMetalLayer and routes mouse, wheel, key and focus input. Written for Vellum on its own Metal view, not taken from Pulp's plugin_view_host_mac sources."
+    },
+    {
+      "framework_path": "framework/core/view/js/web-compat.js",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Pulp's web-compat authoring layer, with product names respelled for Vellum: header and comments name Vellum, and navigator.userAgent reports Vellum/1.0. The bytes are Pulp's file put through the transfer rename plus those edits."
+    },
+    {
+      "framework_path": "framework/core/view/js/web-compat-runtime-apis.js",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Pulp's web-compat runtime APIs, with the header comment pointing at Vellum's prelude chain (framework/core/view/cmake/PulpViewJsPreludes.cmake) instead of Pulp's CMake. The bytes are Pulp's file put through the transfer rename plus that comment."
+    },
+    {
+      "framework_path": "framework/core/view/js/web-compat-selector.js",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Pulp's web-compat selector engine, with the header comment describing how Vellum loads it (after the native selector prelude, read verbatim by scripted UI consumers) instead of Pulp's harness adapter. The bytes are Pulp's file put through the transfer rename plus that comment."
+    },
+    {
+      "framework_path": "framework/core/view/js/web-compat-three-shim.js",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Pulp's Three.js web-compat shim, with its print markers renamed from PULP_THREE_SHIM / PULP_THREEJS to VELLUM_THREE_SHIM / VELLUM_THREEJS to match Vellum's smoke tests. The bytes are Pulp's file put through the transfer rename plus those markers."
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/gpu_plugin_editor_host_win.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "The Win32 plug-in view host: a child HWND that creates a Dawn/D3D12 surface after attachment and renders the View tree with Skia Graphite. Written for Vellum as the Windows counterpart to the macOS GPU editor host.",
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/view/platform/ios/ios_accessibility_bridge.mm",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "UIKit VoiceOver accessibility bridge for Vellum iOS view trees.",
+      "platforms": [
+        "ios-device-arm64",
+        "ios-simulator-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/view/platform/ios/ios_editor_surface_host.mm",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "UIKit plug-in editor surface host for Vellum iOS AUv3 embedding.",
+      "platforms": [
+        "ios-device-arm64",
+        "ios-simulator-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/view/platform/ios/ios_window_surface_host.mm",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "UIKit standalone window host for Vellum iOS applications.",
+      "platforms": [
+        "ios-device-arm64",
+        "ios-simulator-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/view/platform/linux/gpu_plugin_editor_host_x11.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "platforms": [
+        "linux-x64"
+      ],
+      "reason": "The Linux X11 plug-in editor host: a reparented child window that renders the View tree with Skia Graphite on Dawn/Vulkan. Written for Vellum, not taken from Pulp plugin-view-host sources."
+    },
+    {
+      "framework_path": "framework/core/render/src/graphite_raster_options.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Centralizes the Graphite raster options used by the plug-in editor surface and its regression test."
+    },
+    {
+      "framework_path": "framework/core/view/include/vellum/view/platform/ios_au_editor_controller.h",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "UIKit AUv3 editor session contract and container for Vellum iOS view-core."
+    },
+    {
+      "framework_path": "framework/core/view/platform/ios/ios_au_editor_controller.mm",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "UIKit AUv3 editor session container for Vellum iOS view-core.",
+      "platforms": [
+        "ios-device-arm64",
+        "ios-simulator-arm64"
+      ]
     }
   ]
 }

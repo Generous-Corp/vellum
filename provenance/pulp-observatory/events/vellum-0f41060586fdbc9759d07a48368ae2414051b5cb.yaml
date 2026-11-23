@@ -1,0 +1,59 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel",
+    "capture-primitives",
+    "macos-shell"
+  ],
+  "contract_tests": [
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-16T19:57:54Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-0f41060586fdbc9759d07a48368ae2414051b5cb",
+  "include_dependency_deltas": [
+    "graphics/CMakeLists.txt",
+    "graphics/include/vellum/graphics/animation.hpp",
+    "graphics/include/vellum/graphics/frame_driver.hpp",
+    "graphics/tests/CMakeLists.txt"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "capture-primitives",
+    "macos-shell"
+  ],
+  "mapped_paths": [
+    "apps/app-host/main.mm",
+    "graphics/CMakeLists.txt",
+    "graphics/include/vellum/graphics/animation.hpp",
+    "graphics/include/vellum/graphics/frame_driver.hpp",
+    "graphics/src/animation.cpp",
+    "graphics/src/frame_driver.cpp",
+    "graphics/tests/CMakeLists.txt",
+    "graphics/tests/frame_driver_gpu_test.cpp",
+    "graphics/tests/frame_driver_test.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "130cdb90a1c4d5611d899bba91afe480766bf5a5",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "e57c5d0eb8a020db522aeac17557236eaa92ecd9",
+    "to_commit": "6e1fc8b437707ca8d90e854444f5ca131f209c85"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "0f41060586fdbc9759d07a48368ae2414051b5cb",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

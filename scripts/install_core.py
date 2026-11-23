@@ -48,6 +48,7 @@ SAFE_ROOTS = {
     "ui",
     "vellum_backend.py",
     "vellum_cli.py",
+    "vellum_illustrator.py",
     "vellum_dev.py",
     "vellum_manifest.py",
     "vellum_native_backend.py",
@@ -75,7 +76,9 @@ AGENT_INSTRUCTION_FILES = {
     ".agents/skills/vellum-app-authoring/SKILL.md",
     ".agents/skills/vellum-app-authoring/manifest.v1.json",
 }
+RUNTIME_IMAGES_MANIFEST = "share/vellum/runtime-images.json"
 CONTRACT_RETAINED_FILES = {
+    f"sdk/{RUNTIME_IMAGES_MANIFEST}",
     *AGENT_INSTRUCTION_FILES,
     "node/LICENSE",
     "node/provenance.json",
@@ -586,16 +589,34 @@ def validate_node_runtime(
     return True
 
 
-# The native host and the libraries it loads at launch. The artifact builder
-# keeps the same list, without the payload's "sdk/" prefix.
 NATIVE_HOST_FILES = (
-    "sdk/bin/vellum-app-host",
-    "sdk/lib/libvellum-authoring.dylib",
-    "sdk/lib/libvellum-gpu.dylib",
-    "sdk/lib/libvellum-skia-dawn-provider.dylib",
-    "sdk/mirror/lib/libvellum-mirror-foundation.dylib",
-    "sdk/mirror/lib/libvellum-mirror-state-core.dylib",
+    "bin/vellum-app-host",
+    "lib/libvellum-authoring.dylib",
+    "lib/libvellum-gpu.dylib",
 )
+NATIVE_HOST_IMAGES = ("provider", "foundation", "state-core")
+
+
+def runtime_images(manifest: bytes | None) -> dict[str, str]:
+    stems = {
+        "provider": "lib/libvellum-skia-dawn-provider",
+        **{unit: f"mirror/lib/libvellum-mirror-{unit}"
+           for unit in ("canvas", "foundation", "state-core")},
+    }
+    if manifest is None:
+        # SDKs built before the runtime image manifest used stable filenames.
+        return {name: f"{stem}.dylib" for name, stem in stems.items()}
+    try:
+        images = json.loads(manifest)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise InstallError("malformed SDK runtime image manifest") from error
+    if not isinstance(images, dict) or images.keys() != stems.keys() or any(
+        not isinstance(images[name], str)
+        or not re.fullmatch(rf"{re.escape(stem)}(?:-[0-9a-f]+)?\.dylib", images[name])
+        for name, stem in stems.items()
+    ):
+        raise InstallError("invalid SDK runtime image paths")
+    return images
 
 
 def derived_capabilities(
@@ -617,7 +638,10 @@ def derived_capabilities(
         "vellum_png.py",
         "vellum_scenario.py",
     }.issubset(contents)
-    native_host = all(path in contents for path in NATIVE_HOST_FILES)
+    images = runtime_images(contents.get(f"sdk/{RUNTIME_IMAGES_MANIFEST}"))
+    native_host = all(f"sdk/{path}" in contents for path in (
+        *NATIVE_HOST_FILES, *(images[name] for name in NATIVE_HOST_IMAGES),
+    ))
     node_runtime = validate_node_runtime(
         contents, payload_records, target
     )

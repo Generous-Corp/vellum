@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
+#include <span>
 #include <string>
 #include <utility>
 
@@ -52,8 +54,57 @@ bool project(const DrawCommand& command, const DrawVertex& vertex, float& out_x,
 
 } // namespace
 
-VellumRenderer::VellumRenderer(graphics::SkiaDawnSurface& surface, std::uint32_t clear_rgba)
-    : surface_(surface), clear_rgba_(clear_rgba) {}
+VellumRenderer::VellumRenderer(graphics::SkiaDawnSurface& surface, std::uint32_t clear_rgba,
+                               Clock clock)
+    : surface_(surface), clear_rgba_(clear_rgba), clock_(std::move(clock)) {
+    if (!clock_)
+        clock_ = [] { return std::chrono::steady_clock::now(); };
+    decoder_ = [](const std::string& encoded, std::uint32_t& width, std::uint32_t& height,
+                  std::vector<std::uint8_t>& pixels) {
+        const auto* bytes = reinterpret_cast<const std::uint8_t*>(encoded.data());
+        const auto image = graphics::SkiaDawnSurface::decode_image_asset(
+            std::span<const std::uint8_t>(bytes, encoded.size()));
+        if (!image)
+            return false;
+        width = image->width;
+        height = image->height;
+        pixels = image->premultiplied_rgba;
+        return true;
+    };
+}
+
+void VellumRenderer::collect_expired_textures() {
+    if (texture_grace_active_ && clock_() >= texture_expiry_) {
+        textures_.clear();
+        scene_ = {};
+        texture_grace_active_ = false;
+    }
+}
+
+void VellumRenderer::on_attach() {
+    collect_expired_textures();
+    texture_grace_active_ = false;
+}
+
+void VellumRenderer::on_detach() {
+    texture_expiry_ = clock_() + kTextureGracePeriod;
+    texture_grace_active_ = true;
+}
+
+void VellumRenderer::on_visibility_changed(bool visible) {
+    if (visible)
+        on_attach();
+    else
+        on_detach();
+}
+
+void VellumRenderer::on_idle() { collect_expired_textures(); }
+
+void VellumRenderer::on_close() {
+    textures_.clear();
+    scene_ = {};
+    texture_grace_active_ = false;
+}
 
 void VellumRenderer::begin_frame(std::uint32_t width, std::uint32_t height) {
     width_ = width;
@@ -62,7 +113,11 @@ void VellumRenderer::begin_frame(std::uint32_t width, std::uint32_t height) {
     skipped_ = 0;
     frame_ok_ = false;
     error_.clear();
-    textures_.clear();
+    collect_expired_textures();
+    // A texture whose source bytes only this cache still holds has been
+    // released by RmlUi; drop it so replaced resources do not accumulate.
+    for (auto it = textures_.begin(); it != textures_.end();)
+        it = it->second.source.use_count() == 1 ? textures_.erase(it) : std::next(it);
     scene_ = {};
     scene_.width = static_cast<float>(width);
     scene_.height = static_cast<float>(height);
@@ -75,9 +130,13 @@ void VellumRenderer::begin_frame(std::uint32_t width, std::uint32_t height) {
 
 std::shared_ptr<const graphics::MeshTexture>
 VellumRenderer::texture_for(const DrawCommand& command) {
-    if (command.texture_path.empty()) {
-        if (const auto found = textures_.find(command.texture_bytes.get()); found != textures_.end())
-            return found->second.texture;
+    const bool decoded = !command.texture_path.empty();
+    if (const auto found = textures_.find(command.texture_bytes.get());
+        found != textures_.end() && found->second.decoded == decoded &&
+        (decoded || (found->second.texture->width == command.texture_width &&
+                     found->second.texture->height == command.texture_height)))
+        return found->second.texture;
+    if (!decoded) {
         const auto expected =
             static_cast<std::size_t>(command.texture_width) * command.texture_height * 4u;
         if (command.texture_width == 0 || command.texture_height == 0 ||
@@ -88,8 +147,8 @@ VellumRenderer::texture_for(const DrawCommand& command) {
         texture->height = command.texture_height;
         const auto* bytes = reinterpret_cast<const std::uint8_t*>(command.texture_bytes->data());
         texture->premultiplied_rgba.assign(bytes, bytes + expected);
-        textures_.emplace(command.texture_bytes.get(),
-                          CachedTexture{command.texture_bytes, texture});
+        textures_.insert_or_assign(command.texture_bytes.get(),
+                                   CachedTexture{command.texture_bytes, texture, false});
         return texture;
     }
     auto texture = std::make_shared<graphics::MeshTexture>();
@@ -100,6 +159,8 @@ VellumRenderer::texture_for(const DrawCommand& command) {
         texture->premultiplied_rgba.size() !=
             static_cast<std::size_t>(texture->width) * texture->height * 4u)
         return nullptr;
+    textures_.insert_or_assign(command.texture_bytes.get(),
+                               CachedTexture{command.texture_bytes, texture, true});
     return texture;
 }
 

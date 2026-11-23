@@ -16,6 +16,8 @@
 #import <Foundation/Foundation.h>
 #import <ImageIO/ImageIO.h>
 
+#import <TargetConditionals.h>
+
 #include <RmlUi/Core/Core.h>
 #include <RmlUi/Core/FileInterface.h>
 #include <RmlUi/Core/Math.h>
@@ -258,6 +260,19 @@ struct MetalRenderInterface::State {
             layer_pool.push_back(texture);
         }
         return layer_pool[static_cast<std::size_t>(index)];
+    }
+
+    static std::size_t bytes_of(id<MTLTexture> texture) {
+        return texture ? static_cast<std::size_t>(texture.allocatedSize) : 0;
+    }
+
+    std::size_t cached_bytes() const {
+        std::size_t total = bytes_of(stencil) + bytes_of(mask_image);
+        for (id<MTLTexture> layer : layer_pool)
+            total += bytes_of(layer);
+        for (id<MTLTexture> target : post)
+            total += bytes_of(target);
+        return total;
     }
 
     id<MTLTexture> frame_texture(__strong id<MTLTexture>& slot) {
@@ -592,7 +607,32 @@ MetalRenderInterface::MetalRenderInterface(id<MTLDevice> device)
     if (!device)
         return;
     NSError* error = nil;
+#if TARGET_OS_IPHONE
+    // Prefer the precompiled metallib shipped in the app bundle (or next to
+    // the executable). The installed SDK does not ship it, so when it is
+    // absent or fails to load, compile the embedded source like macOS does.
+    NSURL* library_url = [[NSBundle mainBundle] URLForResource:@"vellum-rmlui-metal"
+                                                     withExtension:@"metallib"];
+    if (!library_url) {
+        NSString* executable_directory = [[[NSBundle mainBundle] executablePath]
+            stringByDeletingLastPathComponent];
+        NSString* sibling = [executable_directory
+            stringByAppendingPathComponent:@"vellum-rmlui-metal.metallib"];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:sibling])
+            library_url = [NSURL fileURLWithPath:sibling];
+    }
+    if (library_url)
+        s.library = [device newLibraryWithURL:library_url error:&error];
+    if (!s.library) {
+        if (library_url)
+            Rml::Log::Message(Rml::Log::LT_WARNING,
+                              "Metal shader library failed to load; compiling from source");
+        error = nil;
+        s.library = [device newLibraryWithSource:@(kShaderSource) options:nil error:&error];
+    }
+#else
     s.library = [device newLibraryWithSource:@(kShaderSource) options:nil error:&error];
+#endif
     if (!s.library) {
         Rml::Log::Message(Rml::Log::LT_ERROR, "Metal shader library failed: %s",
                           error ? error.localizedDescription.UTF8String : "unknown");
@@ -631,6 +671,27 @@ bool MetalRenderInterface::valid() const noexcept {
     const auto& s = *state_;
     return s.device && s.library && s.sampler && s.stencil_off && s.stencil_test && s.stencil_set &&
            s.stencil_incr;
+}
+
+std::size_t MetalRenderInterface::cached_target_bytes() const noexcept {
+    return state_->cached_bytes();
+}
+
+std::size_t MetalRenderInterface::trim() {
+    auto& s = *state_;
+    // A frame is being encoded: its layers are in use.
+    if (s.layer_count != 0 || s.frame_pipelines)
+        return 0;
+    const std::size_t released = s.cached_bytes();
+    s.frame = {};
+    s.layer_pool.clear();
+    s.stencil = nil;
+    s.post = {};
+    s.mask_image = nil;
+    // ensure_targets() reallocates at the next frame's first call.
+    s.target_width = 0;
+    s.target_height = 0;
+    return released;
 }
 
 std::size_t MetalRenderInterface::unsupported_calls() const noexcept {
@@ -690,6 +751,10 @@ void MetalRenderInterface::end_frame() {
     auto& s = *state_;
     if (s.layer_count == 0 || !s.frame_pipelines) {
         s.end_pass();
+        // A begin_frame that failed after choosing pipelines leaves no frame open.
+        s.frame_pipelines = nullptr;
+        s.layer_count = 0;
+        s.frame = {};
         return;
     }
     s.end_pass();
@@ -713,6 +778,9 @@ void MetalRenderInterface::end_frame() {
     }
     s.layer_count = 0;
     s.frame_pipelines = nullptr;
+    // The frame target holds the caller's command buffer and texture; keeping
+    // them would hold the last frame's resources until the next frame.
+    s.frame = {};
 }
 
 Rml::CompiledGeometryHandle MetalRenderInterface::CompileGeometry(

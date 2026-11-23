@@ -76,7 +76,8 @@ jobs:
           fi
 
       # An earlier, separate warning: one issue naming the events within 24
-      # hours of their deadline (urgent within 4), closed once none remains.
+      # hours of their deadline (urgent within 4), and every pending event while
+      # the pending count is at the warning level; closed once neither holds.
       # The overdue handling above is unchanged.
       - name: Warn before an event goes overdue
         if: ${{ !cancelled() }}
@@ -87,3 +88,25 @@ jobs:
           python3 -I tools/provenance/overdue_events.py --root . > "$RUNNER_TEMP/due-soon.json"
           python3 -I tools/provenance/deadline_warning.py \
             --summary "$RUNNER_TEMP/due-soon.json" --repo "$GITHUB_REPOSITORY"
+
+  # Deliberately advisory: branch protection does not require this job. A
+  # failure six hours before a deadline gives the owner a check-run alert
+  # without turning the warning itself into a main-branch release gate.
+  due-soon-warning:
+    name: observatory-due-soon-warning
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Build the due-soon summary
+        run: python3 -I tools/provenance/overdue_events.py --root . > "$RUNNER_TEMP/due-soon.json"
+
+      - name: Fail advisory check at six hours or count pressure
+        run: python3 -I tools/provenance/deadline_warning_gate.py --summary "$RUNNER_TEMP/due-soon.json" --hours 6

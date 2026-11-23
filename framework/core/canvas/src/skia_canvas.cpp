@@ -106,6 +106,7 @@ static SkPaint make_solid_fill_paint(Color c) {
     paint.setColor4f(to_sk_color4f(c));
     paint.setStyle(SkPaint::kFill_Style);
     paint.setAntiAlias(true);
+    paint.setDither(false);
     return paint;
 }
 
@@ -115,6 +116,7 @@ SkPaint make_stroke_paint(Color c, float width) {
     paint.setStyle(SkPaint::kStroke_Style);
     paint.setStrokeWidth(width);
     paint.setAntiAlias(true);
+    paint.setDither(false);
     return paint;
 }
 
@@ -511,6 +513,11 @@ SkPaint SkiaCanvas::current_fill_paint() const {
         skia_gradient::set_paint_shader(paint, gradient_shader_);
     } else {
         paint.setColor4f(to_sk_color4f(fill_color_));
+        // Pulp's legacy solid-color path keeps translucent overlays
+        // undithered. Set this explicitly because Graphite surface defaults
+        // are backend-owned, while CSS gradients retain their own dither
+        // setting through set_paint_shader().
+        paint.setDither(false);
     }
     apply_shadow_filter(paint);
     apply_filter(paint);

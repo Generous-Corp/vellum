@@ -1,0 +1,44 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "design-schema-compiler"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-21T10:18:14Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-41307951b3352cfefe99ddcc2c2eb464a7c82800",
+  "include_dependency_deltas": [],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "design-schema-compiler"
+  ],
+  "mapped_paths": [
+    "packages/vellum-design-ir/src/figma-plugin.js",
+    "packages/vellum-design-ir/test/figma-plugin.test.js"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "261654ff756bb19c6c67366b69e56edd739a8d46",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "dc2fa5f86e464f6679354d8030b43e35c6f84e55",
+    "to_commit": "62826e2e58b8952712ca1a17291bd2bd06272506"
+  },
+  "schema_api_deltas": [
+    "packages/vellum-design-ir/src/figma-plugin.js",
+    "packages/vellum-design-ir/test/figma-plugin.test.js"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "41307951b3352cfefe99ddcc2c2eb464a7c82800",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

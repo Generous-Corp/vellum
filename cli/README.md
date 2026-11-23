@@ -20,3 +20,10 @@ python3 -m unittest discover -s cli/tests -v
 
 The executable filesystem contract is documented in
 [`docs/cli/import-reimport.md`](../docs/cli/import-reimport.md).
+
+## Illustrator and PDF artwork
+
+Use `vellum import illustrator artwork.ai --out artwork.svg` (or a PDF input)
+to convert one page through Poppler's `pdftocairo`. The command prints the SVG
+and its hash-bound provenance JSON path. Poppler is an external, user-installed
+tool. Vellum never bundles it and only invokes its GPL-licensed executable.

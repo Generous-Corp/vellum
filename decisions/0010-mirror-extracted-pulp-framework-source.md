@@ -260,6 +260,71 @@ the rule in force. No export follows the transfer, so a Pulp change reaches
   object store holds, so Pulp content copied as it is cannot pass as native.
   A row that
   adds a compilable source names the mirrored target that compiles it.
+  A row that gives a Pulp-origin or transferred file another origin fails the
+  provenance lane on every event, judged against the event's base; there is no
+  label waiver, and an owner-approved exception needs an owner decision with a
+  ruleset bypass.
+- **Platform scope.** The closures say what each platform compiles; a
+  ledger-added source is compiled only on the platforms its scope lists. In
+  schema v2 a row that adds a compilable source may carry `platforms`, a list
+  of platform keys, and a `scoped` row re-states the platform set of a source
+  the ledger already adds, to the same target, so a scope changes without
+  editing a landed row. A row with no scope means `macos-arm64`, the build
+  every v1 row was proven on. A target declared in `units.json` takes the same
+  list, and each of its sources must be scoped to every platform it lists. The
+  mirror build plans for one platform at a time and refuses a platform no
+  landed closure describes. Scope never touches the file set: `framework/`
+  holds a scoped file on every platform. A scope change, or a removal
+  followed by a new row, cannot take a source out of the `macos-arm64` build
+  once it is there, and a scoped row repeats its adding row's origin, Pulp
+  path and Pulp commits. A brand-new source scoped only to other platforms is
+  compiled nowhere until a verified closure for one of them lands; that is
+  intended, and the plan still checks that its target exists.
+- **Platform closure records.** The receipt's closures describe the Darwin
+  arm64 Skia build. Every other platform plans from its own record under
+  `provenance/framework/platforms/<platform>/`. It holds one closure manifest
+  per unit, written by Pulp's exporter from Pulp's own configure for that
+  platform. The manifests carry the build graph and no file content, so they
+  are not an export: files still enter `framework/` only through the transfer
+  record and the ports ledger. The record pins each manifest's digest, the
+  Pulp commit and exporter blob that wrote them, the configure identity and
+  options digest, the runner image, the renderer asset, and the Pulp workflow
+  run that exported them with the digest of the artifact it uploaded. Every
+  value in the record is written by the pull request, so the provenance lane
+  proves it against GitHub instead: the commit is on Pulp's main, the blob is
+  Pulp's exporter at that commit, and the run is Pulp's
+  `vellum-platform-closure.yml` at that commit and succeeded. The artifact it
+  uploaded hashes to the record's digest and holds exactly the record's
+  manifests and an `export.json` that names the record's platform, commit,
+  runner image and renderer asset. A record that is unchanged since the base
+  was proved when it landed, so the artifact's expiry does not fail it later.
+  The mirror build refuses a platform with no record, a record
+  whose pins do not hold, a closure source `framework/` lacks, and a ledger
+  source whose scope leaves out the platform whose closure compiles it.
+  macOS keeps the receipt's closures and needs no record.
+- **The port respell.** Some Pulp names survive the transfer's rename. A
+  `pulp_*` function or object defined with C linkage is linker-visible, so
+  Pulp's copy and Vellum's would clash in one process.
+  `provenance/framework/respell.json` lists each such name and its Vellum
+  spelling (only the prefix changes). Its one kind, `extern-c`, is recognised
+  from bytes and never chosen by hand: a name a file defines with C linkage,
+  respelled in every `framework/` file so callers and the definition agree.
+  `PULP_*` macro names clash with nothing and stay as counted name debt.
+
+  The respell changes identifier tokens in code and comments, never a string
+  or character literal or an `#include <...>` header name. The table must be
+  exactly the definitions the origin bytes imply: each transferred file as
+  its transfer record holds it, each ported file as Pulp has it after the
+  rename. A hand-written or missing entry fails, and without a Pulp checkout
+  the proof is reported deferred, never proved. No `framework/` file may keep
+  a respelled name's old spelling or paste a Pulp name with `##`, and a
+  transferred or ported file may spell a Pulp name the Vellum way only where
+  the table's respell of its origin does. An appended Pulp-origin row's blob
+  is Pulp's bytes put through the rename and then the respell. A later entry
+  respells a transferred or landed ported file by an edit that must be
+  exactly that respell, and the landed row's blob stays as it landed. The
+  table cannot be deleted while a file still carries one of its Vellum
+  spellings.
 - **The file set.** `framework/` holds exactly the transfer record's paths,
   minus the ledger's removals, plus its additions. A file with neither a
   transfer record nor a ledger row fails, and so does a listed file that is

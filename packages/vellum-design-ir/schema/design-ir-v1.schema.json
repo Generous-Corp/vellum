@@ -29,7 +29,13 @@
     {
       "description": "A document before version 3 carries no material reference on any node; materials are version 3 vocabulary.",
       "if": { "required": ["schemaVersion"], "properties": { "schemaVersion": { "enum": [1, 2] } } },
-      "then": { "properties": { "root": { "$ref": "#/$defs/nodeWithoutMaterial" } } }    },
+      "then": { "properties": { "root": { "$ref": "#/$defs/nodeWithoutMaterial" } } }
+    },
+    {
+      "description": "A document below version 5 carries no plot binding on any node; plots are version 5 vocabulary.",
+      "if": { "required": ["schemaVersion"], "properties": { "schemaVersion": { "enum": [1, 2, 3, 4] } } },
+      "then": { "properties": { "root": { "$ref": "#/$defs/nodeWithoutPlot" } } }
+    },
     {
       "description": "A document before version 6 carries no vector asset field on any node.",
       "if": { "required": ["schemaVersion"], "properties": { "schemaVersion": { "enum": [1, 2, 3, 4, 5] } } },
@@ -40,7 +46,7 @@
     "$schema": { "const": "https://vellum.dev/schemas/design-ir/v1" },
     "schemaVersion": {
       "enum": [1, 2, 3, 4, 5, 6],
-      "description": "Version 2 adds the node compositing object, version 3 node material references, version 4 animation tracks and version 6 the vector asset fields; each version keeps every field of the ones before it, and version 5 adds none here. A document must not carry a field below the version that adds it; a normalizer emits the oldest version that carries every field it uses."
+      "description": "The oldest version carrying every field the document uses; each version keeps every field of the ones before it. Version 2 adds the node compositing object, version 3 node material references, version 4 animation tracks, version 5 plot bindings and version 6 the vector asset fields. A field is illegal below the version that introduced it."
     },
     "compiler": {
       "type": "object",
@@ -69,12 +75,11 @@
   },
   "$defs": {
     "nodeBeforeVectorAssets": {
-      "description": "A node, and every node beneath it, without the vector asset fields DesignIR version 6 adds.",
+      "description": "A node, and every node beneath it, without the vector asset fields DesignIR version 6 adds. Path nodes and geometry are part of the earlier contract.",
       "properties": {
-        "kind": { "not": { "enum": ["path", "vector"] } },
+        "kind": { "not": { "const": "vector" } },
         "properties": {
           "properties": {
-            "path": false,
             "vector": false,
             "image": { "properties": { "source": false } },
             "paint": { "properties": { "transform": false, "clipPath": false, "overflow": false } }
@@ -136,6 +141,7 @@
         "tracks": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/animationTrack" } },
         "material": { "$ref": "#/$defs/materialReference" },
         "compositing": { "$ref": "#/$defs/compositing" },
+        "plot": { "$ref": "#/$defs/plotBinding" },
         "children": { "type": "array", "items": { "$ref": "#/$defs/node" } }
       }
     },
@@ -303,6 +309,54 @@
         "properties": { "blendMode": { "const": "normal" } }
       }
     },
+    "nodeWithoutPlot": {
+      "description": "A node, and every node beneath it, without a plot binding; what schemaVersion 1 to 4 allows.",
+      "properties": {
+        "plot": false,
+        "children": { "type": "array", "items": { "$ref": "#/$defs/nodeWithoutPlot" } }
+      }
+    },
+    "plotBinding": {
+      "description": "A plot of a value-feed channel. The document names the channel and how to draw it; samples arrive at run time, so the document carries none.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["style", "channel"],
+      "if": { "properties": { "style": { "const": "meter" } } },
+      "else": { "required": ["slots"] },
+      "allOf": [
+        {
+          "if": { "required": ["style"], "properties": { "style": { "enum": ["line", "area"] } } },
+          "then": { "properties": { "source": { "enum": ["scalar", "vector"] } } }
+        },
+        {
+          "if": { "required": ["style"], "properties": { "style": { "const": "bar" } } },
+          "then": { "properties": { "source": { "const": "vector" } } }
+        },
+        {
+          "if": { "required": ["style"], "properties": { "style": { "const": "meter" } } },
+          "then": { "properties": { "source": { "const": "meter" } } }
+        }
+      ],
+      "properties": {
+        "style": { "enum": ["line", "area", "bar", "meter"] },
+        "channel": { "type": "string", "minLength": 1 },
+        "source": { "enum": ["scalar", "meter", "vector"] },
+        "slots": { "type": "integer", "minimum": 1, "maximum": 4194304 },
+        "history": { "enum": ["scroll", "sweep"] },
+        "orientation": { "enum": ["vertical", "horizontal"] },
+        "audioChannel": { "type": "integer", "minimum": 0, "maximum": 1024 },
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "baseline": { "type": "number" },
+        "lineWidth": { "type": "number", "minimum": 0, "maximum": 4096.000244140625 },
+        "barGap": { "type": "number", "minimum": 0, "maximum": 4096.000244140625 },
+        "peakWidth": { "type": "number", "minimum": 0, "maximum": 4096.000244140625 },
+        "lineColor": { "$ref": "#/$defs/plotColor" },
+        "fillColor": { "$ref": "#/$defs/plotColor" },
+        "peakColor": { "$ref": "#/$defs/plotColor" }
+      }
+    },
+    "plotColor": { "type": "string", "pattern": "^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$" },
     "token": {
       "type": "object",
       "additionalProperties": false,

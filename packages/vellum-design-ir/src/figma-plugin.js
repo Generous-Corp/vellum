@@ -1,4 +1,5 @@
 import { normalizeSha256ContentHash } from './assets.js';
+import { normalizeImport } from './normalize.js';
 import { canonicalize } from './stable-json.js';
 
 export const FIGMA_PLUGIN_FORMAT = '2026.05-figma-plugin-v1';
@@ -7,12 +8,8 @@ export const FIGMA_PLUGIN_COMPAT_SCHEMA_VERSION = '0.3';
 
 const FIGMA_PLUGIN_SCHEMA = 'https://pulp.dev/schemas/figma-plugin-export-v1.json';
 
-// The current Pulp extractor's audio-free output vocabulary is `frame`, `text`,
-// `ellipse`, `image`, and `vector`. Only the `frame` and `text` node kinds map
-// directly into Vellum's retained native host today; their individual fields
-// are still diagnosed when unsupported. Every other row is accepted only with
-// a conversion diagnostic. The additional control/layout spellings are legacy
-// compatibility inputs, not claims about current Pulp output.
+// Default mappings for the exporter vocabulary. Nodes carrying supported
+// path data or a content-addressed PNG get a more specific mapping.
 const NODE_RULES = Object.freeze({
     button: Object.freeze({ kind: 'button', disposition: 'lowered' }),
     col: Object.freeze({ kind: 'view', disposition: 'lowered' }),
@@ -36,18 +33,44 @@ const AUDIO_ATTRIBUTE_FIELDS = new Set(['binding', 'binding_y', 'units']);
 
 const MATERIALIZED_STYLE_FIELDS = Object.freeze({
     background_color: Object.freeze({ group: 'paint', target: 'backgroundColor' }),
+    border: Object.freeze({ group: 'paint', target: 'border', decode: decodeBorder }),
     border_radius: Object.freeze({ group: 'paint', target: 'borderRadius' }),
+    border_top_left_radius: Object.freeze({ group: 'paint', target: 'borderTopLeftRadius', decode: decodeRadius }),
+    border_top_right_radius: Object.freeze({ group: 'paint', target: 'borderTopRightRadius', decode: decodeRadius }),
+    border_bottom_left_radius: Object.freeze({ group: 'paint', target: 'borderBottomLeftRadius', decode: decodeRadius }),
+    border_bottom_right_radius: Object.freeze({ group: 'paint', target: 'borderBottomRightRadius', decode: decodeRadius }),
+    box_shadow: Object.freeze({ group: 'paint', target: 'boxShadow', decode: decodeBoxShadow }),
     color: Object.freeze({ group: 'text', target: 'color' }),
+    font_family: Object.freeze({ group: 'text', target: 'fontFamily' }),
     font_size: Object.freeze({ group: 'text', target: 'fontSize' }),
+    font_style: Object.freeze({ group: 'text', target: 'fontStyle', decode: decodeFontStyle }),
+    font_weight: Object.freeze({ group: 'text', target: 'fontWeight', decode: decodeFontWeight }),
+    letter_spacing: Object.freeze({ group: 'text', target: 'letterSpacing' }),
+    text_align: Object.freeze({ group: 'text', target: 'textAlign', decode: decodeTextAlign }),
+    vertical_align: Object.freeze({ group: 'text', target: 'verticalAlign', decode: decodeVerticalAlign }),
+    overflow: Object.freeze({ group: 'paint', target: 'overflow' }),
     height: Object.freeze({ group: 'layout', target: 'height' }),
     left: Object.freeze({ group: 'layout', target: 'x' }),
     top: Object.freeze({ group: 'layout', target: 'y' }),
+    transform: Object.freeze({ group: 'paint', target: 'transform' }),
     width: Object.freeze({ group: 'layout', target: 'width' }),
 });
 const MATERIALIZED_LAYOUT_FIELDS = Object.freeze({
+    align: 'align',
+    alignContent: 'alignContent',
+    alignSelf: 'alignSelf',
+    columnGap: 'columnGap',
     direction: 'direction',
     display: 'display',
+    flexGrow: 'flexGrow',
+    gridColumn: 'gridColumn',
+    gridRow: 'gridRow',
+    gridTemplateColumns: 'gridTemplateColumns',
+    gridTemplateRows: 'gridTemplateRows',
     gap: 'gap',
+    justify: 'justify',
+    rowGap: 'rowGap',
+    wrap: 'wrap',
 });
 const NODE_FIELDS = new Set([
     'asset_ref', 'attributes', 'audio_widget', 'children', 'content', 'figma',
@@ -89,7 +112,36 @@ export function decodeFigmaPluginExport(input, options = {}) {
     if (rootEnvelope.name === '<multi-export>') {
         throw new TypeError('multi-selection Figma exports are not supported; export exactly one root frame');
     }
-    const root = decodeNode(rootEnvelope, '$.root', diagnostics);
+    const assets = decodeAssets(envelope.asset_manifest);
+    const pngAssets = new Map(assets.filter((asset) =>
+        asset.mimeType === 'image/png' && asset.contentHash && asset.uri)
+        .map((asset) => [asset.id, asset]));
+    const { alternate_frames: alternateFrames, ...primaryFrame } = rootEnvelope;
+    const root = decodeNode(primaryFrame, '$.root', diagnostics, pngAssets);
+
+    if (alternateFrames !== undefined) {
+        if (!Array.isArray(alternateFrames) || alternateFrames.length === 0) {
+            throw new TypeError('$.root.alternate_frames must be a nonempty array');
+        }
+        root.extensions['dev.vellum.figma-plugin.states.v1'] = {
+            alternateFrames: alternateFrames.map((frame, index) => normalizeImport({
+                source: {
+                    adapter: 'figma-plugin',
+                    adapterVersion: provenance.version,
+                    formatVersion: FIGMA_PLUGIN_FORMAT,
+                    key: sourceKey, revision, snapshotHash,
+                },
+                root: decodeNode(frame, `$.root.alternate_frames[${index}]`, diagnostics, pngAssets),
+            }).root),
+        };
+        diagnostics.push({
+            code: 'figma-alternate-frames-preserved',
+            disposition: 'unsupported',
+            message: 'Alternate Figma frames are preserved in input order and require a state consumer',
+            path: '$.root.alternate_frames',
+            severity: 'warning',
+        });
+    }
 
     if (envelope.diagnostics !== undefined && !Array.isArray(envelope.diagnostics)) {
         throw new TypeError('$.diagnostics must be an array');
@@ -138,7 +190,7 @@ export function decodeFigmaPluginExport(input, options = {}) {
     }
 
     return canonicalize({
-        assets: decodeAssets(envelope.asset_manifest),
+        assets,
         diagnostics,
         root,
         source: {
@@ -158,10 +210,13 @@ export function decodeFigmaPluginExport(input, options = {}) {
     });
 }
 
-function decodeNode(value, path, diagnostics) {
+function decodeNode(value, path, diagnostics, pngAssets) {
     const node = object(value, path);
     const sourceKind = requiredString(node.type, `${path}.type`).toLowerCase();
     if (AUDIO_NODE_KINDS.has(sourceKind)) rejectAudio(path);
+    if (node.alternate_frames !== undefined) {
+        throw new TypeError(`${path}.alternate_frames is only allowed on the export root`);
+    }
     for (const field of AUDIO_NODE_FIELDS) {
         if (node[field] !== undefined) rejectAudio(`${path}.${field}`);
     }
@@ -194,14 +249,34 @@ function decodeNode(value, path, diagnostics) {
         if (attributes[field] !== undefined) rejectAudio(`${path}.attributes.${field}`);
     }
 
-    const rule = NODE_RULES[sourceKind];
+    const vectorPath = (sourceKind === 'vector' || sourceKind === 'path') &&
+        typeof node.path_data === 'string' && node.path_data.trim() !== '' &&
+        (node.children?.length ?? 0) === 0;
+    const imageAsset = ['frame', 'image', 'ellipse'].includes(sourceKind) &&
+        (node.children?.length ?? 0) === 0 ? pngAssets.get(node.asset_ref) : undefined;
+    let rule = NODE_RULES[sourceKind];
+    if (vectorPath) rule = { kind: 'path', disposition: 'portable' };
+    if (imageAsset) rule = { kind: 'image', disposition: 'portable' };
     if (!rule) throw new TypeError(`${path}.type '${sourceKind}' is not in the pinned Figma subset`);
     if (node.children !== undefined && !Array.isArray(node.children)) {
         throw new TypeError(`${path}.children must be an array`);
     }
 
     const { properties, unmaterializedLayout, unmaterializedStyle } =
-        decodeProperties(node, path, diagnostics);
+        decodeProperties(node, path, diagnostics, imageAsset);
+    if (imageAsset) {
+        properties.image = { source: imageAsset.contentHash, fit: node.style?.object_fit ?? 'fill' };
+    }
+    if (vectorPath) {
+        properties.path = { d: node.path_data };
+        if (node.fillRule !== undefined) properties.path.fillRule = node.fillRule;
+        const { clipPath, overflow, transform } = properties.paint ?? {};
+        properties.paint = Object.fromEntries(Object.entries({ clipPath, overflow, transform })
+            .filter(([, value]) => value !== undefined));
+        for (const key of ['fill', 'stroke', 'strokeWidth']) {
+            if (node[key] !== undefined) properties.paint[key] = node[key];
+        }
+    }
     if (
         sourceKind === 'ellipse' &&
         properties.paint?.borderRadius === undefined &&
@@ -231,7 +306,20 @@ function decodeNode(value, path, diagnostics) {
         });
     }
 
-    const sourceFields = preservedFields(node, NODE_FIELDS);
+    const consumedFields = new Set(NODE_FIELDS);
+    if (vectorPath) {
+        for (const key of ['path_data', 'fillRule', 'fill', 'stroke', 'strokeWidth']) {
+            consumedFields.add(key);
+        }
+        for (const key of ['fill', 'stroke']) {
+            const gradient = decodeGradient(node[`${key}Gradient`]);
+            if (gradient) {
+                properties.paint[key] = gradient;
+                consumedFields.add(`${key}Gradient`);
+            }
+        }
+    }
+    const sourceFields = preservedFields(node, consumedFields);
     for (const [field, fieldValue] of Object.entries({
         ...sourceFields,
         ...(Object.keys(attributes).length > 0 ? { attributes } : {}),
@@ -266,7 +354,7 @@ function decodeNode(value, path, diagnostics) {
     };
     const output = {
         children: (node.children ?? []).map((child, index) =>
-            decodeNode(child, `${path}.children[${index}]`, diagnostics),
+            decodeNode(child, `${path}.children[${index}]`, diagnostics, pngAssets),
         ),
         extensions: { 'dev.vellum.figma-plugin.v1': canonicalize(extension) },
         kind: rule.kind,
@@ -275,18 +363,53 @@ function decodeNode(value, path, diagnostics) {
         sourceId: requiredString(node.figma_node_id, `${path}.figma_node_id`),
     };
     if (typeof node.content === 'string') output.text = node.content;
+    const opacity = node.style?.opacity;
+    const blendMode = node.style?.mix_blend_mode;
+    const compositing = {};
+    if (Number.isFinite(opacity) && opacity >= 0 && opacity <= 1) {
+        compositing.opacity = opacity;
+    }
+    if (typeof blendMode === 'string' && blendMode !== 'normal') {
+        compositing.blendMode = blendMode;
+    }
+    if (Object.keys(compositing).length > 0) output.compositing = compositing;
     if (rule.kind === 'button') output.role = 'button';
     return output;
 }
 
-function decodeProperties(node, path, diagnostics) {
+function decodeProperties(node, path, diagnostics, imageAsset) {
     const properties = { layout: {}, paint: {}, text: {} };
     const style = node.style === undefined ? {} : object(node.style, `${path}.style`);
     const consumedStyle = new Set();
+    if (imageAsset) consumedStyle.add('object_fit');
+    if (Number.isFinite(style.opacity) && style.opacity >= 0 && style.opacity <= 1) {
+        consumedStyle.add('opacity');
+    }
+    if (typeof style.mix_blend_mode === 'string') consumedStyle.add('mix_blend_mode');
     for (const [source, rule] of Object.entries(MATERIALIZED_STYLE_FIELDS)) {
         if (style[source] !== undefined) {
-            properties[rule.group][rule.target] = style[source];
-            consumedStyle.add(source);
+            const decoded = rule.decode === undefined ? style[source] : rule.decode(style[source]);
+            if (decoded !== null) {
+                properties[rule.group][rule.target] = decoded;
+                consumedStyle.add(source);
+            }
+        }
+    }
+    const clip = typeof style.clip_path === 'string'
+        ? /^path\("([^"]+)"\)$/.exec(style.clip_path) : null;
+    if (clip) {
+        properties.paint.clipPath = clip[1];
+        consumedStyle.add('clip_path');
+    }
+    const gradient = decodeGradient(style.background_gradient);
+    if (gradient) {
+        properties.paint.backgroundLinearGradient = gradient;
+        consumedStyle.add('background_gradient');
+    } else {
+        const radialGradient = decodeRadialGradient(style.background_gradient);
+        if (radialGradient !== null) {
+            properties.paint.backgroundGradient = radialGradient;
+            consumedStyle.add('background_gradient');
         }
     }
     const layout = node.layout === undefined ? {} : object(node.layout, `${path}.layout`);
@@ -314,6 +437,90 @@ function decodeProperties(node, path, diagnostics) {
         unmaterializedLayout: canonicalize(unmaterializedLayout),
         unmaterializedStyle: canonicalize(unmaterializedStyle),
     };
+}
+
+const CSS_COLOR = /#[0-9a-f]{6}(?:[0-9a-f]{2})?/i;
+const CSS_LENGTH = '-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?px';
+const CSS_NONNEGATIVE_LENGTH = '(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?px';
+
+function decodeBorder(value) {
+    if (typeof value !== 'string') return null;
+    const match = new RegExp(`^(${CSS_NONNEGATIVE_LENGTH}) (solid) (${CSS_COLOR.source})$`, 'i').exec(value);
+    return match ? { width: Number.parseFloat(match[1]), style: match[2], color: match[3] } : null;
+}
+
+function decodeBoxShadow(value) {
+    if (typeof value !== 'string' || value === '' || value === 'none') return null;
+    const layers = value.split(/,\s*/);
+    if (layers.length > 8) return null;
+    const layer = new RegExp(`^(${CSS_LENGTH}) (${CSS_LENGTH})(?: (${CSS_NONNEGATIVE_LENGTH}))?(?: (${CSS_NONNEGATIVE_LENGTH}))? (${CSS_COLOR.source})$`, 'i');
+    const decoded = layers.map((item) => {
+        const match = layer.exec(item);
+        if (!match) return null;
+        return { offsetX: Number.parseFloat(match[1]), offsetY: Number.parseFloat(match[2]),
+            blurRadius: match[3] === undefined ? 0 : Number.parseFloat(match[3]),
+            spreadRadius: match[4] === undefined ? 0 : Number.parseFloat(match[4]), color: match[5] };
+    });
+    return decoded.every((item) => item !== null) ? decoded : null;
+}
+
+function decodeFontWeight(value) {
+    return Number.isInteger(value) && value >= 1 && value <= 1000 ? value : null;
+}
+
+function decodeRadius(value) {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100000
+        ? value : null;
+}
+
+function decodeFontStyle(value) {
+    return typeof value === 'string' && /^(?:normal|italic|oblique)$/.test(value) ? value : null;
+}
+
+function decodeTextAlign(value) {
+    return typeof value === 'string' && /^(?:left|right|center|justify|start|end)$/.test(value) ? value : null;
+}
+
+function decodeVerticalAlign(value) {
+    return typeof value === 'string' && /^(?:top|middle|bottom)$/.test(value) ? value : null;
+}
+
+function decodeRadialGradient(value) {
+    if (typeof value !== 'string') return null;
+    const match = /^radial-gradient\(circle at ([0-9]+(?:\.[0-9]+)?)% ([0-9]+(?:\.[0-9]+)?)%, (.+)\)$/.exec(value);
+    if (!match || Number(match[1]) > 100 || Number(match[2]) > 100) return null;
+    const stops = match[3].split(/,\s*/);
+    if (stops.length < 2 || stops.length > 32) return null;
+    let previous = -1;
+    const decoded = [];
+    for (const item of stops) {
+        const stop = new RegExp(`^(${CSS_COLOR.source}) ([0-9]+(?:\\.[0-9]+)?)%$`, 'i').exec(item);
+        if (!stop || Number(stop[2]) < 0 || Number(stop[2]) > 100 || Number(stop[2]) <= previous) return null;
+        previous = Number(stop[2]);
+        decoded.push({ color: stop[1], position: Number(stop[2]) / 100 });
+    }
+    const centerX = Number(match[1]) / 100;
+    const centerY = Number(match[2]) / 100;
+    return { kind: 'radial', centerX, centerY,
+        radiusX: Math.max(centerX, 1 - centerX), radiusY: Math.max(centerY, 1 - centerY),
+        stops: decoded };
+}
+
+// The extractor emits explicit angles and percent-positioned hex stops.
+function decodeGradient(value) {
+    if (typeof value !== 'string') return null;
+    const match = /^linear-gradient\(([^,]+)deg, (.+)\)$/.exec(value);
+    if (!match || !Number.isFinite(Number(match[1]))) return null;
+    const stops = [];
+    for (const item of match[2].split(', ')) {
+        const stop = /^(#[0-9a-f]{6}(?:[0-9a-f]{2})?) (-?[0-9]+(?:\.[0-9]+)?)%$/i.exec(item);
+        if (!stop) return null;
+        const position = Number(stop[2]) / 100;
+        if (position < 0 || position > 1 ||
+            (stops.length > 0 && position <= stops.at(-1).position)) return null;
+        stops.push({ color: stop[1], position });
+    }
+    return stops.length >= 2 && stops.length <= 32 ? { angle: Number(match[1]), stops } : null;
 }
 
 function decodeUniformPadding(value) {

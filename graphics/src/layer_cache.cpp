@@ -16,9 +16,9 @@ namespace {
 // PaintCommand field: a field they skip lets a cached image survive a change
 // to it. This size changes when a field is added; update both functions, and
 // the field-coverage test in layer_cache_test.cpp, then this number.
-static_assert(sizeof(PaintCommand) == 448,
+static_assert(sizeof(PaintCommand) == 512,
               "PaintCommand changed: update paint_commands_equal and hash_command");
-static_assert(sizeof(TextStyle) == 56 && sizeof(TextRun) == 80,
+static_assert(sizeof(TextStyle) == 56 && sizeof(TextRun) == 88,
               "TextStyle or TextRun changed: update same_style, same_runs and hash_command");
 static_assert(sizeof(BoxShadow) == 32, "BoxShadow changed: update same_shadows and hash_command");
 static_assert(sizeof(LinearGradient) == 104 && sizeof(GradientStop) == 20,
@@ -120,7 +120,8 @@ bool same_style(const TextStyle& a, const TextStyle& b) {
 bool same_runs(const std::vector<TextRun>& a, const std::vector<TextRun>& b) {
     if (a.size() != b.size()) return false;
     for (std::size_t index = 0; index < a.size(); ++index) {
-        if (a[index].text != b[index].text || !same_style(a[index].style, b[index].style)) {
+        if (a[index].text != b[index].text || a[index].inherits_color != b[index].inherits_color ||
+            !same_style(a[index].style, b[index].style)) {
             return false;
         }
     }
@@ -175,7 +176,7 @@ bool same_effects(const std::vector<NodeEffect>& a, const std::vector<NodeEffect
     return true;
 }
 
-// Everything except `bounds`, `transform`, `mesh` and `path`.
+// Everything except `bounds`, `transform`, `mesh`, `path` and `plot`.
 bool same_image_reference(const std::optional<ImageReference>& a,
                           const std::optional<ImageReference>& b) {
     if (a.has_value() != b.has_value()) return false;
@@ -187,6 +188,12 @@ bool same_image_reference(const std::optional<ImageReference>& a,
     return !a->source_rect || same_rect(*a->source_rect, *b->source_rect);
 }
 
+bool same_text_layout(const std::optional<TextLayout>& a, const std::optional<TextLayout>& b) {
+    if (a.has_value() != b.has_value()) return false;
+    return !a || (a->align == b->align && same_float(a->line_height, b->line_height) &&
+                  a->max_lines == b->max_lines && a->ellipsis == b->ellipsis);
+}
+
 bool reads_backdrop(const PaintCommand& command) noexcept {
     return command.kind == PaintCommand::Kind::begin_layer &&
            command.blend_mode != BlendMode::normal;
@@ -196,18 +203,20 @@ bool same_paint(const PaintCommand& a, const PaintCommand& b) {
     return a.kind == b.kind && a.node_id == b.node_id && same_color(a.fill, b.fill) &&
            same_gradients(a.fill_gradients, b.fill_gradients) &&
            same_shadows(a.box_shadows, b.box_shadows) &&
+           same_float(a.border_width, b.border_width) && same_color(a.border_color, b.border_color) &&
            same_float(a.corner_radius, b.corner_radius) && a.text == b.text &&
            same_float(a.font_size, b.font_size) && a.font_family == b.font_family &&
            a.font_weight == b.font_weight && same_float(a.letter_spacing, b.letter_spacing) &&
            a.underline == b.underline && a.strikethrough == b.strikethrough &&
-           same_runs(a.text_runs, b.text_runs) && same_float(a.opacity, b.opacity) &&
+           same_runs(a.text_runs, b.text_runs) && same_text_layout(a.text_layout, b.text_layout) &&
+           a.missing_glyph_box == b.missing_glyph_box && same_float(a.opacity, b.opacity) &&
            same_radii(a.corner_radii, b.corner_radii) &&
            a.layer_unbounded == b.layer_unbounded && a.layer_isolated == b.layer_isolated &&
            a.blend_mode == b.blend_mode &&
            same_rect(a.clip_rect, b.clip_rect) && a.mask_mode == b.mask_mode &&
            same_image_reference(a.image, b.image) && a.image_asset == b.image_asset &&
            same_effects(a.effects, b.effects) && same_rect(a.effect_box, b.effect_box) &&
-           a.vector == b.vector;
+           a.vector == b.vector && a.plot_background == b.plot_background;
 }
 
 class Hasher final {
@@ -296,6 +305,8 @@ std::uint64_t hash_command(const PaintCommand& command) {
         hash.real(shadow.spread_radius);
         hash.color(shadow.color);
     }
+    hash.real(command.border_width);
+    hash.color(command.border_color);
     hash.real(command.corner_radius);
     hash.text(command.text);
     hash.real(command.font_size);
@@ -319,7 +330,16 @@ std::uint64_t hash_command(const PaintCommand& command) {
         hash.real(run.style.letter_spacing);
         hash.color(run.style.color);
         hash.number((run.style.underline ? 1U : 0U) | (run.style.strikethrough ? 2U : 0U));
+        hash.number(run.inherits_color ? 1U : 0U);
     }
+    hash.number(command.text_layout ? 1U : 0U);
+    if (command.text_layout) {
+        hash.number(static_cast<std::uint64_t>(command.text_layout->align));
+        hash.real(command.text_layout->line_height);
+        hash.number(command.text_layout->max_lines);
+        hash.number(command.text_layout->ellipsis ? 1U : 0U);
+    }
+    hash.number(command.missing_glyph_box ? 1U : 0U);
     hash.number(reinterpret_cast<std::uintptr_t>(command.mesh.get()));
     hash.number(command.mesh ? reinterpret_cast<std::uintptr_t>(command.mesh->texture.get())
                              : 0U);
@@ -350,6 +370,8 @@ std::uint64_t hash_command(const PaintCommand& command) {
     }
     hash.number(reinterpret_cast<std::uintptr_t>(command.image_asset.get()));
     hash.number(reinterpret_cast<std::uintptr_t>(command.vector.get()));
+    hash.number(reinterpret_cast<std::uintptr_t>(command.plot.get()));
+    hash.number(command.plot_background ? 1U : 0U);
     hash.number(command.effects.size());
     for (const auto& effect : command.effects) {
         hash.number(static_cast<std::uint64_t>(effect.kind));
@@ -370,6 +392,43 @@ std::uint64_t hash_command(const PaintCommand& command) {
     hash.real(command.effect_box.y);
     hash.real(command.effect_box.width);
     hash.real(command.effect_box.height);
+    return hash.value();
+}
+
+// The content of every mesh in `commands[begin, end)`: vertices, indices,
+// clip and texture texels. Pointer identity is not enough, because a producer
+// may rewrite a mesh's texels in place behind a const view.
+std::uint64_t mesh_digest(const std::vector<PaintCommand>& commands, std::size_t begin,
+                          std::size_t end) {
+    Hasher hash;
+    for (auto index = begin; index < end; ++index) {
+        const auto& mesh = commands[index].mesh;
+        if (!mesh) continue;
+        hash.number(index - begin);
+        hash.number(mesh->vertices.size());
+        for (const auto& vertex : mesh->vertices) {
+            hash.real(vertex.x);
+            hash.real(vertex.y);
+            hash.real(vertex.u);
+            hash.real(vertex.v);
+            hash.number(vertex.premultiplied_rgba);
+        }
+        hash.number(mesh->indices.size());
+        hash.bytes(mesh->indices.data(), mesh->indices.size() * sizeof(std::uint32_t));
+        hash.number(mesh->clip_enabled ? 1U : 0U);
+        hash.real(mesh->clip.x);
+        hash.real(mesh->clip.y);
+        hash.real(mesh->clip.width);
+        hash.real(mesh->clip.height);
+        hash.number(mesh->texture ? 1U : 0U);
+        if (mesh->texture) {
+            hash.number(mesh->texture->width);
+            hash.number(mesh->texture->height);
+            hash.number(mesh->texture->premultiplied_rgba.size());
+            hash.bytes(mesh->texture->premultiplied_rgba.data(),
+                       mesh->texture->premultiplied_rgba.size());
+        }
+    }
     return hash.value();
 }
 
@@ -416,7 +475,7 @@ std::string_view to_string(LayerCacheTrigger trigger) noexcept {
 bool paint_commands_equal(const PaintCommand& a, const PaintCommand& b) {
     return same_paint(a, b) && same_rect(a.bounds, b.bounds) &&
            same_transform(a.transform, b.transform) && a.mesh == b.mesh &&
-           same_path(a.path, b.path);
+           same_path(a.path, b.path) && a.plot == b.plot;
 }
 
 LayerInvalidation classify_change(
@@ -428,7 +487,8 @@ LayerInvalidation classify_change(
         const auto& after = next[index];
         if (before.kind != after.kind) return LayerInvalidation::structure;
         if (before.mesh != after.mesh || !same_path(before.path, after.path) ||
-            before.image_asset != after.image_asset || before.vector != after.vector) {
+            before.image_asset != after.image_asset || before.vector != after.vector ||
+            before.plot != after.plot) {
             return LayerInvalidation::resource;
         }
     }
@@ -546,11 +606,13 @@ std::vector<LayerCache::Layer> LayerCache::plan(
         }
         ++stats_.candidates;
 
+        const auto meshes = mesh_digest(commands, content_begin, content_end);
         Hasher hash;
         hash.number(content_end - content_begin);
         for (auto index = content_begin; index < content_end; ++index) {
             hash.number(hashes[index]);
         }
+        hash.number(meshes);
         auto [found, inserted] = entries_.try_emplace(id);
         auto& entry = found->second;
         if (count_frame) {
@@ -566,6 +628,8 @@ std::vector<LayerCache::Layer> LayerCache::plan(
                 commands.begin() + static_cast<std::ptrdiff_t>(content_begin),
                 commands.begin() + static_cast<std::ptrdiff_t>(content_end));
             drop(id, entry, classify_change(entry.image_commands, next));
+        } else if (entry.has_image && entry.image_mesh_digest != meshes) {
+            drop(id, entry, LayerInvalidation::resource);
         }
 
         if (range.begin < selected_end) {
@@ -597,6 +661,7 @@ std::vector<LayerCache::Layer> LayerCache::plan(
         const bool build = !entry.has_image;
         if (build) {
             entry.pending_inexact = !opacity_layer;
+            entry.pending_mesh_digest = meshes;
             entry.pending_commands.assign(
                 commands.begin() + static_cast<std::ptrdiff_t>(content_begin),
                 commands.begin() + static_cast<std::ptrdiff_t>(content_end));
@@ -658,6 +723,7 @@ bool LayerCache::admit(std::string_view node_id, std::int64_t pixels) {
     entry.hits_since_build = 0;
     entry.pixels = pixels;
     entry.image_commands = std::move(entry.pending_commands);
+    entry.image_mesh_digest = entry.pending_mesh_digest;
     entry.image_node_ids = std::move(entry.pending_node_ids);
     entry.pending_commands.clear();
     entry.pending_node_ids.clear();

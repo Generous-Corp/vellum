@@ -72,11 +72,35 @@ inline constexpr std::string_view kSceneVersionMismatchCode = "VELLUM_SCENE_VERS
 /// fidelity loss, so the scene is refused rather than approximated.
 inline constexpr std::string_view kGradientNotExpressibleCode =
     "VELLUM_GRADIENT_NOT_EXPRESSIBLE";
+/// A plot node without a spec, with children, or with a spec that fails
+/// `plot_is_valid`; always an error.
+inline constexpr std::string_view kInvalidPlotCode = "VELLUM_INVALID_PLOT";
+/// A plot whose channel the feed it samples does not have with the plot's
+/// shape; a warning. The plot's samples are cleared, so it draws nothing
+/// but its background.
+inline constexpr std::string_view kPlotChannelUnboundCode = "VELLUM_PLOT_CHANNEL_UNBOUND";
+/// A line, area or bar plot wider than `kMaxPlotColumns` device pixels at the
+/// scale it is drawn at; a warning. It draws only its background.
+inline constexpr std::string_view kPlotTooWideCode = "VELLUM_PLOT_TOO_WIDE";
+
+/// A text layout on a node that is not text, or with an unknown alignment, a
+/// line height that is negative or not finite, or an ellipsis without
+/// `max_lines`; always an error.
+inline constexpr std::string_view kInvalidTextLayoutCode = "VELLUM_INVALID_TEXT_LAYOUT";
+/// A text node with characters no packaged face covers; a warning naming
+/// each code point once, in ascending order. From scene version 13 they draw
+/// as the font's missing-glyph box, and before it as `?`.
+inline constexpr std::string_view kTextGlyphMissingCode = "VELLUM_TEXT_GLYPH_MISSING";
 
 /// A blend mode the backend cannot draw; a warning. The group was drawn with
 /// the `normal` mode instead. Only Tier 2 modes, which a backend other than
 /// Skia Graphite may lack, are ever reported this way.
 inline constexpr std::string_view kBlendModeFallbackCode = "VELLUM_BLEND_MODE_FALLBACK";
+
+/// A scene whose token table repeats a path or holds a value that is not
+/// finite, or a node whose token reference is out of range or disagrees with
+/// its `fill`; always an error.
+inline constexpr std::string_view kInvalidTokenReferenceCode = "VELLUM_INVALID_TOKEN_REFERENCE";
 
 [[nodiscard]] constexpr std::string_view to_string(
     LoweringDiagnostic::Severity severity) noexcept {

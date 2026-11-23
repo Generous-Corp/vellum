@@ -1,0 +1,64 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "canvas-kernel",
+    "design-schema-compiler",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-18T19:33:13Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-b4f18c7c14b4ca1de2b3f2dbf03b9f7d5306ce6a",
+  "include_dependency_deltas": [
+    "graphics/include/vellum/graphics/animation.hpp",
+    "graphics/include/vellum/graphics/limits.hpp",
+    "graphics/include/vellum/graphics/path_geometry.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "design-schema-compiler",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "authoring/src/rendered_tree_materializer.mm",
+    "graphics/include/vellum/graphics/animation.hpp",
+    "graphics/include/vellum/graphics/limits.hpp",
+    "graphics/include/vellum/graphics/path_geometry.hpp",
+    "packages/vellum-design-ir/src/limits.generated.js",
+    "packages/vellum-design-ir/src/validate.js",
+    "packages/vellum-design-ir/test/limits-drift.test.js",
+    "packages/vellum-ui/src/limits.generated.js",
+    "packages/vellum-ui/src/runtime.js"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "3c764b8233fc069a1500273f592abc43720dd5ff",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "95522d9fdaeb6d26a91f7adffe2bb0a134c5dbdb",
+    "to_commit": "b4f18c7c14b4ca1de2b3f2dbf03b9f7d5306ce6a"
+  },
+  "schema_api_deltas": [
+    "packages/vellum-design-ir/src/limits.generated.js",
+    "packages/vellum-design-ir/src/validate.js",
+    "packages/vellum-design-ir/test/limits-drift.test.js"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "b4f18c7c14b4ca1de2b3f2dbf03b9f7d5306ce6a",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

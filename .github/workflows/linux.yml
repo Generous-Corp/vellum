@@ -1,0 +1,81 @@
+name: Linux build
+
+# Builds and tests the parts of Vellum that do not depend on the landed
+# mirror: foundation, runtime, components and the GPU device layer's
+# non-device targets, with the GPU backend, graphics, authoring and the mirror
+# off. It does NOT compile framework/ yet: the mirror build refuses anything
+# but the Darwin arm64 Skia/Dawn configuration (tools/mirror/VellumMirror.cmake)
+# and no Linux closure or Skia/Dawn pin exists. This lane is the base the Linux
+# host ports grow on.
+#
+# Advisory: not a required check. It runs on pull requests and pushes that
+# touch the build, never on merge groups.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'foundation/**'
+      - 'runtime/**'
+      - 'components/**'
+      - 'gpu-runtime/**'
+      - '.github/workflows/linux.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'foundation/**'
+      - 'runtime/**'
+      - 'components/**'
+      - 'gpu-runtime/**'
+      - '.github/workflows/linux.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # A pull request must class every test it adds in scripts/ctest_classes.json.
+  # A merge group or main run, where a test added by a sibling PR may not be
+  # listed yet, runs an unlisted test as gpu and warns instead of failing.
+  VELLUM_UNLISTED_TEST_POLICY: ${{ github.event_name == 'pull_request' && 'fail' || 'gpu' }}
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('vellum-linux-pr-{0}', github.ref) || format('vellum-linux-run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  linux:
+    name: linux (no mirror, no GPU)
+    runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["ubuntu-latest"]') }}
+    timeout-minutes: 45
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Configure
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-linux -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVELLUM_BUILD_TESTS=ON \
+            -DVELLUM_ENABLE_GPU=OFF \
+            -DVELLUM_ENABLE_GRAPHICS=OFF \
+            -DVELLUM_ENABLE_AUTHORING=OFF \
+            -DVELLUM_ENABLE_MIRROR=OFF \
+            -DVELLUM_BUILD_SMOKE_NATIVE=OFF
+
+      - name: Build
+        run: cmake --build build-linux --parallel 4
+
+      # The C++ suites only. The Python contract tests run in the other
+      # workflows (see scripts/ci_lanes.json).
+      - name: Test
+        run: |
+          set -euo pipefail
+          ctest --test-dir build-linux --output-on-failure --no-tests=error \
+            -R '^(vellum\.(foundation|value\..*|runtime|utf8-text)|gpu-runtime\.(bootstrap|device-api-consumer|renderer-lock-reader))$'

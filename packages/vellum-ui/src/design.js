@@ -1,7 +1,10 @@
-import { Button, Canvas, Image, Path, Stack, Text, Vector, View, jsx } from './runtime.js';
+import { DESIGN_IR_SCHEMA_VERSIONS, designIrVersionOf } from './feature-versions.generated.js';
+import {
+    MAX_DESIGN_DEPTH as MAXIMUM_DEPTH,
+    MAX_DESIGN_NODES as MAXIMUM_NODES,
+} from './limits.generated.js';
+import { Button, Canvas, Image, Path, Plot, Stack, Text, TextRun, Vector, View, jsx } from './runtime.js';
 
-const MAXIMUM_NODES = 100_000;
-const MAXIMUM_DEPTH = 256;
 const EVENT_PROPERTIES = Object.freeze({
     press: 'onPress',
     change: 'onChange',
@@ -9,13 +12,18 @@ const EVENT_PROPERTIES = Object.freeze({
     keyDown: 'onKeyDown',
 });
 // DesignIR schema versions this materializer reads. Version 2 adds the node
-// `compositing` object, 3 adds material references, 4 adds tracks and 6 the
-// vector asset fields; a document without `schemaVersion` is version 1. A
-// field is read only at or after the version that adds it.
-const DESIGN_SCHEMA_VERSIONS = Object.freeze([1, 2, 3, 4, 5, 6]);
-const COMPOSITING_VERSION = 2;
-const VECTOR_ASSET_VERSION = 6;
+// `compositing` object, 3 adds material references, 4 adds tracks, and 5
+// adds plot bindings and 6 adds compiled vector assets; a document without
+// `schemaVersion` is version 1.
+const DESIGN_SCHEMA_VERSIONS = DESIGN_IR_SCHEMA_VERSIONS;
+const COMPOSITING_VERSION = designIrVersionOf('compositing');
+const PLOTS_VERSION = designIrVersionOf('plots');
+const VECTOR_ASSET_VERSION = designIrVersionOf('vectors');
 const VECTOR_PAINT_KEYS = Object.freeze(['transform', 'clipPath', 'overflow']);
+const PLOT_BINDING_KEYS = Object.freeze([
+    'channel', 'source', 'slots', 'history', 'orientation', 'audioChannel', 'min', 'max',
+    'baseline', 'lineWidth', 'barGap', 'peakWidth', 'lineColor', 'fillColor', 'peakColor',
+]);
 // The DesignIR blend modes, spelled as the retained `mixBlendMode` style and
 // the renderer's scene spell them.
 const BLEND_MODES = Object.freeze([
@@ -39,17 +47,48 @@ function plainObject(value, path) {
     return value;
 }
 
-function tokenValue(tokens, value, stack = []) {
+const TOKEN_COLOR = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+const SHORT_COLOR = /^#[0-9a-f]{3,4}$/i;
+
+function canonicalColor(value) {
+    if (typeof value !== 'string' || !SHORT_COLOR.test(value)) return value;
+    return `#${[...value.slice(1)].map((digit) => digit + digit).join('')}`;
+}
+const LAYER_NAMES = Object.freeze(['theme', 'semantic']);
+const CANONICAL_NAMES = new WeakMap();
+
+function canonicalName(tokens, name) {
+    return CANONICAL_NAMES.get(tokens)?.get(tokens[name]) ?? name;
+}
+
+function layerEntry(layers, tokens, name) {
+    if (!layers) return undefined;
+    const names = [name, canonicalName(tokens, name)];
+    for (const layer of LAYER_NAMES) {
+        const table = layers[layer];
+        if (!table || typeof table !== 'object') continue;
+        for (const candidate of names) {
+            if (Object.hasOwn(table, candidate)) return { layer, value: table[candidate] };
+        }
+    }
+    return undefined;
+}
+
+function tokenValue(tokens, value, stack = [], layers = undefined) {
     if (typeof value !== 'string') return value;
     const match = /^\{([^{}]+)\}$/.exec(value);
     if (!match) return value;
     const name = match[1];
     if (stack.includes(name)) throw new Error(`design token cycle: ${[...stack, name].join(' -> ')}`);
+    const override = layerEntry(layers, tokens, name);
+    if (override !== undefined) {
+        return tokenValue(tokens, override.value, [...stack, name], layers);
+    }
     const token = tokens[name];
     if (!token || typeof token !== 'object' || !('$value' in token)) {
         throw new Error(`unresolved design token: ${name}`);
     }
-    const resolved = tokenValue(tokens, token.$value, [...stack, name]);
+    const resolved = tokenValue(tokens, token.$value, [...stack, name], layers);
     if (resolved && typeof resolved === 'object' &&
         typeof resolved.value === 'number' && resolved.unit === 'px') {
         return resolved.value;
@@ -57,8 +96,140 @@ function tokenValue(tokens, value, stack = []) {
     return resolved;
 }
 
-function retainedStyle(document, node, viewport, root) {
+function tokenLayer(tokens, value, layers, stack = []) {
+    const match = typeof value === 'string' ? /^\{([^{}]+)\}$/.exec(value) : null;
+    if (!match) return undefined;
+    const name = match[1];
+    if (stack.includes(name)) return undefined;
+    const override = layerEntry(layers, tokens, name);
+    if (override !== undefined) {
+        return tokenLayer(tokens, override.value, layers, [...stack, name]) ?? override.layer;
+    }
+    const token = tokens[name];
+    if (!token || typeof token !== 'object' || !('$value' in token)) return undefined;
+    return tokenLayer(tokens, token.$value, layers, [...stack, name]);
+}
+
+function colorToken(context, value) {
+    const resolved = canonicalColor(
+        tokenValue(context.document.tokens ?? {}, value, [], context.tokenLayers));
+    const match = typeof value === 'string' ? /^\{([^{}]+)\}$/.exec(value) : null;
+    if (!match || typeof resolved !== 'string' || !TOKEN_COLOR.test(resolved)) {
+        return { value: resolved };
+    }
+    const name = match[1];
+    const tokens = context.document.tokens;
+    return {
+        value: resolved,
+        receipt: {
+            layer: tokenLayer(tokens, value, context.tokenLayers) ?? 'primitive',
+            path: canonicalName(tokens, name),
+            value: resolved,
+        },
+    };
+}
+
+function paintNumbers(source, names) {
+    const output = {};
+    for (const name of names) {
+        if (typeof source[name] === 'number' && Number.isFinite(source[name])) {
+            output[name] = source[name];
+        }
+    }
+    return output;
+}
+
+function colorSlot(context, refs, slot, value) {
+    const color = colorToken(context, value);
+    if (color.receipt) refs[slot] = color.receipt;
+    return color.value;
+}
+
+// Every gradient field the native materializer understands. Each is forwarded
+// verbatim so the materializer validates it; any other field is refused rather
+// than silently dropped.
+const GRADIENT_FIELDS = new Set([
+    'kind', 'angle', 'repeating', 'repeatLength', 'spread', 'interpolation', 'colorSpace',
+    'centerX', 'centerY', 'radiusX', 'radiusY', 'focalX', 'focalY', 'startRadius', 'endRadius',
+]);
+
+// The stroke attributes of the public Path contract, forwarded verbatim so the
+// native materializer validates them.
+const PATH_STROKE_FIELDS = Object.freeze([
+    'strokeWidth', 'strokeLineJoin', 'strokeLineCap', 'strokeMiterLimit',
+    'strokeDasharray', 'strokeDashoffset',
+]);
+
+function retainedGradient(context, refs, prefix, gradient) {
+    if (!gradient || typeof gradient !== 'object' || !Array.isArray(gradient.stops)) {
+        throw new TypeError(`${prefix} must hold a stops array`);
+    }
+    const output = {};
+    for (const [field, value] of Object.entries(gradient)) {
+        if (field === 'stops' || value === undefined) continue;
+        if (!GRADIENT_FIELDS.has(field)) {
+            throw new TypeError(`${prefix}.${field} is not a supported gradient field`);
+        }
+        output[field] = value;
+    }
+    output.stops = gradient.stops.map((stop, index) => {
+        for (const field of Object.keys(stop ?? {})) {
+            if (field !== 'position' && field !== 'color' && stop[field] !== undefined) {
+                throw new TypeError(`${prefix}.stops.${index}.${field} is not supported`);
+            }
+        }
+        return {
+            position: stop?.position,
+            color: colorSlot(context, refs, `${prefix}.stops.${index}`, stop?.color),
+        };
+    });
+    return output;
+}
+
+const PATH_PAINT_FIELDS = new Set(['fill', 'stroke', ...PATH_STROKE_FIELDS, ...VECTOR_PAINT_KEYS]);
+const PATH_GEOMETRY_FIELDS = new Set(['d', 'fillRule']);
+
+function requirePathFields(node, name, value, allowed) {
+    for (const field of Object.keys(value)) {
+        if (!allowed.has(field) && value[field] !== undefined) {
+            throw new TypeError(`design path ${node.id} ${name}.${field} is not supported`);
+        }
+    }
+}
+
+function pathPaint(context, node, refs) {
+    const properties = node.properties && typeof node.properties === 'object'
+        ? node.properties : {};
+    const paint = properties.paint && typeof properties.paint === 'object'
+        ? properties.paint : {};
+    const geometry = properties.path && typeof properties.path === 'object'
+        ? properties.path : {};
+    requirePathFields(node, 'paint', paint, PATH_PAINT_FIELDS);
+    requirePathFields(node, 'path', geometry, PATH_GEOMETRY_FIELDS);
+    const output = { d: geometry.d };
+    if (typeof geometry.fillRule === 'string') output.fillRule = geometry.fillRule;
+    if (paint.fill !== undefined) {
+        output.fill = paint.fill && typeof paint.fill === 'object'
+            ? retainedGradient(context, refs, 'fill', paint.fill)
+            : colorSlot(context, refs, 'fill', paint.fill);
+    }
+    if (paint.stroke !== undefined) {
+        output.stroke = paint.stroke && typeof paint.stroke === 'object'
+            ? retainedGradient(context, refs, 'stroke', paint.stroke)
+            : colorSlot(context, refs, 'stroke', paint.stroke);
+    }
+    for (const field of PATH_STROKE_FIELDS) {
+        const value = paint[field];
+        if (value === undefined) continue;
+        output[field] = Array.isArray(value) ? [...value] : value;
+    }
+    return output;
+}
+
+function retainedStyle(context, node, viewport, root) {
+    const { document } = context;
     const tokens = document.tokens ?? {};
+    const refs = Object.create(null);
     const properties = node.properties && typeof node.properties === 'object'
         ? node.properties : {};
     const layout = properties.layout && typeof properties.layout === 'object'
@@ -68,25 +239,93 @@ function retainedStyle(document, node, viewport, root) {
     const typography = properties.text && typeof properties.text === 'object'
         ? properties.text : {};
     const style = Object.create(null);
-    for (const property of ['x', 'y', 'width', 'height', 'padding', 'gap']) {
+    for (const property of [
+        'x', 'y', 'width', 'height', 'padding', 'gap', 'columnGap', 'rowGap', 'flexGrow',
+    ]) {
         if (typeof layout[property] === 'number' && Number.isFinite(layout[property])) {
             style[property] = layout[property];
         }
     }
     if (layout.direction === 'row') style.direction = 'horizontal';
     else if (layout.direction === 'column') style.direction = 'vertical';
-    if (typeof paint.backgroundColor === 'string') {
-        style.backgroundColor = tokenValue(tokens, paint.backgroundColor);
+    if (layout.display === 'grid') {
+        style.direction = 'horizontal';
+        style.wrap = true;
+        style.display = 'grid';
+        if (style.gap === undefined && typeof layout.columnGap === 'number') {
+            style.gap = layout.columnGap;
+        }
     }
-    if (typeof paint.borderRadius === 'number' || typeof paint.borderRadius === 'string') {
-        const radius = tokenValue(tokens, paint.borderRadius);
-        if (typeof radius === 'number' && Number.isFinite(radius)) style.borderRadius = radius;
+    for (const property of [
+        'align', 'alignContent', 'alignSelf', 'gridColumn', 'gridRow',
+        'gridTemplateColumns', 'gridTemplateRows', 'justify', 'wrap',
+    ]) {
+        if (typeof layout[property] === 'string' || typeof layout[property] === 'boolean') {
+            style[property] = layout[property];
+        }
     }
-    if (typeof typography.color === 'string') {
-        style.color = tokenValue(tokens, typography.color);
+    const drawsBox = node.kind !== 'path' && node.kind !== 'text-run';
+    if (drawsBox && typeof paint.backgroundColor === 'string') {
+        style.backgroundColor = colorSlot(context, refs, 'backgroundColor', paint.backgroundColor);
     }
-    if (typeof typography.fontSize === 'number' && Number.isFinite(typography.fontSize)) {
-        style.fontSize = typography.fontSize;
+    if (drawsBox && paint.boxShadow !== undefined) {
+        const shadows = Array.isArray(paint.boxShadow) ? paint.boxShadow : [paint.boxShadow];
+        if (shadows.some((shadow) => !shadow || typeof shadow !== 'object')) {
+            throw new TypeError(`design node ${node.id} paint.boxShadow must be an object`);
+        }
+        const retainedShadows = shadows.map((shadow) => ({
+            ...paintNumbers(shadow, ['offsetX', 'offsetY', 'blurRadius', 'spreadRadius']),
+            color: colorSlot(context, refs, 'boxShadow', shadow.color),
+        }));
+        if (retainedShadows.length > 1 && refs.boxShadow !== undefined) {
+            throw new TypeError(`design node ${node.id} paint.boxShadow cannot use color tokens with multiple shadows`);
+        }
+        style.boxShadow = retainedShadows.length === 1 ? retainedShadows[0] : retainedShadows;
+    }
+    if (drawsBox && paint.backgroundLinearGradient !== undefined) {
+        style.backgroundLinearGradient = retainedGradient(
+            context, refs, 'backgroundLinearGradient', paint.backgroundLinearGradient);
+    }
+    if (drawsBox && paint.backgroundGradient !== undefined) {
+        style.backgroundGradient = retainedGradient(
+            context, refs, 'backgroundGradient', paint.backgroundGradient);
+    }
+    if (drawsBox && paint.border && typeof paint.border === 'object') {
+        style.border = paint.border;
+    }
+    if (drawsBox && Array.isArray(paint.backgroundGradients)) {
+        style.backgroundGradients = paint.backgroundGradients.map((gradient, index) =>
+            retainedGradient(context, refs, `backgroundGradients.${index}`, gradient));
+    }
+    for (const property of [
+        'borderRadius', 'borderTopLeftRadius', 'borderTopRightRadius',
+        'borderBottomRightRadius', 'borderBottomLeftRadius',
+        'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
+    ]) {
+        const value = tokenValue(tokens, paint[property], [], context.tokenLayers);
+        if (typeof value === 'number' && Number.isFinite(value)) style[property] = value;
+    }
+    for (const property of [
+        'borderTopColor', 'borderRightColor', 'borderBottomColor', 'borderLeftColor',
+    ]) {
+        if (typeof paint[property] === 'string') {
+            style[property] = canonicalColor(tokenValue(
+                tokens, paint[property], [], context.tokenLayers));
+        }
+    }
+    for (const property of ['borderTopLeftRadius', 'borderTopRightRadius',
+        'borderBottomRightRadius', 'borderBottomLeftRadius']) {
+        if (typeof paint[property] === 'number' && Number.isFinite(paint[property])) {
+            style[property] = paint[property];
+        }
+    }
+    if (typeof typography.color === 'string' && node.kind !== 'path') {
+        style.color = colorSlot(context, refs, 'color', typography.color);
+    }
+    Object.assign(style, paintNumbers(typography, ['fontSize', 'fontWeight', 'letterSpacing']));
+    if (typeof typography.fontFamily === 'string') style.fontFamily = typography.fontFamily;
+    for (const property of ['fontStyle', 'textAlign', 'verticalAlign']) {
+        if (typeof typography[property] === 'string') style[property] = typography[property];
     }
     for (const property of VECTOR_PAINT_KEYS) {
         if (typeof paint[property] === 'string') style[property] = paint[property];
@@ -96,51 +335,7 @@ function retainedStyle(document, node, viewport, root) {
         style.height = viewport.height;
         if (style.padding === undefined) style.padding = viewport.padding;
     }
-    return style;
-}
-
-const PATH_PAINT_PROPERTIES = ['fillRule', 'strokeWidth', 'strokeLineJoin', 'strokeLineCap',
-    'strokeMiterLimit', 'strokeDasharray', 'strokeDashoffset'];
-
-// A path's paint resolves design tokens, so a token-bound colour follows the
-// token, in a solid paint and in each gradient stop.
-function pathProperties(node, context) {
-    const path = node.properties?.path;
-    if (!path || typeof path !== 'object' || typeof path.d !== 'string') {
-        throw new Error(`design path ${node.id} requires path data`);
-    }
-    const tokens = context.document.tokens ?? {};
-    const output = { d: path.d };
-    for (const name of ['fill', 'stroke']) {
-        const paint = path[name];
-        if (typeof paint === 'string') {
-            output[name] = paint === 'none' ? paint : tokenValue(tokens, paint);
-        } else if (paint && typeof paint === 'object' && Array.isArray(paint.stops)) {
-            output[name] = {
-                ...paint,
-                stops: paint.stops.map((stop) => ({ ...stop, color: tokenValue(tokens, stop.color) })),
-            };
-        }
-    }
-    for (const name of PATH_PAINT_PROPERTIES) {
-        if (path[name] !== undefined) output[name] = path[name];
-    }
-    return output;
-}
-
-// The first vector asset field a node uses, which needs version 6, or null.
-function vectorAssetField(node) {
-    if (node.kind === 'path' || node.kind === 'vector') return `kind ${node.kind}`;
-    const properties = node.properties && typeof node.properties === 'object' ? node.properties : {};
-    if (properties.path !== undefined) return 'properties.path';
-    if (properties.vector !== undefined) return 'properties.vector';
-    if (properties.image && typeof properties.image === 'object' &&
-        properties.image.source !== undefined) {
-        return 'properties.image.source';
-    }
-    const paint = properties.paint && typeof properties.paint === 'object' ? properties.paint : {};
-    const key = VECTOR_PAINT_KEYS.find((name) => paint[name] !== undefined);
-    return key === undefined ? null : `properties.paint.${key}`;
+    return { style, refs };
 }
 
 function designVersion(document) {
@@ -149,6 +344,21 @@ function designVersion(document) {
         throw new Error(`unsupported DesignIR schemaVersion: ${String(version)}`);
     }
     return version;
+}
+
+// The first vector asset field a node uses, which needs version 6, or null.
+// Path geometry and the path kind are part of the version 1-5 path contract.
+function vectorAssetField(node) {
+    if (node.kind === 'vector') return `kind ${node.kind}`;
+    const properties = node.properties && typeof node.properties === 'object' ? node.properties : {};
+    if (properties.vector !== undefined) return 'properties.vector';
+    if (properties.image && typeof properties.image === 'object' &&
+        properties.image.source !== undefined) {
+        return 'properties.image.source';
+    }
+    const paint = properties.paint && typeof properties.paint === 'object' ? properties.paint : {};
+    const key = VECTOR_PAINT_KEYS.find((name) => paint[name] !== undefined);
+    return key === undefined ? null : `properties.paint.${key}`;
 }
 
 // The node's validated `compositing` object, or undefined. It is version 2
@@ -241,10 +451,12 @@ function resolveMaskReferences(node, version) {
 }
 
 function componentFor(node) {
+    if (node.plot !== undefined) return Plot;
     if (node.kind === 'button') return Button;
     if (node.kind === 'text') return Text;
     if (node.kind === 'image') return Image;
     if (node.kind === 'canvas') return Canvas;
+    if (node.kind === 'text-run') return TextRun;
     if (node.kind === 'path') return Path;
     if (node.kind === 'vector') return Vector;
     if (node.kind === 'view') {
@@ -271,6 +483,18 @@ function anchorFor(node, document) {
     return node.id;
 }
 
+// The node's plot binding, which is version 5 and draws no children.
+function plotBindingOf(node, version) {
+    if (version < PLOTS_VERSION) {
+        throw new Error(`design node ${node.id} plot needs schemaVersion ${PLOTS_VERSION}`);
+    }
+    plainObject(node.plot, `design node ${node.id} plot`);
+    if (node.children.length > 0) {
+        throw new Error(`design node ${node.id} binds a plot and cannot have children`);
+    }
+    return node.plot;
+}
+
 function materializeNode(node, context, depth, root = false) {
     if (depth > MAXIMUM_DEPTH || ++context.nodes > MAXIMUM_NODES) {
         throw new Error('materialized design exceeds the node or depth limit');
@@ -282,7 +506,8 @@ function materializeNode(node, context, depth, root = false) {
     if (context.ids.has(node.id)) throw new Error(`duplicate materialized design id: ${node.id}`);
     context.ids.add(node.id);
     if (!Array.isArray(node.children)) throw new Error(`design node ${node.id} requires children`);
-    const style = retainedStyle(context.document, node, context.viewport, root);
+    const { style, refs } = retainedStyle(context, node, context.viewport, root);
+    if (node.kind === 'vector') delete refs.backgroundColor;
     const vectorField = vectorAssetField(node);
     if (vectorField !== null && context.version < VECTOR_ASSET_VERSION) {
         throw new Error(
@@ -290,7 +515,17 @@ function materializeNode(node, context, depth, root = false) {
     }
     applyCompositing(style, compositingOf(node, context.version, root));
     resolveMaskReferences(node, context.version);
-
+    if ((node.kind === 'text-run' || node.kind === 'path') && node.children.length > 0) {
+        throw new Error(`design ${node.kind} ${node.id} does not accept children`);
+    }
+    if (node.kind === 'text-run') {
+        if (context.actions[node.id] !== undefined) {
+            throw new Error(`design text-run ${node.id} does not accept actions`);
+        }
+        const run = { style, text: typeof node.text === 'string' ? node.text : '' };
+        if (Object.keys(refs).length > 0) run.tokenRefs = { ...refs };
+        return jsx(TextRun, run, node.id);
+    }
     const properties = {
         id: node.id,
         anchor: anchorFor(node, context.document),
@@ -302,8 +537,9 @@ function materializeNode(node, context, depth, root = false) {
             .filter((child) => child?.properties?.layout?.display !== 'none')
             .map((child) => materializeNode(child, context, depth + 1)),
     };
+    if (node.kind === 'path') Object.assign(properties, pathPaint(context, node, refs));
+    if (Object.keys(refs).length > 0) properties.tokenRefs = { ...refs };
     if (typeof node.text === 'string') properties.text = node.text;
-    if (node.kind === 'path') Object.assign(properties, pathProperties(node, context));
     if (node.kind === 'vector') {
         const vector = node.properties?.vector;
         if (!vector || typeof vector !== 'object' || !vector.asset) {
@@ -314,6 +550,13 @@ function materializeNode(node, context, depth, root = false) {
     if (node.kind === 'image' && typeof node.properties?.image?.source === 'string') {
         properties.source = node.properties.image.source;
         if (typeof node.properties.image.fit === 'string') properties.fit = node.properties.image.fit;
+    }
+    if (node.plot !== undefined) {
+        const plot = plotBindingOf(node, context.version);
+        properties.plot = plot.style;
+        for (const key of PLOT_BINDING_KEYS) {
+            if (plot[key] !== undefined) properties[key] = plot[key];
+        }
     }
     const bindings = context.actions[node.id];
     if (bindings !== undefined) {
@@ -330,7 +573,7 @@ function materializeNode(node, context, depth, root = false) {
 
 // Check even hidden descendants before lowering; an unsupported field must
 // never disappear silently when this consumer reads a newer document.
-function requireSupportedFields(root) {
+function requireSupportedFields(root, version) {
     let nodes = 0;
     function visit(node, depth) {
         if (depth > MAXIMUM_DEPTH || ++nodes > MAXIMUM_NODES) {
@@ -339,6 +582,14 @@ function requireSupportedFields(root) {
         plainObject(node, `design node at depth ${depth}`);
         if (node.material !== undefined) {
             throw new Error(`design node ${node.id} has unsupported material`);
+        }
+        if (node.plot !== undefined && version < PLOTS_VERSION) {
+            throw new Error(`design node ${node.id} plot needs schemaVersion ${PLOTS_VERSION}`);
+        }
+        const vectorField = vectorAssetField(node);
+        if (vectorField !== null && version < VECTOR_ASSET_VERSION) {
+            throw new Error(
+                `design node ${node.id} ${vectorField} needs schemaVersion ${VECTOR_ASSET_VERSION}`);
         }
         if (node.tracks !== undefined && (!Array.isArray(node.tracks) || node.tracks.length > 0)) {
             throw new Error(`design node ${node.id} has unsupported tracks`);
@@ -353,7 +604,7 @@ function materialize(document, options, missingActionTarget) {
     plainObject(document, 'design');
     const version = designVersion(document);
     const root = document.root;
-    requireSupportedFields(root);
+    requireSupportedFields(root, version);
     const rootLayout = root?.properties?.layout &&
         typeof root.properties.layout === 'object' &&
         !Array.isArray(root.properties.layout)
@@ -377,6 +628,7 @@ function materialize(document, options, missingActionTarget) {
         ids: new Set(),
         nodes: 0,
         version,
+        tokenLayers: options.tokenLayers,
         visitedActions: new Set(),
         viewport,
     };
@@ -394,8 +646,11 @@ function namespacedTokens(document) {
     const namespace = document.source?.namespace;
     if (!tokens || typeof namespace !== 'string' || namespace.length === 0) return tokens;
     const aliases = Object.create(null);
+    const names = new Map();
+    CANONICAL_NAMES.set(aliases, names);
     for (const [name, token] of Object.entries(tokens)) {
         aliases[name] = token;
+        if (!names.has(token)) names.set(token, name);
         const prefix = `${namespace}.`;
         if (name.startsWith(prefix)) aliases[name.slice(prefix.length)] ??= token;
     }
@@ -478,14 +733,14 @@ function resolvedDesignActions(document, bindings, actions) {
     return resolved;
 }
 
-export function Design({ document, actions = {}, bindings = null }) {
+export function Design({ document, actions = {}, bindings = null, tokenLayers = undefined }) {
     if (!document || typeof document !== 'object' || !document.root ||
         typeof actions !== 'object' || actions === null || Array.isArray(actions)) {
         throw new TypeError('Design requires a normalized document and an action map');
     }
     return materialize(
         normalizedDocument(document),
-        { actions: resolvedDesignActions(document, bindings, actions) },
+        { actions: resolvedDesignActions(document, bindings, actions), tokenLayers },
         (nodeId) => `Design binding target is missing from imported design: ${nodeId}`,
     );
 }

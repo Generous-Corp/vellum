@@ -1,9 +1,14 @@
 #import <Cocoa/Cocoa.h>
 #import <Metal/Metal.h>
+#import <QuartzCore/CADisplayLink.h>
 #import <QuartzCore/CAMetalLayer.h>
 
 #include <vellum/authoring/js_application.hpp>
 #include <vellum/graphics/capture_stats.hpp>
+#include <vellum/graphics/frame_driver.hpp>
+#include <vellum/graphics/hit_test.hpp>
+#include <vellum/graphics/image_asset.hpp>
+#include <vellum/graphics/pointer_router.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
 #include <vellum/graphics/dawn_native_bootstrap.hpp>
@@ -24,6 +29,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -32,6 +38,7 @@ using vellum::authoring::Interaction;
 using vellum::authoring::JsApplication;
 using vellum::authoring::RenderedApplication;
 using vellum::authoring::TextInputControl;
+using vellum::graphics::FrameDriver;
 using vellum::graphics::SkiaDawnSurface;
 using vellum::app_host::ComponentModuleSpec;
 using vellum::app_host::ComponentRegistry;
@@ -81,6 +88,56 @@ bool read_file(const std::filesystem::path& path, std::string& output) {
     contents << input.rdbuf();
     if (!input || contents.str().empty()) return false;
     output = contents.str();
+    return true;
+}
+
+bool load_bundle_images(const std::filesystem::path& bundle,
+                        vellum::authoring::JsApplicationOptions& options, std::string& error) {
+    auto sidecar = bundle;
+    sidecar += ".images.json";
+    std::error_code filesystem_error;
+    const auto size = std::filesystem::file_size(sidecar, filesystem_error);
+    if (filesystem_error == std::errc::no_such_file_or_directory) return true;
+    if (filesystem_error || size > 96U * 1024U * 1024U) {
+        error = "could not read native bundle images within the encoded size limit";
+        return false;
+    }
+    NSString* path = [NSString stringWithUTF8String:sidecar.c_str()];
+    NSData* data = [NSData dataWithContentsOfFile:path];
+    id catalog = data == nil ? nil
+        : [NSJSONSerialization JSONObjectWithData:data options:0 error:nullptr];
+    if (![catalog isKindOfClass:NSDictionary.class]) {
+        error = "native bundle image catalog must be a JSON object";
+        return false;
+    }
+    NSDictionary* images = static_cast<NSDictionary*>(catalog);
+    std::size_t decoded_bytes = 0;
+    for (NSString* name in [images.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
+        id encoded = images[name];
+        NSData* bytes = [encoded isKindOfClass:NSString.class]
+            ? [[NSData alloc] initWithBase64EncodedString:encoded options:0] : nil;
+        if (bytes == nil) {
+            error = "native bundle image is not base64";
+            return false;
+        }
+        const std::span<const std::uint8_t> input{
+            static_cast<const std::uint8_t*>(bytes.bytes), bytes.length};
+        const auto dimensions = vellum::graphics::png_header_dimensions(input);
+        if (!dimensions || !vellum::graphics::image_dimensions_fit(
+                dimensions->width, dimensions->height) ||
+            (decoded_bytes += std::size_t{dimensions->width} * dimensions->height * 4U) >
+                vellum::graphics::kMaxImageBytes) {
+            error = "native bundle image exceeds the decoded size limit or has an invalid header";
+            return false;
+        }
+        if (!vellum::graphics::normalize_content_hash(name.UTF8String)) {
+            error = "native bundle image key must be a SHA-256 content hash";
+            return false;
+        }
+        auto asset = SkiaDawnSurface::decode_image_asset(input, name.UTF8String, &error);
+        if (!asset) return false;
+        options.images.push_back(std::move(asset));
+    }
     return true;
 }
 
@@ -201,7 +258,8 @@ struct FrameInfo final {
 // Renders the scene on the GPU, checks it has content, and writes a PNG when
 // `png_path` is non-empty.
 bool capture_frame(const RenderedApplication& rendered,
-                   const std::filesystem::path& png_path, FrameInfo& frame,
+                   const std::filesystem::path& png_path,
+                   std::uint32_t scale, FrameInfo& frame,
                    std::string* error) {
     static bool bootstrapped = false;
     if (!bootstrapped) {
@@ -211,7 +269,7 @@ bool capture_frame(const RenderedApplication& rendered,
     auto surface = SkiaDawnSurface::create(
         {.width = static_cast<std::uint32_t>(rendered.scene.width),
          .height = static_cast<std::uint32_t>(rendered.scene.height),
-         .scale = 1.0F},
+         .scale = static_cast<float>(scale)},
         error);
     if (!surface || !validate_gpu(*surface, false, error) ||
         !surface->render(rendered.scene, error)) {
@@ -260,7 +318,8 @@ bool advance_clock(JsApplication& application, std::uint64_t milliseconds,
     return true;
 }
 
-int run_headless(const Options& options, std::string_view bundle) {
+int run_headless(const Options& options, std::string_view bundle,
+                 const vellum::authoring::JsApplicationOptions& application_options) {
     @autoreleasepool {
         std::string error;
         ComponentRegistry components;
@@ -268,8 +327,6 @@ int run_headless(const Options& options, std::string_view bundle) {
             std::cerr << error << '\n';
             return 1;
         }
-        vellum::authoring::JsApplicationOptions application_options;
-        application_options.manual_clock = options.manual_clock;
         auto application = JsApplication::create(
             bundle, application_options, &error);
         RenderedApplication rendered;
@@ -416,6 +473,7 @@ int run_headless(const Options& options, std::string_view bundle) {
                 const auto directory = options.capture_dir.empty()
                     ? std::filesystem::path(".") : options.capture_dir;
                 if (!capture_frame(rendered, directory / (pending_capture + ".png"),
+                                   options.capture_scale,
                                    step_frame, &error)) {
                     std::cerr << error << '\n';
                     return 1;
@@ -439,7 +497,7 @@ int run_headless(const Options& options, std::string_view bundle) {
             return 1;
         }
         FrameInfo frame;
-        if (!capture_frame(rendered, options.capture, frame, &error)) {
+        if (!capture_frame(rendered, options.capture, options.capture_scale, frame, &error)) {
             std::cerr << error << '\n';
             return 1;
         }
@@ -478,6 +536,55 @@ std::filesystem::path packaged_state_path() {
 }
 
 std::vector<ComponentModuleSpec> interactive_component_specs;
+vellum::authoring::JsApplicationOptions interactive_application_options;
+
+using vellum::graphics::PointerEvent;
+using vellum::graphics::PointerModifiers;
+using vellum::graphics::PointerTarget;
+
+PointerModifiers pointer_modifiers(NSEvent* event) {
+    const NSEventModifierFlags flags = event.modifierFlags;
+    return {
+        .shift = (flags & NSEventModifierFlagShift) != 0,
+        .control = (flags & NSEventModifierFlagControl) != 0,
+        .alt = (flags & NSEventModifierFlagOption) != 0,
+        .meta = (flags & NSEventModifierFlagCommand) != 0,
+    };
+}
+
+const char* pointer_event_name(PointerEvent::Kind kind) {
+    switch (kind) {
+    case PointerEvent::Kind::press: return "press";
+    case PointerEvent::Kind::release: return "release";
+    case PointerEvent::Kind::click: return "click";
+    case PointerEvent::Kind::drag: return "drag";
+    case PointerEvent::Kind::cancel: return "cancel";
+    case PointerEvent::Kind::hover_enter: return "hoverEnter";
+    case PointerEvent::Kind::hover_leave: return "hoverLeave";
+    case PointerEvent::Kind::wheel: return "wheel";
+    }
+    return "";
+}
+
+bool event_feeds_target(const std::string& event, PointerTarget target) {
+    switch (target) {
+    case PointerTarget::press:
+        return event == "press" || event == "release" || event == "click" ||
+               event == "drag" || event == "cancel";
+    case PointerTarget::hover: return event == "hoverEnter" || event == "hoverLeave";
+    case PointerTarget::wheel: return event == "wheel";
+    }
+    return false;
+}
+
+std::unordered_set<std::string> interactive_nodes(
+    const RenderedApplication& rendered, PointerTarget target) {
+    std::unordered_set<std::string> ids;
+    for (const auto& item : rendered.interactions) {
+        if (event_feeds_target(item.event, target)) ids.insert(item.node_id);
+    }
+    return ids;
+}
 
 }  // namespace
 
@@ -487,6 +594,10 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
     std::unique_ptr<ComponentRegistry> _components;
     RenderedApplication _rendered;
     std::unique_ptr<SkiaDawnSurface> _surface;
+    std::unique_ptr<FrameDriver> _driver;
+    id _displayLink;
+    NSTimer* _frameTimer;
+    id _motionObserver;
     std::filesystem::path _persistencePath;
     std::string _focusedInputId;
     NSRange _selectedTextRange;
@@ -494,6 +605,8 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
     NSMutableAttributedString* _markedText;
     std::unique_ptr<MacAccessibilityBridge> _accessibility;
     NSTimer* _asyncTimer;
+    std::unique_ptr<vellum::graphics::PointerRouter> _pointer;
+    NSTrackingArea* _trackingArea;
 }
 - (instancetype)initWithFrame:(NSRect)frame
                        bundle:(const std::string&)bundle
@@ -510,7 +623,7 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
     if (self) {
         std::string error;
         _components = std::make_unique<ComponentRegistry>();
-        _application = JsApplication::create(bundle, &error);
+        _application = JsApplication::create(bundle, interactive_application_options, &error);
         if (!load_components(components, *_components, &error) || !_application ||
             !_application->render(_rendered, &error)) {
             NSLog(@"Vellum application initialization failed: %s", error.c_str());
@@ -553,6 +666,12 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
             static_cast<std::uint32_t>(frame.size.height), 1.0F);
         _accessibility->sync(_rendered.accessibility_nodes);
         __weak VellumApplicationView* weakSelf = self;
+        _pointer = std::make_unique<vellum::graphics::PointerRouter>(
+            [weakSelf](vellum::graphics::Point point, PointerTarget target) {
+                VellumApplicationView* owner = weakSelf;
+                return owner == nil ? std::optional<std::string>{}
+                                    : [owner pickAt:point target:target];
+            });
         _asyncTimer = [NSTimer scheduledTimerWithTimeInterval:0.016
                                                        repeats:YES
                                                          block:^(NSTimer* timer) {
@@ -571,6 +690,70 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
 
 - (void)dealloc {
     [_asyncTimer invalidate];
+    [self stopFrames];
+    if (_motionObserver != nil) {
+        [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:_motionObserver];
+    }
+}
+
+- (void)startFrames {
+    if (_driver == nullptr || self.window == nil) return;
+    if (@available(macOS 14.0, *)) {
+        if (_displayLink == nil) {
+            _displayLink = [self displayLinkWithTarget:self selector:@selector(frameTick:)];
+            [_displayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+        }
+        ((CADisplayLink*)_displayLink).paused = NO;
+        return;
+    }
+    if (_frameTimer == nil) {
+        __weak VellumApplicationView* weakSelf = self;
+        _frameTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / 60.0
+                                                      repeats:YES
+                                                        block:^(NSTimer* timer) {
+            (void)timer;
+            [weakSelf frameTick:nil];
+        }];
+    }
+}
+
+- (void)pauseFrames {
+    if (_driver != nullptr) _driver->suspend();
+    if (@available(macOS 14.0, *)) {
+        if (_displayLink != nil) ((CADisplayLink*)_displayLink).paused = YES;
+    }
+    [_frameTimer invalidate];
+    _frameTimer = nil;
+}
+
+- (void)stopFrames {
+    if (_driver != nullptr) _driver->suspend();
+    if (@available(macOS 14.0, *)) {
+        [(CADisplayLink*)_displayLink invalidate];
+    }
+    _displayLink = nil;
+    [_frameTimer invalidate];
+    _frameTimer = nil;
+}
+
+- (void)frameTick:(id)link {
+    if (_driver == nullptr || !_surface) return;
+    double now = CACurrentMediaTime();
+    if (@available(macOS 14.0, *)) {
+        if ([link isKindOfClass:CADisplayLink.class]) {
+            const double target = ((CADisplayLink*)link).targetTimestamp;
+            if (target > 0.0) now = target;
+        }
+    }
+    const auto report = _driver->frame(_rendered.scene, now);
+    if (!report.render_ok) {
+        NSLog(@"Vellum frame failed: %s", report.error.c_str());
+    }
+    if (!report.needs_next_frame) [self pauseFrames];
+}
+
+- (void)requestFrame {
+    if (_driver != nullptr) _driver->request_frame();
 }
 
 - (void)pumpAsyncWork:(NSTimer*)timer {
@@ -591,7 +774,7 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
 - (BOOL)finishMutation:(std::string*)error {
     if (!_components->expand(_rendered.scene, error)) return NO;
     if (!persist_state(*_application, _persistencePath, error)) return NO;
-    if (_surface && !_surface->render_incremental(_rendered.scene, error)) return NO;
+    [self requestFrame];
     _accessibility->sync(_rendered.accessibility_nodes);
     return YES;
 }
@@ -630,7 +813,16 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
 
 - (void)viewDidMoveToWindow {
     [super viewDidMoveToWindow];
-    if (self.window == nil || _surface) return;
+    if (self.window == nil) {
+        if (_pointer != nullptr) [self deliverPointerEvents:_pointer->leave()];
+        [self stopFrames];
+        return;
+    }
+    self.window.acceptsMouseMovedEvents = YES;
+    if (_surface) {
+        [self requestFrame];
+        return;
+    }
     CAMetalLayer* layer = static_cast<CAMetalLayer*>(self.layer);
     const float scale = static_cast<float>(self.window.backingScaleFactor);
     layer.contentsScale = scale;
@@ -647,10 +839,35 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
          .scale = scale,
          .native_surface_handle = (__bridge void*)layer},
         &error);
-    if (!_surface || !validate_gpu(*_surface, true, &error) ||
-        !_surface->render(_rendered.scene, &error)) {
+    if (!_surface || !validate_gpu(*_surface, true, &error)) {
         NSLog(@"Vellum GPU initialization failed: %s", error.c_str());
+        return;
     }
+    SkiaDawnSurface* surface = _surface.get();
+    _driver = std::make_unique<FrameDriver>(
+        [surface](const vellum::graphics::Scene& scene, std::string* failure) {
+            return surface->render_incremental(scene, failure);
+        });
+    __weak VellumApplicationView* weakSelf = self;
+    _driver->set_wake([weakSelf] {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf startFrames];
+        });
+    });
+    _driver->set_reduced_motion(
+        NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion);
+    _motionObserver = [NSWorkspace.sharedWorkspace.notificationCenter
+        addObserverForName:NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification
+                    object:nil
+                     queue:NSOperationQueue.mainQueue
+                usingBlock:^(NSNotification* note) {
+        (void)note;
+        VellumApplicationView* owner = weakSelf;
+        if (owner == nil || owner->_driver == nullptr) return;
+        owner->_driver->set_reduced_motion(
+            NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion);
+    }];
+    [self startFrames];
 }
 
 - (void)mouseDown:(NSEvent*)event {
@@ -676,20 +893,107 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
         return;
     }
     _focusedInputId.clear();
-    const auto interaction = std::find_if(
-        _rendered.interactions.begin(), _rendered.interactions.end(),
-        [point](const Interaction& item) {
-            return item.event == "press" && point.x >= item.bounds.x &&
-                   point.y >= item.bounds.y &&
-                   point.x <= item.bounds.x + item.bounds.width &&
-                   point.y <= item.bounds.y + item.bounds.height;
-        });
-    if (interaction == _rendered.interactions.end()) return;
-    std::string error;
-    if (!_application->dispatch(
-            interaction->action, R"({"pointerType":"mouse"})", _rendered, &error) ||
-        ![self finishMutation:&error]) {
-        NSLog(@"Vellum interaction failed: %s", error.c_str());
+    [self deliverPointerEvents:_pointer->down(
+        [self pointerLocation:event], vellum::graphics::PointerButton::primary,
+        pointer_modifiers(event))];
+}
+
+- (void)mouseUp:(NSEvent*)event {
+    [self deliverPointerEvents:_pointer->up(
+        [self pointerLocation:event], vellum::graphics::PointerButton::primary,
+        pointer_modifiers(event))];
+}
+
+- (void)mouseDragged:(NSEvent*)event {
+    [self deliverPointerEvents:_pointer->move(
+        [self pointerLocation:event], pointer_modifiers(event))];
+}
+
+- (void)mouseMoved:(NSEvent*)event {
+    [self deliverPointerEvents:_pointer->move(
+        [self pointerLocation:event], pointer_modifiers(event))];
+}
+
+- (void)mouseExited:(NSEvent*)event {
+    if (_pointer->captured()) return;
+    [self deliverPointerEvents:_pointer->leave(pointer_modifiers(event))];
+}
+
+- (void)scrollWheel:(NSEvent*)event {
+    const CGFloat scale = event.hasPreciseScrollingDeltas ? 1.0 : 10.0;
+    const auto events = _pointer->wheel(
+        [self pointerLocation:event],
+        {static_cast<float>(event.scrollingDeltaX * scale),
+         static_cast<float>(event.scrollingDeltaY * scale)},
+        pointer_modifiers(event));
+    if (events.empty()) {
+        [super scrollWheel:event];
+        return;
+    }
+    [self deliverPointerEvents:events];
+}
+
+- (void)updateTrackingAreas {
+    if (_trackingArea != nil) [self removeTrackingArea:_trackingArea];
+    _trackingArea = [[NSTrackingArea alloc]
+        initWithRect:self.bounds
+             options:NSTrackingMouseMoved | NSTrackingMouseEnteredAndExited |
+                     NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect
+               owner:self
+            userInfo:nil];
+    [self addTrackingArea:_trackingArea];
+    [super updateTrackingAreas];
+}
+
+- (vellum::graphics::Point)pointerLocation:(NSEvent*)event {
+    const NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
+    return {static_cast<float>(point.x), static_cast<float>(point.y)};
+}
+
+- (std::optional<std::string>)pickAt:(vellum::graphics::Point)point
+                              target:(PointerTarget)target {
+    const auto ids = interactive_nodes(_rendered, target);
+    if (ids.empty()) return std::nullopt;
+    return vellum::graphics::pick(_rendered.scene, point, {.interactive = &ids});
+}
+
+- (NSDictionary*)pointerPayload:(const PointerEvent&)event {
+    return @{
+        @"pointerType": @"mouse",
+        @"x": @(event.position.x),
+        @"y": @(event.position.y),
+        @"startX": @(event.start.x),
+        @"startY": @(event.start.y),
+        @"deltaX": @(event.delta.x),
+        @"deltaY": @(event.delta.y),
+        @"over": @(event.over),
+        @"shift": @(event.modifiers.shift),
+        @"control": @(event.modifiers.control),
+        @"alt": @(event.modifiers.alt),
+        @"meta": @(event.modifiers.meta),
+    };
+}
+
+- (void)deliverPointerEvents:(const std::vector<PointerEvent>&)events {
+    for (const auto& event : events) {
+        const std::string name = pointer_event_name(event.kind);
+        std::vector<std::string> actions;
+        for (const auto& item : _rendered.interactions) {
+            if (item.node_id == event.node_id && item.event == name) {
+                actions.push_back(item.action);
+            }
+        }
+        for (const auto& action : actions) {
+            std::string error;
+            const bool dispatched = event.kind == PointerEvent::Kind::press
+                ? _application->dispatch(
+                      action, R"({"pointerType":"mouse"})", _rendered, &error)
+                : dispatch_payload(
+                      *_application, _rendered, action, [self pointerPayload:event], &error);
+            if (!dispatched || ![self finishMutation:&error]) {
+                NSLog(@"Vellum interaction failed: %s", error.c_str());
+            }
+        }
     }
 }
 
@@ -940,7 +1244,7 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
         static_cast<const char*>(self.bundleData.bytes), self.bundleData.length);
     std::string error;
     ComponentRegistry components;
-    auto probe = JsApplication::create(bundle, &error);
+    auto probe = JsApplication::create(bundle, interactive_application_options, &error);
     RenderedApplication rendered;
     if (!load_components(interactive_component_specs, components, &error) ||
         !probe || !probe->render(rendered, &error) ||
@@ -993,12 +1297,19 @@ int main(int argc, const char* argv[]) {
         std::cerr << "could not read application bundle: " << options.bundle << '\n';
         return 2;
     }
+    vellum::authoring::JsApplicationOptions application_options{.manual_clock = options.manual_clock};
+    std::string error;
+    if (!load_bundle_images(options.bundle, application_options, error)) {
+        std::cerr << error << '\n';
+        return 2;
+    }
     if (options.no_window || options.manual_clock || !options.dump_tree.empty() ||
         !options.capture.empty() || !options.steps.empty() ||
         !options.state_file.empty()) {
-        return run_headless(options, bundle);
+        return run_headless(options, bundle, application_options);
     }
     interactive_component_specs = options.components;
+    interactive_application_options = std::move(application_options);
     @autoreleasepool {
         NSApplication* application = NSApplication.sharedApplication;
         application.activationPolicy = NSApplicationActivationPolicyRegular;

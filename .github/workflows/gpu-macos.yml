@@ -21,6 +21,12 @@ permissions:
   attestations: read
   contents: read
 
+env:
+  # A pull request must class every test it adds in scripts/ctest_classes.json.
+  # A merge group or main run, where a test added by a sibling PR may not be
+  # listed yet, runs an unlisted test as gpu and warns instead of failing.
+  VELLUM_UNLISTED_TEST_POLICY: ${{ github.event_name == 'pull_request' && 'fail' || 'gpu' }}
+
 concurrency:
   # GitHub keeps only one pending run per concurrency group. Keep PRs keyed
   # by ref so obsolete commits are canceled, but isolate every trusted or
@@ -32,18 +38,117 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  decide:
+    name: decide
+    # Off unless the repository variable VELLUM_GPU_PREDECIDE is exactly
+    # `on`. When on, this job runs gpu-macos-arm64's own checkout, classify
+    # and reuse steps (byte-for-byte copies, held equal by
+    # scripts/test_ci_runner_policy.py) on a non-Mac runner, before any Mac
+    # is asked for. A run that will only report (a change the base's
+    # classifier says the proof does not cover, or a tree an earlier run of
+    # this workflow already proved) then takes this job's runner instead of
+    # waiting 20 to 40 minutes for a fleet Mac lease to print a notice.
+    # gpu-macos-arm64 repeats both decisions itself and fails on any
+    # disagreement. VELLUM_DECIDE_RUNS_ON_JSON (a JSON label list) moves
+    # this job, and the reporting runs it routes, to another Linux runner
+    # class, such as a local lane; unset, it is hosted ubuntu-24.04.
+    # First-party only, like the proof jobs: VELLUM_DECIDE_RUNS_ON_JSON may
+    # name a local lane, which must never check out a fork's head.
+    if: vars.VELLUM_GPU_PREDECIDE == 'on' && (github.event_name == 'pull_request' || github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ${{ fromJSON(vars.VELLUM_DECIDE_RUNS_ON_JSON || '["ubuntu-24.04"]') }}
+    timeout-minutes: 15
+    # A failure here only loses the early decision: gpu-macos-arm64 runs on
+    # its usual runner and proves as before. It must not redden the run,
+    # which a later push reads before it may reuse this run's proof.
+    continue-on-error: true
+    outputs:
+      unaffected: ${{ steps.classify.outputs.unaffected }}
+      reused_run: ${{ steps.reuse.outputs.run_id }}
+    steps:
+      - name: Check out full preserved Vellum history without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Classify the change against the base's rules
+        id: classify
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        timeout-minutes: 5
+        shell: bash
+        env:
+          # A queue entry's first parent is the entry ahead of it in a batch;
+          # judge it against main's tip, so every batched change is classified.
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          set -uo pipefail
+          base="${QUEUE_BASE:-$GITHUB_SHA^1}"
+          classifier="$RUNNER_TEMP/base-classify-gpu-proof.py"
+          verdict=""
+          if { [ "$GITHUB_EVENT_NAME" != merge_group ] || [ -n "$QUEUE_BASE" ]; } &&
+             git show "$base:scripts/classify_gpu_proof.py" > "$classifier" 2>/dev/null &&
+             git diff --name-only -z --no-renames "$base" "$GITHUB_SHA" \
+               > "$RUNNER_TEMP/changed-paths" &&
+             verdict="$(python3 -I "$classifier" --files0-from "$RUNNER_TEMP/changed-paths")"; then
+            :
+          fi
+          if [ "$verdict" = not-required ]; then
+            echo "::notice::The base's classifier proves this change cannot affect the proof"
+            echo "unaffected=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Running the proof (classifier verdict: ${verdict:-unavailable})"
+          fi
+
+      - name: Reuse an identical-tree proof
+        id: reuse
+        if: (github.event_name == 'merge_group' && steps.classify.outputs.unaffected != 'true') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        timeout-minutes: 5
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_BEFORE: ${{ github.event.before }}
+        run: |
+          set -uo pipefail
+          if [ "${GITHUB_EVENT_NAME:-}" = push ]; then
+            selector=(python3 -I scripts/select_reusable_merge_group_proof.py
+              --repository "$GITHUB_REPOSITORY" --sha "$GITHUB_SHA"
+              --before "${EVENT_BEFORE:-}" --summary "${GITHUB_STEP_SUMMARY:-/dev/null}")
+            origin="merge-queue"
+          else
+            selector=(python3 -I scripts/select_reusable_gpu_proof.py
+              --repository "$GITHUB_REPOSITORY" --merge-group-sha "$GITHUB_SHA")
+            origin="pull-request"
+          fi
+          if run_id="$("${selector[@]}")" && [[ "$run_id" =~ ^[1-9][0-9]*$ ]]; then
+            url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$run_id"
+            echo "::notice::Tree $(git rev-parse "$GITHUB_SHA^{tree}") was proven by $url"
+            echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+            if [ "${GITHUB_EVENT_NAME:-}" = push ]; then
+              echo "Reused the $origin proof of this exact commit: $url" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+            fi
+          else
+            echo "::notice::Running the full proof"
+          fi
+
   gpu-macos-arm64:
     name: gpu-macos-arm64
+    needs: decide
     # Only first-party PRs may use the private local fleet. Fork PRs are
     # intentionally skipped while the local selector is enabled.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON == ''
-    # Merge-group runs select their own runner class when
+    # !cancelled(): a failed or skipped decide must never skip this required
+    # context, because a skipped required check reads as passing.
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON == '') }}
+    # With VELLUM_GPU_PREDECIDE `on`, a run decide says will only report a
+    # reused or uncovered proof takes decide's runner; it builds nothing, and
+    # "Agree with the early decision" and "Refuse to build off a Mac" fail it
+    # before any build step should it decide otherwise. Every other run selects exactly what it did
+    # before: merge-group runs select their own runner class when
     # VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON is set, so a merge-queue
     # proof is not handed to whichever PR-head or push job GitHub picks. Push
     # (main, release tags) stays on the generic class: a push re-proof must
     # never queue ahead of a merge-queue entry. Unset, every event selects
     # exactly what it did before.
-    runs-on: ${{ fromJSON((github.event_name == 'merge_group' && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
+    runs-on: ${{ fromJSON((vars.VELLUM_GPU_PREDECIDE == 'on' && needs.decide.result == 'success' && (needs.decide.outputs.unaffected == 'true' || needs.decide.outputs.reused_run != '') && (vars.VELLUM_DECIDE_RUNS_ON_JSON || '["ubuntu-24.04"]')) || (github.event_name == 'merge_group' && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
     # $GITHUB_ENV does not cross jobs; dependent jobs read the validated
     # release identity through these outputs.
     outputs:
@@ -54,6 +159,9 @@ jobs:
       # Set only in a pull-request or queue run whose change the base's
       # classifier proves cannot affect the proof.
       unaffected: ${{ steps.classify.outputs.unaffected }}
+      # Set only in a pull-request run that proves the cheap lane in place of
+      # the full GPU proof, which the merge group then runs on the merged tree.
+      cheap: ${{ steps.depth.outputs.cheap }}
     steps:
       - name: Check out full preserved Vellum history without credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -96,6 +204,7 @@ jobs:
       - name: Classify the change against the base's rules
         id: classify
         if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        timeout-minutes: 5
         shell: bash
         env:
           # A queue entry's first parent is the entry ahead of it in a batch;
@@ -120,6 +229,64 @@ jobs:
             echo "::notice::Running the proof (classifier verdict: ${verdict:-unavailable})"
           fi
 
+      # A pull request proves the cheap lane (release-source, build, `ctest -L
+      # pr-fast`) and the merge group runs the full GPU proof and the
+      # sterile-consumer journey on the merged tree before main moves. The
+      # pull request runs the full proof now instead when the repository
+      # variable VELLUM_PR_GPU_PROOF is `full` (the rollback: restores the
+      # previous behaviour for every pull request), the pull request carries
+      # the `gpu-proof` label, or the base's classifier says a changed path can
+      # only be proved on a GPU. Every doubt runs the full proof: a base
+      # without the flag, an unreadable label list, an unexpected answer.
+      - name: Choose the pull-request proof depth
+        id: depth
+        if: github.event_name == 'pull_request' && steps.classify.outputs.unaffected != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PAYLOAD_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PROOF_MODE: ${{ vars.VELLUM_PR_GPU_PROOF }}
+        run: |
+          set -uo pipefail
+          reason=""
+          if [ "$PROOF_MODE" = full ]; then
+            reason="VELLUM_PR_GPU_PROOF=full restores the pull-request GPU proof"
+          fi
+          if [ -z "$reason" ]; then
+            # Read the labels now, so a re-run after adding `gpu-proof` sees it;
+            # fall back to the labels the event carried.
+            labels="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels" --jq '.[].name' 2>/dev/null)" ||
+              labels="$(printf '%s' "$PAYLOAD_LABELS" | python3 -I -c 'import json,sys; print("\n".join(json.load(sys.stdin)))' 2>/dev/null)" ||
+              labels="gpu-proof"
+            if printf '%s\n' "$labels" | grep -qx 'gpu-proof'; then
+              reason="the pull request asks for the early full proof (gpu-proof label)"
+            fi
+          fi
+          if [ -z "$reason" ]; then
+            base="$GITHUB_SHA^1"
+            classifier="$RUNNER_TEMP/base-early-classify-gpu-proof.py"
+            classes="$RUNNER_TEMP/base-ctest-classes.json"
+            verdict=""
+            # The base's test class manifest: without one the cheap lane has
+            # no pr-fast tests to run, so the full proof runs.
+            git show "$base:scripts/ctest_classes.json" > "$classes" 2>/dev/null || : > "$classes"
+            if git show "$base:scripts/classify_gpu_proof.py" > "$classifier" 2>/dev/null &&
+               git diff --name-only -z --no-renames "$base" "$GITHUB_SHA" > "$RUNNER_TEMP/depth-paths" &&
+               verdict="$(python3 -I "$classifier" --early-proof --classes-file "$classes" --files0-from "$RUNNER_TEMP/depth-paths")"; then
+              :
+            fi
+            if [ "$verdict" != cheap ]; then
+              reason="the base's classifier says: ${verdict:-unavailable}"
+            fi
+          fi
+          if [ -n "$reason" ]; then
+            echo "::notice::Running the full GPU proof now: $reason"
+          else
+            echo "::notice::Running the cheap lane; the merge group runs the full GPU proof"
+            echo "cheap=true" >> "$GITHUB_OUTPUT"
+          fi
+
       # A queue commit whose tree equals the one its pull request's proof
       # already covered would rebuild identical inputs. Report that proof
       # instead: the selector names it only when the earlier run is this
@@ -140,6 +307,7 @@ jobs:
       - name: Reuse an identical-tree proof
         id: reuse
         if: (github.event_name == 'merge_group' && steps.classify.outputs.unaffected != 'true') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        timeout-minutes: 5
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -166,6 +334,41 @@ jobs:
           else
             echo "::notice::Running the full proof"
           fi
+
+      # The second check on decide: this job reaches both decisions itself,
+      # and its own answer is the one that counts, as it always was. When
+      # decide routed the run (said unaffected or reused) and this job would
+      # build, it fails before any step that builds. Any other difference
+      # only warns (the rollout's stop signal): a proof that finished in
+      # between can turn a build into a reuse on the usual Mac, or select a
+      # newer proof of the same tree, and both are valid reports.
+      - name: Agree with the early decision
+        if: needs.decide.result == 'success'
+        shell: bash
+        env:
+          DECIDED_UNAFFECTED: ${{ needs.decide.outputs.unaffected }}
+          DECIDED_REUSED: ${{ needs.decide.outputs.reused_run }}
+          UNAFFECTED: ${{ steps.classify.outputs.unaffected }}
+          REUSED: ${{ steps.reuse.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          if [ "$DECIDED_UNAFFECTED" != "$UNAFFECTED" ] || [ "$DECIDED_REUSED" != "$REUSED" ]; then
+            detail="decide said unaffected='$DECIDED_UNAFFECTED' reused='$DECIDED_REUSED'; this job says unaffected='$UNAFFECTED' reused='$REUSED'"
+            if [ -n "$DECIDED_UNAFFECTED$DECIDED_REUSED" ] && [ -z "$UNAFFECTED$REUSED" ]; then
+              echo "::error::$detail: decide routed a run that this job would build"
+              exit 1
+            fi
+            echo "::warning::$detail (this job keeps its own answer)"
+            exit 0
+          fi
+          echo "decide and this job agree: unaffected='$UNAFFECTED' reused='$REUSED'"
+
+      # Whatever routed this job, it builds only on a Mac.
+      - name: Refuse to build off a Mac
+        if: runner.os != 'macOS' && steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
+        run: |
+          echo "::error::this job would build the proof, but it runs on $RUNNER_OS, not a Mac"
+          exit 1
 
       # The reused build, render and test steps are a pure function of the
       # tree. These checks read state outside it (Pulp's history here, the
@@ -239,6 +442,41 @@ jobs:
           # the GPU build and both reproducible SDK builds.
           printf 'VELLUM_MIRROR_DEPS_DIR=%s\n' "$RUNNER_TEMP/vellum-mirror-deps" >> "$GITHUB_ENV"
 
+      - name: Download and verify the locked V8 provider
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The V8 row of provenance/third-party-lock.json is the only place
+          # the pin is written; configure checks the same digest again.
+          reader="$RUNNER_TEMP/read_v8_lock.py"
+          cat > "$reader" <<'PY'
+          import json, re, sys
+          lock = json.load(open("provenance/third-party-lock.json", encoding="utf-8"))
+          rows = [row for row in lock["dependencies"] if row.get("name") == "V8"]
+          if len(rows) != 1:
+              sys.exit("the dependency lock has no single V8 row")
+          url, sha256 = rows[0]["url"], rows[0]["sha256"]
+          # Fail closed on anything but a v8-builder mac-arm64 release asset.
+          if (not re.fullmatch(r"https://github\.com/danielraffel/v8-builder/releases/download/"
+                               r"v8-m[0-9]+-[0-9.]+-[0-9a-f]+/v8-mac-arm64-[A-Za-z0-9._-]+\.zip", url)
+                  or not re.fullmatch(r"[0-9a-f]{64}", sha256)):
+              sys.exit("the V8 lock row names an unexpected asset")
+          print(url, url.rsplit("/", 1)[1], sha256)
+          PY
+          python3 -I "$reader" > "$RUNNER_TEMP/v8-lock-asset.txt"
+          read -r url asset sha256 < "$RUNNER_TEMP/v8-lock-asset.txt"
+          [[ "$url" =~ ^https://github\.com/danielraffel/v8-builder/releases/download/v8-m[0-9]+-[0-9.]+-[0-9a-f]+/v8-mac-arm64-[A-Za-z0-9._-]+\.zip$ ]]
+          [[ "$sha256" =~ ^[0-9a-f]{64}$ ]]
+          archive="$RUNNER_TEMP/$asset"
+          curl --fail --location --silent --show-error \
+            --retry 12 --retry-max-time 180 --retry-all-errors \
+            --continue-at - \
+            "$url" \
+            --output "$archive"
+          printf '%s  %s\n' "$sha256" "$archive" | shasum -a 256 -c -
+          printf 'VELLUM_V8_ARCHIVE=%s\n' "$archive" >> "$GITHUB_ENV"
+
       - name: Set up the authoring toolchain
         if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
@@ -291,6 +529,53 @@ jobs:
           printf 'VELLUM_PHASE3_TEST_BUNDLE=%s\n' "$bundle" \
             >> "$GITHUB_ENV"
 
+      # The cheap pull-request lane: the same configure as the full proof
+      # (the pinned Skia/Dawn archive, mirror and RmlUi included) without the
+      # GPU adapter, so a compile or link error anywhere in the GPU backend
+      # fails here, then every test the manifest labels pr-fast.
+      - name: Build the cheap pull-request slice
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap == 'true'
+        run: |
+          cmake -S . -B build-cheap \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVELLUM_BUILD_TESTS=ON \
+            -DVELLUM_REQUIRE_GPU=ON \
+            -DVELLUM_AUTHORING_TEST_BUNDLE="$VELLUM_AUTHORING_TEST_BUNDLE" \
+            -DVELLUM_PHASE3_TEST_BUNDLE="$VELLUM_PHASE3_TEST_BUNDLE" \
+            -DVELLUM_SKIA_ARCHIVE="$VELLUM_SKIA_ARCHIVE" \
+            -DVELLUM_ENABLE_MIRROR=ON \
+            -DVELLUM_MIRROR_DEPS_DIR="$VELLUM_MIRROR_DEPS_DIR" \
+            -DVELLUM_ENABLE_RMLUI=ON \
+            -DVELLUM_RMLUI_VELLUM_RENDERER=ON
+          cmake --build build-cheap --parallel "$VELLUM_BUILD_JOBS"
+
+      - name: Run the pr-fast tests
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap == 'true'
+        run: ctest --test-dir build-cheap -L pr-fast --no-tests=error --output-on-failure
+
+      # Re-derive the verdict from scratch: the cheap lane may stand in for the
+      # full proof only on a pull request, for a change the base's classifier
+      # does not route to the early proof. The merge group still proves the
+      # full GPU proof on the merged tree, so this guards only the cost.
+      - name: Prove the cheap lane was allowed
+        if: always() && steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            echo "::error::a $GITHUB_EVENT_NAME run may not take the cheap lane"; exit 1
+          fi
+          guard="$RUNNER_TEMP/guard-early-classify-gpu-proof.py"
+          git show "$GITHUB_SHA^1:scripts/classify_gpu_proof.py" > "$guard"
+          git diff --name-only -z --no-renames "$GITHUB_SHA^1" "$GITHUB_SHA" > "$RUNNER_TEMP/guard-early-paths"
+          git show "$GITHUB_SHA^1:scripts/ctest_classes.json" > "$RUNNER_TEMP/guard-ctest-classes.json" 2>/dev/null ||
+            : > "$RUNNER_TEMP/guard-ctest-classes.json"
+          verdict="$(python3 -I "$guard" --early-proof --classes-file "$RUNNER_TEMP/guard-ctest-classes.json" --files0-from "$RUNNER_TEMP/guard-early-paths")"
+          if [ "$verdict" != cheap ]; then
+            echo "::error::the cheap lane ran, but the base's classifier says: $verdict"
+            exit 1
+          fi
+
       - name: Fetch and verify the pinned Pulp view-audio archive
         shell: bash
         env:
@@ -306,7 +591,7 @@ jobs:
             "$RUNNER_TEMP/pulp-view-audio/libpulp-view-audio.a" >> "$GITHUB_ENV"
 
       - name: Build the release GPU slice
-        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
         run: |
           cmake -S . -B build-gpu \
             -DCMAKE_BUILD_TYPE=Release \
@@ -318,18 +603,21 @@ jobs:
             -DVELLUM_ENABLE_MIRROR=ON \
             -DVELLUM_MIRROR_DEPS_DIR="$VELLUM_MIRROR_DEPS_DIR" \
             -DVELLUM_VIEW_AUDIO_ARCHIVE="$VELLUM_VIEW_AUDIO_ARCHIVE" \
+            -DVELLUM_GPU_RUNTIME_PREFIX="$RUNNER_TEMP/gpu-runtime-prefix" \
+            -DVELLUM_ENABLE_V8=ON \
+            -DVELLUM_V8_ARCHIVE="$VELLUM_V8_ARCHIVE" \
             -DVELLUM_ENABLE_RMLUI=ON \
             -DVELLUM_RMLUI_VELLUM_RENDERER=ON
           cmake --build build-gpu --parallel "$VELLUM_BUILD_JOBS"
 
       - name: Stress parallel text shaping in Release
-        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
         run: |
           VELLUM_TEXT_STRESS_ROUNDS=100 \
             ./build-gpu/vellum-text-shaping-concurrency-test
 
       - name: Stress parallel text shaping with AddressSanitizer
-        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
         shell: bash
         run: |
           set -euo pipefail
@@ -348,7 +636,7 @@ jobs:
             ./build-gpu-asan/vellum-text-shaping-concurrency-test
 
       - name: Install the pinned Emscripten SDK
-        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
         shell: bash
         run: |
           set -euo pipefail
@@ -363,14 +651,14 @@ jobs:
           printf 'VELLUM_EMSDK=%s\n' "$emsdk" >> "$GITHUB_ENV"
 
       - name: Install the pinned Chrome browser
-        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
         id: setup-chrome
         uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd
         with:
           chrome-version: 151.0.7922.47
 
       - name: Export the pinned Chrome browser path
-        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
         shell: bash
         env:
           CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
@@ -380,7 +668,7 @@ jobs:
           printf 'VELLUM_CHROME_PATH=%s\n' "$CHROME_PATH" >> "$GITHUB_ENV"
 
       - name: Record exact Chrome browser provenance
-        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
         shell: bash
         env:
           CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
@@ -397,7 +685,7 @@ jobs:
           printf 'VELLUM_REQUIRE_CHROME_PROVENANCE=1\n' >> "$GITHUB_ENV"
 
       - name: Build the source-matched browser payload
-        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
         shell: bash
         run: |
           set -euo pipefail
@@ -414,14 +702,43 @@ jobs:
             > "$RUNNER_TEMP/phase3-browser-evidence.json"
 
       - name: Verify renderer provenance and byte identity
-        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
         run: |
           python3 -I tools/provenance/verify_renderer_dependency.py \
             --archive "$VELLUM_SKIA_ARCHIVE" \
             --require-macho
 
+      - name: Prove and install the gpu-runtime package for mirror consumers
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The installed native-editor consumer uses the separately published
+          # runtime package, so prepare that exact prefix before ctest runs.
+          for build in first second; do
+            python3 scripts/build_gpu_runtime_artifact.py \
+              --renderer-archive "$VELLUM_SKIA_ARCHIVE" \
+              --source-commit "$GITHUB_SHA" \
+              --output-dir "$RUNNER_TEMP/gpu-runtime-$build" \
+              --json > "$RUNNER_TEMP/gpu-runtime-$build.json"
+          done
+          archive="vellum-gpu-runtime-$VELLUM_RELEASE_VERSION-darwin-arm64.tar.gz"
+          cmp "$RUNNER_TEMP/gpu-runtime-first/$archive" "$RUNNER_TEMP/gpu-runtime-second/$archive"
+          cp "$RUNNER_TEMP/gpu-runtime-first/$archive" "$RUNNER_TEMP/$archive"
+          runtime_prefix="$RUNNER_TEMP/gpu-runtime-prefix"
+          mkdir -p "$runtime_prefix"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$runtime_prefix"
+          test -f "$runtime_prefix/lib/cmake/VellumGpuRuntime/VellumGpuRuntimeConfig.cmake"
+          python3 scripts/verify_gpu_runtime_artifact.py \
+            --archive "$RUNNER_TEMP/$archive" \
+            --repo "$GITHUB_WORKSPACE" \
+            --renderer-archive "$VELLUM_SKIA_ARCHIVE" \
+            --consumer --require-adapter \
+            --output "$RUNNER_TEMP/gpu-runtime-verification.json"
+          (cd "$RUNNER_TEMP" && shasum -a 256 "$archive" > vellum-gpu-runtime.sha256)
+
       - name: Run native, capture, and sterile-consumer tests
-        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
         run: |
           VELLUM_MIRROR_LIVE_GPU=1 \
             ctest --test-dir build-gpu --output-on-failure
@@ -433,7 +750,7 @@ jobs:
             > "$RUNNER_TEMP/vellum-gpu-proof.sha256"
 
       - name: Execute every declared parity proof
-        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == '' && hashFiles('provenance/authority/expansions/full-design-import-render-v1/parity-completion-1.json') != ''
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == '' && hashFiles('provenance/authority/expansions/full-design-import-render-v1/parity-completion-1.json') != ''
         run: |
           python3 scripts/run_parity_proofs.py \
             --completion provenance/authority/expansions/full-design-import-render-v1/parity-completion-1.json \
@@ -441,7 +758,7 @@ jobs:
             --output "$RUNNER_TEMP/vellum-parity-proof-execution.json"
 
       - name: Upload parity proof execution receipt
-        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == '' && hashFiles('provenance/authority/expansions/full-design-import-render-v1/parity-completion-1.json') != ''
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == '' && hashFiles('provenance/authority/expansions/full-design-import-render-v1/parity-completion-1.json') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: vellum-parity-proof-execution
@@ -450,7 +767,7 @@ jobs:
           retention-days: 14
 
       - name: Prove the installed SDK artifact is reproducible
-        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
         shell: bash
         run: |
           set -euo pipefail
@@ -576,35 +893,50 @@ jobs:
             --output "$RUNNER_TEMP/vellum-sterile-acceptance.tar.gz" \
             --json > "$RUNNER_TEMP/sterile-acceptance-bundle.json"
 
-      - name: Prove the gpu-runtime archive is reproducible and consumable
-        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
+      - name: Prove the RmlUi SDK archive is reproducible and consumable
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
         shell: bash
         run: |
           set -euo pipefail
-          # vellum-gpu-runtime-<version>-darwin-arm64.tar.gz is published beside
-          # the SDK. Two builds of this commit must match byte for byte, and an
-          # audio-only consumer must find it by exact version and link Device
-          # against the Dawn build it ships, with nothing else supplied.
+          # vellum-rmlui-sdk-<version>-darwin-arm64.tar.gz, the optional
+          # VellumRmlUiNative package, is published beside the SDK. Two builds
+          # of this commit must match byte for byte, and a consumer must build
+          # and run Native+Metal and Core against it and the installed SDK.
           for build in first second; do
-            python3 scripts/build_gpu_runtime_artifact.py \
-              --renderer-archive "$VELLUM_SKIA_ARCHIVE" \
+            python3 scripts/build_rmlui_sdk_artifact.py \
               --source-commit "$GITHUB_SHA" \
-              --output-dir "$RUNNER_TEMP/gpu-runtime-$build" \
-              --json > "$RUNNER_TEMP/gpu-runtime-$build.json"
+              --jobs "$VELLUM_BUILD_JOBS" \
+              --output-dir "$RUNNER_TEMP/rmlui-sdk-$build" \
+              --json > "$RUNNER_TEMP/rmlui-sdk-$build.json"
           done
-          archive="vellum-gpu-runtime-$VELLUM_RELEASE_VERSION-darwin-arm64.tar.gz"
-          cmp "$RUNNER_TEMP/gpu-runtime-first/$archive" "$RUNNER_TEMP/gpu-runtime-second/$archive"
-          cp "$RUNNER_TEMP/gpu-runtime-first/$archive" "$RUNNER_TEMP/$archive"
-          python3 scripts/verify_gpu_runtime_artifact.py \
+          archive="vellum-rmlui-sdk-$VELLUM_RELEASE_VERSION-darwin-arm64.tar.gz"
+          cmp "$RUNNER_TEMP/rmlui-sdk-first/$archive" "$RUNNER_TEMP/rmlui-sdk-second/$archive"
+          cp "$RUNNER_TEMP/rmlui-sdk-first/$archive" "$RUNNER_TEMP/$archive"
+          python3 scripts/verify_rmlui_sdk_artifact.py \
             --archive "$RUNNER_TEMP/$archive" \
-            --repo "$GITHUB_WORKSPACE" \
-            --renderer-archive "$VELLUM_SKIA_ARCHIVE" \
-            --consumer --require-adapter \
-            --output "$RUNNER_TEMP/gpu-runtime-verification.json"
-          (cd "$RUNNER_TEMP" && shasum -a 256 "$archive" > vellum-gpu-runtime.sha256)
+            --source-commit "$GITHUB_SHA" --version "$VELLUM_RELEASE_VERSION" \
+            --output "$RUNNER_TEMP/rmlui-sdk-verification.json"
+          (cd "$RUNNER_TEMP" && shasum -a 256 "$archive" > vellum-rmlui-sdk.sha256)
+          sdk="$RUNNER_TEMP/rmlui-consumer-sdk"
+          rmlui="$RUNNER_TEMP/rmlui-consumer-rmlui-sdk"
+          sh "$RUNNER_TEMP/install.sh" \
+            --archive "$RUNNER_TEMP/$VELLUM_RELEASE_ARCHIVE" \
+            --checksums "$RUNNER_TEMP/SHA256SUMS" \
+            --install-dir "$sdk"
+          mkdir -p "$rmlui"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$rmlui"
+          build="$RUNNER_TEMP/rmlui-consumer-build"
+          cmake -S rmlui/tests/native_package_consumer -B "$build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            "-DCMAKE_PREFIX_PATH=$rmlui;$sdk/lib/vellum/sdk" \
+            -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE \
+            -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE
+          cmake --build "$build" --parallel "$VELLUM_BUILD_JOBS"
+          "$build/vellum-rmlui-native-metal-consumer"
+          "$build/vellum-rmlui-core-consumer"
 
       - name: Verify the binary deployment boundary
-        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
         shell: bash
         run: |
           set -euo pipefail
@@ -616,7 +948,7 @@ jobs:
           /usr/bin/grep -Eq 'minos 13\.3' "$RUNNER_TEMP/vellum-gpu-app-load-commands.txt"
 
       - name: Smoke every public template through the installed SDK
-        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
         shell: bash
         run: |
           set -euo pipefail
@@ -631,7 +963,7 @@ jobs:
             --json > "$RUNNER_TEMP/templates-smoke.stdout.json"
 
       - name: Prove installed HTML import through DesignIR and GPU capture
-        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
         shell: bash
         env:
           HTML_IMPORT_REPEATS: ${{ github.event_name == 'workflow_dispatch' && inputs.html_import_repeats || '0' }}
@@ -748,7 +1080,7 @@ jobs:
       # The receipt a later merge-queue run compares its own tree against.
       # Written only after every proof step above has passed.
       - name: Record the tree this pull-request proof covered
-        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == '' && github.event_name == 'pull_request'
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == '' && github.event_name == 'pull_request'
         shell: bash
         run: |
           set -euo pipefail
@@ -777,7 +1109,7 @@ jobs:
           PY
 
       - name: Upload the proven-tree receipt
-        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == '' && github.event_name == 'pull_request'
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == '' && github.event_name == 'pull_request'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: vellum-gpu-proof-tree
@@ -786,7 +1118,7 @@ jobs:
           retention-days: 14
 
       - name: Record private-release trust controls
-        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == '' && startsWith(github.ref, 'refs/tags/') && !startsWith(github.ref, 'refs/tags/authority/')
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == '' && startsWith(github.ref, 'refs/tags/') && !startsWith(github.ref, 'refs/tags/authority/')
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -841,7 +1173,7 @@ jobs:
             "$VELLUM_TAG_OBJECT_SHA" >> "$GITHUB_ENV"
 
       - name: Gate every release mutation on exact provenance readiness
-        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == '' && startsWith(github.ref, 'refs/tags/') && !startsWith(github.ref, 'refs/tags/authority/')
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == '' && startsWith(github.ref, 'refs/tags/') && !startsWith(github.ref, 'refs/tags/authority/')
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -993,7 +1325,7 @@ jobs:
           retention-days: 14
 
       - name: Upload retained GPU evidence
-        if: always() && steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
+        if: always() && steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: vellum-gpu-macos-arm64-evidence
@@ -1025,6 +1357,11 @@ jobs:
             ${{ runner.temp }}/gpu-runtime-first.json
             ${{ runner.temp }}/gpu-runtime-second.json
             ${{ runner.temp }}/gpu-runtime-verification.json
+            ${{ runner.temp }}/vellum-rmlui-sdk-${{ env.VELLUM_RELEASE_VERSION }}-darwin-arm64.tar.gz
+            ${{ runner.temp }}/vellum-rmlui-sdk.sha256
+            ${{ runner.temp }}/rmlui-sdk-first.json
+            ${{ runner.temp }}/rmlui-sdk-second.json
+            ${{ runner.temp }}/rmlui-sdk-verification.json
             ${{ runner.temp }}/templates-smoke.json
             ${{ runner.temp }}/templates-smoke.stdout.json
             ${{ runner.temp }}/vellum-sterile-acceptance.tar.gz
@@ -1041,19 +1378,29 @@ jobs:
   sterile-consumer:
     name: sterile-consumer
     needs: gpu-macos-arm64
-    # Keep the dependent job on the same first-party-only policy.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON == ''
+    # Keep the dependent job on the same first-party-only policy. A skip
+    # carries down the whole needs chain unless a job names its own status
+    # check, so with decide skipped (its variable unset, tags, dispatches)
+    # the implicit success() would skip this required context, which reads as
+    # passing. Run exactly when the proof job succeeded, as before.
+    if: ${{ !cancelled() && needs.gpu-macos-arm64.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON == '') }}
     # When gpu-macos-arm64 reported a reused proof or a change the proof does
     # not cover, every step below but a notice is skipped, so the job runs on
     # a hosted runner rather than waiting for a scarce Mac to print it. It
-    # still runs and reports exactly as before. Otherwise merge-group runs
-    # select their own runner class when
+    # still runs and reports exactly as before. Otherwise, while the local
+    # selector is set, the journey takes its own fleet runner class when
+    # VELLUM_LOCAL_MACOS_STERILE_RUNS_ON_JSON is set, for every event: a VM
+    # booted for it can then only take a journey, never another run's
+    # 30-minute proof, and TartCI's Vellum lanes serve that class first. The
+    # journey runs about 1.4 min. gpu-macos-arm64 keeps its own selection, so
+    # a push re-proof still never queues ahead of a merge-queue entry; a push
+    # journey can queue ahead of a merge-group journey in the shared class.
+    # Without it, merge-group runs select their own runner class when
     # VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON is set, so a merge-queue
-    # proof is not handed to whichever PR-head or push job GitHub picks. Push
-    # (main, release tags) stays on the generic class: a push re-proof must
-    # never queue ahead of a merge-queue entry. Unset, every event selects
-    # exactly what it did before.
-    runs-on: ${{ fromJSON(((needs.gpu-macos-arm64.outputs.reused_run != '' || needs.gpu-macos-arm64.outputs.unaffected == 'true') && '["ubuntu-24.04"]') || (github.event_name == 'merge_group' && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
+    # proof is not handed to whichever PR-head or push job GitHub picks, and
+    # push (main, release tags) stays on the generic class. Unset, every event
+    # selects exactly what it did before.
+    runs-on: ${{ fromJSON(((needs.gpu-macos-arm64.outputs.reused_run != '' || needs.gpu-macos-arm64.outputs.unaffected == 'true' || needs.gpu-macos-arm64.outputs.cheap == 'true') && '["ubuntu-24.04"]') || (vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON != '' && vars.VELLUM_LOCAL_MACOS_STERILE_RUNS_ON_JSON) || (github.event_name == 'merge_group' && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
     env:
       VELLUM_RELEASE_ARCHIVE: ${{ needs.gpu-macos-arm64.outputs.release_archive }}
     steps:
@@ -1071,18 +1418,22 @@ jobs:
         if: needs.gpu-macos-arm64.outputs.unaffected == 'true'
         run: echo "::notice::gpu-macos-arm64 proved this change touches only observatory evidence"
 
+      - name: Report the cheap pull-request lane
+        if: needs.gpu-macos-arm64.outputs.unaffected != 'true' && needs.gpu-macos-arm64.outputs.cheap == 'true'
+        run: echo "::notice::gpu-macos-arm64 ran the cheap pull-request lane; the merge group runs the sterile-consumer journey on the merged tree"
+
       # The sterile journey drives a browser fixture, and job environments do
       # not inherit. Provision the same pinned browser the proof job uses, so
       # this lane never depends on one happening to exist on the runner.
       - name: Install the pinned Chrome browser
-        if: needs.gpu-macos-arm64.outputs.unaffected != 'true' && needs.gpu-macos-arm64.outputs.reused_run == ''
+        if: needs.gpu-macos-arm64.outputs.unaffected != 'true' && needs.gpu-macos-arm64.outputs.cheap != 'true' && needs.gpu-macos-arm64.outputs.reused_run == ''
         id: setup-chrome
         uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd
         with:
           chrome-version: 151.0.7922.47
 
       - name: Export the pinned Chrome browser path
-        if: needs.gpu-macos-arm64.outputs.unaffected != 'true' && needs.gpu-macos-arm64.outputs.reused_run == ''
+        if: needs.gpu-macos-arm64.outputs.unaffected != 'true' && needs.gpu-macos-arm64.outputs.cheap != 'true' && needs.gpu-macos-arm64.outputs.reused_run == ''
         shell: bash
         env:
           CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
@@ -1092,14 +1443,14 @@ jobs:
           printf 'VELLUM_CHROME_PATH=%s\n' "$CHROME_PATH" >> "$GITHUB_ENV"
 
       - name: Download only the release-shaped inputs
-        if: needs.gpu-macos-arm64.outputs.unaffected != 'true' && needs.gpu-macos-arm64.outputs.reused_run == ''
+        if: needs.gpu-macos-arm64.outputs.unaffected != 'true' && needs.gpu-macos-arm64.outputs.cheap != 'true' && needs.gpu-macos-arm64.outputs.reused_run == ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: vellum-gpu-macos-arm64-evidence
           path: ${{ runner.temp }}/vellum-input
 
       - name: Record exact Chrome browser provenance
-        if: needs.gpu-macos-arm64.outputs.unaffected != 'true' && needs.gpu-macos-arm64.outputs.reused_run == ''
+        if: needs.gpu-macos-arm64.outputs.unaffected != 'true' && needs.gpu-macos-arm64.outputs.cheap != 'true' && needs.gpu-macos-arm64.outputs.reused_run == ''
         shell: bash
         env:
           CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
@@ -1114,7 +1465,7 @@ jobs:
           printf 'VELLUM_REQUIRE_CHROME_PROVENANCE=1\n' >> "$GITHUB_ENV"
 
       - name: Verify and extract the source-free acceptance bundle
-        if: needs.gpu-macos-arm64.outputs.unaffected != 'true' && needs.gpu-macos-arm64.outputs.reused_run == ''
+        if: needs.gpu-macos-arm64.outputs.unaffected != 'true' && needs.gpu-macos-arm64.outputs.cheap != 'true' && needs.gpu-macos-arm64.outputs.reused_run == ''
         shell: bash
         run: |
           set -euo pipefail
@@ -1140,7 +1491,7 @@ jobs:
             "$RUNNER_TEMP/sterile/vellum-sterile-acceptance" >> "$GITHUB_ENV"
 
       - name: Demonstrate the checkout-contamination negative control
-        if: needs.gpu-macos-arm64.outputs.unaffected != 'true' && needs.gpu-macos-arm64.outputs.reused_run == ''
+        if: needs.gpu-macos-arm64.outputs.unaffected != 'true' && needs.gpu-macos-arm64.outputs.cheap != 'true' && needs.gpu-macos-arm64.outputs.reused_run == ''
         shell: bash
         run: |
           set -euo pipefail
@@ -1166,7 +1517,7 @@ jobs:
           rm -rf "$RUNNER_TEMP/negative-control"
 
       - name: Run the complete installed journey without a framework checkout
-        if: needs.gpu-macos-arm64.outputs.unaffected != 'true' && needs.gpu-macos-arm64.outputs.reused_run == ''
+        if: needs.gpu-macos-arm64.outputs.unaffected != 'true' && needs.gpu-macos-arm64.outputs.cheap != 'true' && needs.gpu-macos-arm64.outputs.reused_run == ''
         shell: bash
         run: |
           set -euo pipefail
@@ -1183,7 +1534,7 @@ jobs:
             --json > "$RUNNER_TEMP/sdk-installed-validation.stdout.json"
 
       - name: Retain the source-free journey evidence
-        if: always() && needs.gpu-macos-arm64.outputs.unaffected != 'true' && needs.gpu-macos-arm64.outputs.reused_run == ''
+        if: always() && needs.gpu-macos-arm64.outputs.unaffected != 'true' && needs.gpu-macos-arm64.outputs.cheap != 'true' && needs.gpu-macos-arm64.outputs.reused_run == ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: vellum-sterile-consumer-evidence

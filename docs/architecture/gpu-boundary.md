@@ -22,9 +22,11 @@ The public slice consists of:
   application builds, plus a headers-only `Vellum::DawnHeaders` target for an
   embedding host's authenticated bootstrap and compute code.
 
-The scene carries a single integer schema version, `kSceneVersion`, now 11.
-Versions 7 and 9 are reserved and add no fields in this build.
-Version 10 adds node effects; version 11 adds animation tracks.
+The scene carries a single integer schema version, `kSceneVersion`, now 13.
+Version 9 is reserved and adds no fields in this build.
+Version 10 adds node effects; version 11 adds animation tracks; version 12
+adds plot nodes, whose samples arrive at run time; version 13 adds text layout
+and draws missing glyphs as boxes (see Text layout and missing glyphs).
 A change that can alter rendered output bumps it: a new node kind, a new field
 that changes how a scene is drawn, or a change in meaning. A change that only
 adds metadata keeps it. Consumers accept versions from
@@ -38,9 +40,47 @@ diagnostic and reports authored style or content it drops as warnings on
 severity and disposition words but identify content by node ID, not by
 DesignIR document path. Versions are claimed in order: version 4: image nodes;
 version 5: clip, mask and isolation on groups; version 6: blend modes and
-DesignIR compositing fields; version 7: token table (reserved); version 8:
-gradient vocabulary; version 9: vector assets (reserved); version 10: effects
-and materials; version 11: animation tracks.
+DesignIR compositing fields; version 7: interned token receipts; version 8:
+gradient vocabulary; version 9: vector assets (no fields yet); version 10:
+effects and materials; version 11: animation tracks; version 12: plot nodes;
+version 13: text layout.
+
+`Scene::tokens` interns each design token that resolved to a colour once, as a
+receipt of its path, the layer that produced the value (`primitive`,
+`semantic` or `theme`) and the resolved colour. A node names its receipt by
+index in `SceneNode::fill_token`, and its `fill` always holds the receipt's
+value, so a renderer draws it without reading the table. The other colours of
+a node, its text runs, box shadows, gradient stops and a path's stroke, are
+named the same way through `SceneNode::color_tokens`; a mesh's packed vertex
+colours are not. `Design` in
+`@vellum/ui` emits a `tokenRefs` entry beside the resolved style colour, the
+runtime interns the entries into a `tokens` array on the root of the rendered
+tree, and the materializer rebuilds the table and the references. The slot
+names are `backgroundColor`, `color` (a text node or an attributed text run),
+`boxShadow`, `backgroundLinearGradient.stops.<n>`, and on a path `fill`,
+`fill.stops.<n>` and `stroke`. A name that is not a slot of the element, or
+that names a colour the element lacks, is refused with
+`VELLUM_INVALID_TOKEN_REFERENCE`; a colour the node type does not draw is
+reported as dropped. A short hex colour (`#fff`, `#ffff`) that `Design`
+resolves is the same colour as its long form and its receipt carries the long
+form; a gradient stop, box shadow or Path colour written directly in JSX takes
+only the six- and eight-digit forms. A theme
+switch calls `apply_token_values`, which re-resolves the table and rewrites
+only the fills, text runs, shadows, stops and strokes whose receipt changed, so
+the scene diff damages those nodes and no others. A text run without a slot of its own that
+carries its node's old colour follows it.
+A scene before version 7 that carries a table or a reference is refused with a
+version diagnostic. Version gates inspect fields and tables, not only kinds:
+path geometry on any node needs version 3, and an image reference on any node
+or a non-empty `Scene::images` needs version 4. A rendered-tree envelope may
+name its `sceneVersion`; without one the tree is built at the current
+version, and with one it is built at that version and refused when it carries
+a field the version lacks. At any version, a repeated path, a non-finite value, a
+reference past the end of the table, a slot the node lacks, or a colour that
+differs from its receipt, or a slot whose unused index or stop is not zero
+is refused with `VELLUM_INVALID_TOKEN_REFERENCE` by `accept_scene`,
+`make_paint_commands` and `scene_loss_diagnostics` alike, so a table edited
+without its nodes is never drawn stale.
 
 Nodes carry an optional affine transform about their origin, a group opacity,
 and per-corner radii beside the uniform `corner_radius` shorthand. All three
@@ -67,9 +107,12 @@ The authoring `transform` key takes CSS transform functions, matched without
 regard to case, with lengths in px or percent of the box. A list that does not
 parse is dropped with a `VELLUM_STYLE_DROPPED` warning and the node is drawn
 untransformed; only a list that composes to a non-finite matrix fails the
-tree. Interaction and accessibility boxes are the axis-aligned box of each
-node as drawn, so a rotated control hit-tests on that box, and a node whose
-transform has a zero determinant gets no interaction or text-input box.
+tree. Accessibility and text-input boxes are the axis-aligned box of each
+node as drawn, and a node whose transform has a zero determinant gets no
+interaction, accessibility or text-input box. Pointer interactions are not
+tested against those boxes: `Interaction::bounds` remains the node's
+axis-aligned box for hosts that have not moved to the picker, and a host that
+has moved calls `vellum::graphics::pick` (see Pointer input below).
 
 A `path` node carries a `PathGeometry`: a flat list of move, line,
 quadratic, cubic, SVG elliptical arc and close commands with their values,
@@ -203,8 +246,50 @@ makes a mask, and `isolation: isolate` isolation. A mask still takes its place
 in its parent's layout, so a mask meant to cover its siblings needs explicit
 `x` and `y` or a parent that does not stack it after them. A root `maskMode` is
 dropped with a warning, any other invalid value fails the tree, and invalid
-clip path data fails it with `VELLUM_INVALID_PATH`. Hit testing and
-accessibility boxes ignore clips and masks.
+clip path data fails it with `VELLUM_INVALID_PATH`. The scene picker respects
+clips and masks; accessibility boxes still ignore them.
+
+## Text layout and missing glyphs
+
+A text node without `SceneNode::text_layout` draws as every scene before
+version 13 drew it: one unwrapped, left-aligned line from the top-left corner
+of its box, laid out at an unbounded width. A `TextLayout` (version 13) wraps
+the paragraph at the box width and sets its alignment (`start`, `center`,
+`end` or `justify`, on a left-to-right base direction), its line height as a
+multiple of each line's largest font size with the extra space split above and
+below the glyphs (zero keeps the fonts' spacing), a line limit and an ellipsis
+(U+2026) that ends the last line when the limit cuts the text. Lines past the
+box's height are drawn below it, unclipped. `accept_scene` refuses a layout on
+a node that is not text, an unknown alignment, a negative or non-finite line
+height and an ellipsis without a line limit with `VELLUM_INVALID_TEXT_LAYOUT`,
+and a layout in a scene before version 13 with `VELLUM_SCENE_VERSION_MISMATCH`.
+`SkiaDawnSurface::measure_text` takes `TextMeasureOptions` to measure a
+laid-out paragraph the way it is drawn; the overload without options keeps the
+version 12 measurement. The web canvas shell draws laid-out text on one line
+and reports `VELLUM_WEB_TEXT_LAYOUT_NOT_DRAWN`.
+
+Glyphs come only from the packaged faces. Each run tries its own family, then
+Noto Sans Arabic, Noto Sans JP and Inter, character by character; host font
+fallback stays disabled, because a host font database differs between
+machines and OS releases and would make captures and goldens depend on the
+host. No broader packaged face is available, so a character none of those
+faces covers has no glyph. From version 13 it draws as the face's
+missing-glyph (.notdef) box, so the loss is visible and the text keeps its
+characters; scenes before version 13 keep drawing it as `?`, so their pixels
+do not change. Invalid UTF-8 draws as `?` at every version. Either way the
+surface's `diagnostics()` carries one `VELLUM_TEXT_GLYPH_MISSING` warning per
+text node naming each uncovered code point once, in ascending order; from
+version 13 a default-ignorable code point, which the shaper draws as nothing,
+is not reported. Each text's result is remembered, so an unchanged text is not
+scanned again on the next frame. The
+paragraph cache keys on the layout, the width it wraps at and this policy, so
+the same runs at two versions or widths never share a paragraph, and every
+paragraph is still built and laid out under the one SkParagraph lock.
+The shaping and font-fallback setup itself lives in
+`graphics/src/text_paragraph.hpp` and takes no scene types: a request of runs,
+styles, a wrap width and a missing-glyph policy returns a laid-out paragraph.
+The scene glue (style mapping, versioning, damage and diagnostics) stays in the
+renderer, so the setup can later move to a shared Skia-level library.
 
 ## Blend modes
 
@@ -266,13 +351,14 @@ on any node type and fails the tree for an unknown name.
 
 DesignIR schema version 2 adds the node `compositing` object (opacity, blend
 mode, isolation, a mask mode and a mask reference to a sibling mask) with the
-same names. Readers accept DesignIR versions 1 through 4. Version 3 adds
-material references; version 4 adds node animation tracks. Normalization
-writes the lowest version that covers the
-document: 4 when a node has tracks, otherwise 3 when a node has a material
-reference, otherwise 2 when a node uses compositing, otherwise 1. Compositing
-requires version 2 or later, materials require version 3, and tracks require
-version 4; the validator and published JSON schema enforce all three gates. A mask
+same names. Readers accept DesignIR versions 1 through 5. Version 3 adds
+material references; version 4 adds node animation tracks; version 5 adds
+plot bindings. Normalization writes the lowest version that covers the
+document: 5 when a node has a plot binding, otherwise 4 when a node has tracks,
+otherwise 3 when a node has a material reference, otherwise 2 when a node uses compositing, otherwise 1. Compositing
+requires version 2 or later, materials require version 3, tracks require
+version 4 and plot bindings require version 5; the validator and published JSON
+schema enforce all four gates. A mask
 reference must name a sibling that is a mask. `materializeDesign` lowers the object into the retained
 `opacity`, `mixBlendMode`, `isolation` and `maskMode` styles. Because the
 renderer applies a mask to every sibling, it accepts a mask reference only when
@@ -298,13 +384,23 @@ threshold fall back to a full repaint. Hosts pass `invalidate` reasons and node 
 rectangle counts, the commands re-recorded and why a frame repainted fully.
 What is cached and when it is discarded is renderer policy: the scene schema
 carries no cache hints. Partial redraw is enabled only for scene versions the
-damage model understands, up to `kDamageModelSceneVersion` (11), which covers
+damage model understands, up to `kDamageModelSceneVersion` (13), which covers
 transforms, group opacity, per-corner radii, paths, images, clips, masks and
-isolation on groups, blend modes, gradient vocabulary and animation tracks.
-A version the renderer accepts but the damage model
+isolation on groups, blend modes, token references, gradient vocabulary,
+animation tracks, plot nodes, where a plot whose samples alone change
+damages only the spans of those samples, and text layout. A laid-out
+paragraph's damage spans the frame's width from its box grown by a font size,
+because alignment can move an unbreakable cluster past either edge, and reaches
+the frame's bottom unless a line limit bounds it by that many lines of its line
+height (or two and a half font sizes per line at the fonts' own spacing, which
+every packaged face fits), each rounded up to a whole pixel and one more for
+the shaper's per-line rounding, plus two font sizes of overhang. The renderer's layer
+extents measure the laid-out lines exactly. A version the renderer accepts but the damage model
 does not yet understand repaints fully with reason `damage_model_version`. A version outside
 [`kMinSupportedSceneVersion`, `kSceneVersion`] is refused before anything is
-drawn.
+drawn, and partial redraw likewise serves no version below
+`kMinSupportedSceneVersion`. The layer cache compares mesh and texture
+content, not pointers, so texels rewritten in place drop a cached image.
 
 Animation tracks on a node drive its opacity, the channels of an animated
 transform (translate, rotate, scale), its fill, a path's stroke colour, and the
@@ -319,6 +415,34 @@ before its first keyframe and its last value after its last, and a spring is
 exactly at its target from its settle time on, so a track at rest damages
 nothing. A version 10 or older scene with a track is refused with
 `VELLUM_SCENE_VERSION_MISMATCH`.
+
+`FrameDriver` (`vellum/graphics/frame_driver.hpp`) is the host loop that runs
+tracks and plots. It is the scene client of `foundation::FramePump`
+(`vellum/foundation/frame_pump.hpp`), which owns what is not specific to a
+scene: the clock, resume handling, frame-needed gating, the thread-safe wake,
+bounded render retries and the reduced-motion setting. Any content that can be
+advanced and then drawn can drive the same pump with its own advance and render
+functions. The host calls `frame` from its vsync source with that
+source's own monotonic presentation time, on the thread that owns the scene
+and the surface. The driver advances `Scene::clock` by the measured time since
+the previous frame, starting from zero at the first frame, so keyframe times
+are seconds since the driver's first frame. A gap over 250 ms, or the first
+frame after `suspend`, advances one nominal frame so animation never catches up
+on idle time; a repeated or backwards timestamp advances nothing; and with
+reduced motion the clock jumps to the end of the last track. It then samples
+the feed into the scene's plots once and calls the host's render function,
+which for the macOS app host is `SkiaDawnSurface::render_incremental`, only
+when the frame can differ from the last one drawn: the first frame, a
+requested frame, a clock that moved while a track still had keyframes ahead,
+or a plot whose samples changed. `FrameReport::needs_next_frame` turns false
+once every track has settled and a feed has been silent for
+`stale_after_ticks` ticks, and the host then stops its display link, so an
+idle app draws no frames. `request_frame`, callable from any thread, is the way
+back. The driver reads no clock of its own, so an injected clock gives the same
+frames. The macOS app host drives it from a `CADisplayLink` (a main-thread
+timer before macOS 14), pauses the link when no frame is needed, and follows
+the system reduce-motion setting. It attaches no feed, so its plots stay empty
+until a host supplies one with `set_feed`.
 
 A path damages its control box outset by its stroke reach: half the width,
 times the miter limit for miter joins or sqrt(2) for square and round caps,
@@ -405,7 +529,8 @@ caches only faded groups, so its partial frames stay byte-identical to full
 repaints whatever each surface has cached.
 The surface keeps three cross-frame resource caches under
 `RenderCacheBudgets`: laid-out text paragraphs keyed by every run's text and
-style (the colour with any folded opacity included) and the font directory;
+style (the colour with any folded opacity included), the font directory, the
+text layout with the width it wraps at, and the missing-glyph policy;
 linear-gradient shaders keyed by their exact end points, colours, positions and
 tile mode; and GPU textures uploaded from mesh textures and image assets,
 keyed by size and the SHA-256 of the texels rather than by address, so mesh
@@ -460,3 +585,49 @@ builds use the pinned artifact in
 `VELLUM_SKIA_DIR` remains available for local development, but it is accepted
 only when its Skia and Dawn libraries match the locked digests; an arbitrary
 directory is not release evidence.
+
+## Pointer input
+
+`graphics/hit_test.hpp` holds `pick(scene, point, options)`, which returns the
+id of the node under a point in frame coordinates. It needs no GPU. It walks the
+scene front to back in paint order, inverts each node's composed transform to
+map the point into the node, and tests what the node draws:
+
+- Path nodes and vector nodes by their fill geometry under the fill rule, and by
+  their stroke outline (half the stroke width plus the tolerance, with butt,
+  square and round caps and round and bevel joins; miter tips are treated as
+  bevels and dashes are ignored). Curves and arcs are flattened to within a
+  twentieth of a frame pixel, and the tolerance is applied in frame pixels
+  whatever the transform.
+- Mesh nodes by their triangles; every other kind by its box with its corner
+  radii. Only nodes that paint something are hittable (a group or custom node
+  draws nothing), plus the interactive nodes the caller names.
+- A node with opacity zero, a non-finite or zero-determinant transform, or an
+  outside-the-clip point is a miss, and so is its whole subtree. Clips (rectangle
+  with radii, or path) apply to a node's subtree and, with `clips_own_paint`, to
+  its own paint. A mask is never hit itself; its siblings are hit only where the
+  point lies on a painted shape of every mask node. The mask value (alpha or
+  luminance) is not sampled.
+- Tracks are evaluated at `Scene::clock` first.
+
+With `PickOptions::interactive` set, the topmost hittable node decides: the
+nearest interactive node from it up to the root is returned, and nothing is
+returned when none of them is interactive, because an unrelated painted node
+covers whatever lies beneath. Without it the topmost painted node is returned.
+
+`graphics/pointer_router.hpp` holds `PointerRouter`, a host-independent state
+machine. A host feeds it down, move, up, wheel, cancel and leave with modifier
+flags, and it returns typed events: press, release, click, drag (with delta),
+cancel, hover enter, hover leave and wheel. A press on an interactive node
+captures the pointer, so drags and the release go to that node outside its
+bounds; a click needs the release over the same node. The router asks the host
+for targets through a callback, so each event kind can use its own interactive
+set.
+
+The macOS app host uses both. It maps events to authored interaction names
+`press`, `release`, `click`, `drag`, `cancel`, `hoverEnter`, `hoverLeave` and
+`wheel`, picking among the nodes that have an interaction of the matching kind.
+A `press` action still receives exactly `{"pointerType":"mouse"}`; the other
+events add the pointer position, start position, delta, whether the pointer is
+over the node, and the modifier flags. The Swift and web hosts still scan the
+axis-aligned `Interaction::bounds`.

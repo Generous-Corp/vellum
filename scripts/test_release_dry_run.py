@@ -205,7 +205,11 @@ class PublishStep(unittest.TestCase):
                  # The gpu-runtime archive ships beside the SDK (sdk-release.yml).
                  "gpu/vellum-gpu-runtime-0.1.10-darwin-arm64.tar.gz": b"gpu-runtime",
                  "trusted/vellum-gpu-runtime.sha256": b"sums\n",
-                 "trusted/trusted-gpu-runtime-verification.json": b"{}\n"}
+                 "trusted/trusted-gpu-runtime-verification.json": b"{}\n",
+                 # So does the optional RmlUi SDK archive.
+                 "gpu/vellum-rmlui-sdk-0.1.10-darwin-arm64.tar.gz": b"rmlui-sdk",
+                 "trusted/vellum-rmlui-sdk.sha256": b"sums\n",
+                 "trusted/trusted-rmlui-sdk-verification.json": b"{}\n"}
         for relative, data in files.items():
             (temp / relative).write_bytes(data)
         env = github.env(RUNNER_TEMP=str(temp), RELEASE_TAG=tag, RELEASE_ARCHIVE=archive,
@@ -232,7 +236,8 @@ class PublishStep(unittest.TestCase):
             "sdk-verification.json", "sdk-installed-validation.json", "web-payload.json", "release-trust.json",
             "immutable-release-preflight.json", "release-tag-protection.json", "release-assets-verification.json",
             "vellum-gpu-runtime-0.1.10-darwin-arm64.tar.gz", "vellum-gpu-runtime.sha256",
-            "gpu-runtime-verification.json"]))
+            "gpu-runtime-verification.json", "vellum-rmlui-sdk-0.1.10-darwin-arm64.tar.gz",
+            "vellum-rmlui-sdk.sha256", "rmlui-sdk-verification.json"]))
         self.assertEqual(github.current()["published"], [])
         self.assertFalse(any(call[:2] == ["release", "verify"] for call in calls))
         self.assertFalse(any("draft=false" in call for call in calls))
@@ -269,7 +274,7 @@ class PublishStep(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr[-1500:])
         self.assertIn("did not verify the newest frozen tag", done.stdout + done.stderr)
         self.assertEqual(github.current()["published"], [])
-        self.assertEqual(len(github.current()["releases"][0]["assets"]), 14)
+        self.assertEqual(len(github.current()["releases"][0]["assets"]), 17)
 
     def test_an_unset_or_unexpected_flag_never_publishes(self) -> None:
         for value in (None, "", "yes", "TRUE"):
@@ -616,7 +621,7 @@ class Wiring(unittest.TestCase):
         select = job_text("release-tag.yml", "select-release-commit")
         self.assertIn("if: github.event_name == 'push'", select)
         job = job_text("release-tag.yml", "sign-dry-run-tag")
-        self.assertIn("needs: dry-run-gate\n", job)
+        self.assertIn("needs: [dry-run-gate, dry-run-policy-check]\n", job)
         self.assertIn("\n    if: needs.dry-run-gate.outputs.run == 'true'\n", job)
         self.assertIn("environment: release", job)
         self.assertIn('test "$GITHUB_REF" = refs/heads/main', job)

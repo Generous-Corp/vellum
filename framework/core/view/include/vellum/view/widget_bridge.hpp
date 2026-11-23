@@ -18,6 +18,7 @@
 #include <vellum/view/reload_capabilities.hpp>
 #include <vellum/view/value_channel_set.hpp>
 #include <vellum/state/store.hpp>
+#include <vellum/value/param_model.hpp>
 
 namespace vellum::view { struct ClaudeBundle; }
 #include <algorithm>
@@ -68,6 +69,34 @@ public:
     WidgetBridge(ScriptEngine& engine, View& root, state::StateStore& store,
                  render::GpuSurface* gpu_surface = nullptr,
                  CapabilitySet granted_capabilities = CapabilitySet::all());
+    // A bridge over a value::ParamModel instead of a store. Scripts name
+    // parameters by key, and every parameter function reaches the model:
+    // getParam, setParam, formatParamValue, parseParamValue,
+    // getParamMetadata, bindWidgetToParam, bindMeter, onParamChanged and the
+    // bound controls' gestures. The plain value and range come from
+    // value::ParamMetadata when the model provides it. What a model cannot
+    // say is reported as absent rather than guessed: an onParamChanged
+    // payload has `hasModulated: false` and no host base-plus-offset
+    // `modulated` value, and no store `id`; unbound_params() is empty. A drag
+    // held across a realm replacement is deferred as a store's is: the
+    // replacement never calls the model, and the end is delivered later by
+    // the owning ScriptedUiSession's next poll, or by this bridge's teardown
+    // when no session takes it.
+    // A store-built bridge keeps every store behaviour unchanged.
+    WidgetBridge(ScriptEngine& engine, View& root, value::ParamModel& params,
+                 render::GpuSurface* gpu_surface = nullptr,
+                 CapabilitySet granted_capabilities = CapabilitySet::all());
+
+    // The model the parameter functions reach: the one this bridge was built
+    // over, or the bridge's own model over its store.
+    value::ParamModel& params() noexcept { return params_; }
+
+    // Model gesture ends a realm replacement deferred instead of delivering
+    // (see the ParamModel constructor). take_ hands them to an owner that
+    // delivers them later; deliver_ ends each one now, every one attempted
+    // even if an end throws, and is safe to re-enter.
+    std::vector<value::ParamHandle> take_deferred_model_gesture_ends();
+    void deliver_deferred_model_gesture_ends() noexcept;
     ~WidgetBridge();
 
     // Attach (or replace) the GPU surface AFTER construction. Mirrors the
@@ -510,9 +539,20 @@ private:
     // Defined in widget_bridge.cpp — the table is an implementation detail.
     struct ApiGroup;
 
+    // Exactly one of `store` and `params` is non-null.
+    WidgetBridge(ScriptEngine& engine, View& root, state::StateStore* store,
+                 value::ParamModel* params, render::GpuSurface* gpu_surface,
+                 CapabilitySet granted_capabilities);
+
     ScriptEngine& engine_;
     View& root_;
+    // A model-built bridge owns an empty store, so the store-only features see
+    // no parameters; a store-built bridge owns the model over its store.
+    std::unique_ptr<state::StateStore> owned_store_;
     state::StateStore& store_;
+    std::unique_ptr<value::ParamModel> owned_params_;
+    value::ParamModel& params_;
+    bool has_store_ = true;
     // Effectful-API-group gate. See the constructor doc + reload_capabilities.hpp.
     CapabilitySet granted_capabilities_;
     render::GpuSurface* gpu_surface_ = nullptr;
@@ -771,6 +811,7 @@ private:
         using Target = BindingTarget;
         std::string widget_id;
         state::ParamID param_id = 0;   ///< source param (resolved once at bind time)
+        value::ParamHandle param;       ///< the same parameter in params_
         /// Non-empty when bound to a named value channel instead of a param.
         /// Resolve it anew during every leased read so a hot swap cannot leave
         /// a source pointer from the retired processor generation cached here.
@@ -811,6 +852,7 @@ private:
     bool in_event_dispatch_ = false;
     struct ParamGestureRoute {
         state::ParamID active_param_id = 0;
+        value::ParamHandle active_param;
         bool active = false;
     };
     std::unordered_map<std::string, std::shared_ptr<ParamGestureRoute>>
@@ -834,6 +876,21 @@ private:
     // Resolve a param NAME to its id via the store. Returns false when the
     // store has no param with that name (the binding is then not registered).
     bool resolve_param_id(const std::string& name, state::ParamID& out) const;
+    // Resolve `name` to both spellings of a parameter: the store id a
+    // store-built bridge uses, and the model handle a model-built one uses.
+    bool resolve_param(const std::string& name, state::ParamID& id,
+                       value::ParamHandle& handle) const;
+    // Parameter reads and gestures for either kind of bridge. A store-built
+    // bridge makes exactly the store call it always made; a model-built bridge
+    // asks params_.
+    float param_normalized(state::ParamID id, value::ParamHandle handle) const;
+    float param_plain(state::ParamID id, value::ParamHandle handle) const;
+    // A model-built bridge's plain value in the model's double precision: the
+    // exact plain value from ParamMetadata when present, else plain().
+    double model_plain(value::ParamHandle handle) const;
+    std::optional<float> param_playing(state::ParamID id, value::ParamHandle handle) const;
+    void param_gesture_open(state::ParamID id, value::ParamHandle handle);
+    void param_gesture_close(state::ParamID id, value::ParamHandle handle);
     // Drop bindings whose widget id no longer resolves in widgets_ (after a
     // removeWidget subtree teardown) so a later widget reusing that id is not
     // silently re-bound.
@@ -853,6 +910,7 @@ private:
     void release_param_gesture_route(const std::string& widget_id) noexcept;
     void release_all_param_gesture_routes() noexcept;
     void defer_all_param_gesture_routes();
+    std::vector<value::ParamHandle> deferred_model_gesture_ends_;
     // Forget every native bridge reference to the removed subtree. This is
     // stronger than erasing widgets_: native event-registration guards are also
     // keyed by id and must be cleared before recycled ids can be rewired.

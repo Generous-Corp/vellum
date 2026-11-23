@@ -1,6 +1,7 @@
 import {
     DESIGN_IR_COMPOSITING_VERSION,
     DESIGN_IR_MATERIALS_VERSION,
+    DESIGN_IR_PLOTS_VERSION,
     DESIGN_IR_TRACKS_VERSION,
     DESIGN_IR_VECTOR_ASSET_VERSION,
     DESIGN_IR_VECTOR_PAINT_KEYS,
@@ -12,12 +13,12 @@ function isObject(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-// Why a node needs DesignIR version 6, or null: a path or vector node, a
-// path or vector property bucket, an image source, or a vector paint key.
+// Why a node needs DesignIR version 6, or null: a vector node or property
+// bucket, an image source, or a vector paint key. Path nodes and geometry are
+// part of the version 1-5 path contract.
 function vectorAssetField(node) {
-    if (node.kind === 'path' || node.kind === 'vector') return `kind ${node.kind}`;
+    if (node.kind === 'vector') return `kind ${node.kind}`;
     const properties = isObject(node.properties) ? node.properties : {};
-    if (properties.path !== undefined) return 'properties.path';
     if (properties.vector !== undefined) return 'properties.vector';
     if (isObject(properties.image) && properties.image.source !== undefined) {
         return 'properties.image.source';
@@ -50,11 +51,12 @@ function usesField(node, field) {
 
 /**
  * The oldest DesignIR version that carries every field the tree uses: 6 for
- * a vector asset field, 4 for tracks, 3 for a material reference, 2 for compositing,
+ * a vector asset field, 5 for a plot binding, 4 for tracks, 3 for a material reference, 2 for compositing,
  * otherwise 1.
  */
 export function requiredDesignIRVersion(root) {
     if (findVectorAssetField(root)) return DESIGN_IR_VECTOR_ASSET_VERSION;
+    if (usesField(root, 'plot')) return DESIGN_IR_PLOTS_VERSION;
     if (usesField(root, 'tracks')) return DESIGN_IR_TRACKS_VERSION;
     if (usesField(root, 'material')) return DESIGN_IR_MATERIALS_VERSION;
     return usesField(root, 'compositing') ? DESIGN_IR_COMPOSITING_VERSION : DESIGN_IR_VERSION;

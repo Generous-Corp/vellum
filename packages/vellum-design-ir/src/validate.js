@@ -2,6 +2,7 @@ import {
     AUTHORED_OVERLAY_SCHEMA,
     AUTHORED_OVERLAY_VERSION,
     DESIGN_IR_COMPOSITING_VERSION,
+    DESIGN_IR_PLOTS_VERSION,
     DESIGN_IR_SCHEMA,
     DESIGN_IR_MATERIALS_VERSION,
     DESIGN_IR_TRACKS_VERSION,
@@ -14,6 +15,15 @@ import { compositingProblems } from './compositing.js';
 import { DesignIRValidationError } from './errors.js';
 import { indexTree } from './identity.js';
 import { jsonEqual } from './stable-json.js';
+import {
+    MAX_FLOAT32,
+    MAX_KEYFRAMES_PER_TRACK,
+    MAX_PLOT_AUDIO_CHANNEL,
+    MAX_PLOT_SLOTS,
+    MAX_PLOT_STROKE,
+    MAX_TRACKS_PER_NODE,
+    SPRING_REST_THRESHOLD,
+} from './limits.generated.js';
 import { designIRVersionProblem } from './versions.js';
 
 export function validateDesignIR(value, options = {}) {
@@ -273,6 +283,19 @@ function validateNode(node, path, sourceKey, issues, schemaVersion) {
         }
     }
     requireObject(node.properties, `${path}.properties`, issues);
+    if (node.plot !== undefined) {
+        if (!(schemaVersion >= DESIGN_IR_PLOTS_VERSION)) {
+            issues.push(issue(
+                `${path}.plot`,
+                'version',
+                `a plot binding needs schemaVersion ${DESIGN_IR_PLOTS_VERSION} or later`,
+            ));
+        }
+        validatePlotBinding(node.plot, `${path}.plot`, issues);
+        if (Array.isArray(node.children) && node.children.length > 0) {
+            issues.push(issue(`${path}.plot`, 'children', 'a node with a plot binding has no children'));
+        }
+    }
     if (node.tracks !== undefined) {
         if (!(schemaVersion >= DESIGN_IR_TRACKS_VERSION)) {
             issues.push(issue(`${path}.tracks`, 'version', `tracks need schemaVersion ${DESIGN_IR_TRACKS_VERSION}`));
@@ -334,6 +357,82 @@ function validateMaskReferences(parent, path, issues) {
     });
 }
 
+const PLOT_FIELDS = new Set([
+    'style', 'channel', 'source', 'slots', 'history', 'orientation', 'audioChannel', 'min', 'max',
+    'baseline', 'lineWidth', 'barGap', 'peakWidth', 'lineColor', 'fillColor', 'peakColor',
+]);
+// A Map, so a style such as 'constructor' or '__proto__' finds no inherited entry.
+const PLOT_SOURCES = new Map([
+    ['line', ['scalar', 'vector']], ['area', ['scalar', 'vector']], ['bar', ['vector']], ['meter', ['meter']],
+]);
+
+// A plot binding names a value-feed channel and how to draw it, under the
+// rules the renderer's `plot_is_valid` applies; samples arrive at run time.
+function validatePlotBinding(plot, path, issues) {
+    requireObject(plot, path, issues);
+    if (!isObject(plot)) return;
+    for (const key of Object.keys(plot)) {
+        if (!PLOT_FIELDS.has(key)) {
+            issues.push(issue(`${path}.${key}`, 'unknown-field', 'a plot binding carries no such field'));
+        }
+    }
+    const sources = typeof plot.style === 'string' ? PLOT_SOURCES.get(plot.style) : undefined;
+    if (sources === undefined) {
+        issues.push(issue(`${path}.style`, 'enum', 'plot style must be line, area, bar or meter'));
+    }
+    if (typeof plot.channel !== 'string' || plot.channel.length === 0) {
+        issues.push(issue(`${path}.channel`, 'type', 'a plot names its channel'));
+    }
+    // Only an absent source takes the default; an explicit null is refused.
+    const source = plot.source === undefined ? (plot.style === 'meter' ? 'meter' : 'vector') : plot.source;
+    if (sources !== undefined && !sources.includes(source)) {
+        issues.push(issue(`${path}.source`, 'enum', `a ${plot.style} plot reads a ${sources.join(' or ')} channel`));
+    }
+    const enumField = (key, values) => {
+        if (plot[key] !== undefined && !values.includes(plot[key])) {
+            issues.push(issue(`${path}.${key}`, 'enum', `${key} must be ${values.join(' or ')}`));
+        }
+    };
+    enumField('history', ['scroll', 'sweep']);
+    enumField('orientation', ['vertical', 'horizontal']);
+    const integer = (key, minimum, maximum) => {
+        const value = plot[key];
+        if (value !== undefined && (!Number.isInteger(value) || value < minimum || value > maximum)) {
+            issues.push(issue(`${path}.${key}`, 'range', `${key} must be a whole number from ${minimum} to ${maximum}`));
+        }
+    };
+    integer('slots', 1, MAX_PLOT_SLOTS);
+    integer('audioChannel', 0, MAX_PLOT_AUDIO_CHANNEL);
+    if (plot.style !== 'meter' && plot.slots === undefined) {
+        issues.push(issue(`${path}.slots`, 'type', 'a line, area or bar plot declares its slots'));
+    }
+    // The renderer holds these as single-precision floats, so a value must
+    // fit one, and limits and the range compare the rounded values.
+    const finite = (value) => typeof value === 'number' && Number.isFinite(value) &&
+        Math.abs(value) <= MAX_FLOAT32;
+    for (const key of ['min', 'max', 'baseline', 'lineWidth', 'barGap', 'peakWidth']) {
+        if (plot[key] === undefined) continue;
+        if (!finite(plot[key])) {
+            issues.push(issue(`${path}.${key}`, 'type', `${key} must be a finite number within float range`));
+        } else if (['lineWidth', 'barGap', 'peakWidth'].includes(key) &&
+            (Math.fround(plot[key]) < 0 || Math.fround(plot[key]) > MAX_PLOT_STROKE)) {
+            issues.push(issue(`${path}.${key}`, 'range', `${key} must be from 0 to ${MAX_PLOT_STROKE}`));
+        }
+    }
+    const low = plot.min === undefined ? 0 : plot.min;
+    const high = plot.max === undefined ? 1 : plot.max;
+    if (finite(low) && finite(high) && Math.fround(low) === Math.fround(high)) {
+        issues.push(issue(`${path}.max`, 'range', 'a plot value range must not be empty once rounded to float'));
+    }
+    for (const key of ['lineColor', 'fillColor', 'peakColor']) {
+        const color = plot[key];
+        if (color !== undefined &&
+            (typeof color !== 'string' || !/^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/.test(color))) {
+            issues.push(issue(`${path}.${key}`, 'format', `${key} must be #RRGGBB or #RRGGBBAA`));
+        }
+    }
+}
+
 const ANIMATED_PROPERTIES = new Set([
     'opacity', 'translateX', 'translateY', 'scaleX', 'scaleY', 'rotation',
     'fill', 'strokeColor', 'shadowColor', 'gradientStopColor', 'textRunColor',
@@ -342,8 +441,6 @@ const COLOR_PROPERTIES = new Set([
     'fill', 'strokeColor', 'shadowColor', 'gradientStopColor', 'textRunColor',
 ]);
 const INDEXED_PROPERTIES = new Set(['shadowColor', 'gradientStopColor', 'textRunColor']);
-const FLOAT_MAX = 3.4028234663852886e38;
-const SPRING_REST_THRESHOLD = 1e-4;
 const EASING_KEYWORDS = new Set(['linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out']);
 const HEX_COLOR = /^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$/;
 
@@ -354,7 +451,9 @@ function validateTracks(tracks, path, issues) {
         issues.push(issue(path, 'type', 'tracks must be an array'));
         return;
     }
-    if (tracks.length > 32) issues.push(issue(path, 'range', 'a node has at most 32 tracks'));
+    if (tracks.length > MAX_TRACKS_PER_NODE) {
+        issues.push(issue(path, 'range', `a node has at most ${MAX_TRACKS_PER_NODE} tracks`));
+    }
     const seen = new Set();
     tracks.forEach((track, index) => {
         const trackPath = `${path}[${index}]`;
@@ -383,8 +482,8 @@ function validateTracks(tracks, path, issues) {
             issues.push(issue(trackPath, 'duplicate', 'two tracks animate the same property'));
         }
         seen.add(address);
-        if (!Array.isArray(track.keyframes) || track.keyframes.length === 0 || track.keyframes.length > 256) {
-            issues.push(issue(`${trackPath}.keyframes`, 'type', 'keyframes must be an array of 1 to 256 keyframes'));
+        if (!Array.isArray(track.keyframes) || track.keyframes.length === 0 || track.keyframes.length > MAX_KEYFRAMES_PER_TRACK) {
+            issues.push(issue(`${trackPath}.keyframes`, 'type', `keyframes must be an array of 1 to ${MAX_KEYFRAMES_PER_TRACK} keyframes`));
             return;
         }
         const color = COLOR_PROPERTIES.has(track.property);
@@ -398,7 +497,7 @@ function validateTracks(tracks, path, issues) {
                     issues.push(issue(`${keyPath}.${key}`, 'unknown-field', 'a keyframe carries time, value and easing'));
                 }
             }
-            if (typeof keyframe.time !== 'number' || !Number.isFinite(keyframe.time) || Math.abs(keyframe.time) > FLOAT_MAX) {
+            if (typeof keyframe.time !== 'number' || !Number.isFinite(keyframe.time) || Math.abs(keyframe.time) > MAX_FLOAT32) {
                 issues.push(issue(`${keyPath}.time`, 'type', 'keyframe time must be a finite number of seconds within float range'));
             } else if (!(keyframe.time > previous)) {
                 issues.push(issue(`${keyPath}.time`, 'order', 'keyframe times must strictly increase'));
@@ -406,7 +505,7 @@ function validateTracks(tracks, path, issues) {
             if (typeof keyframe.time === 'number') previous = keyframe.time;
             const valid = color
                 ? typeof keyframe.value === 'string' && HEX_COLOR.test(keyframe.value)
-                : typeof keyframe.value === 'number' && Number.isFinite(keyframe.value) && Math.abs(keyframe.value) <= FLOAT_MAX;
+                : typeof keyframe.value === 'number' && Number.isFinite(keyframe.value) && Math.abs(keyframe.value) <= MAX_FLOAT32;
             if (!valid) {
                 issues.push(issue(
                     `${keyPath}.value`,
@@ -473,7 +572,7 @@ function validateEasing(easing, path, issues) {
     }
     requireObject(easing, path, issues);
     if (!isObject(easing)) return;
-    const finite = (value) => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= FLOAT_MAX;
+    const finite = (value) => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= MAX_FLOAT32;
     const fields = {
         cubicBezier: ['type', 'x1', 'y1', 'x2', 'y2'],
         steps: ['type', 'steps', 'position'],

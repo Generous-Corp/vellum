@@ -4,11 +4,15 @@
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/lowering_diagnostic.hpp>
 #include <vellum/graphics/path_geometry.hpp>
+#include <vellum/graphics/plot.hpp>
 #include <vellum/graphics/scene_acceptance.hpp>
 #include <vellum/graphics/vector_asset.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -558,6 +562,21 @@ bool contains(const std::string& text, std::string_view part) {
     return false;
 }
 
+std::vector<double> plan_numbers(const std::string& json, std::string_view key) {
+    const auto begin = json.find('"' + std::string(key) + "\":[");
+    if (begin == std::string::npos) return {};
+    const char* cursor = json.c_str() + begin + key.size() + 4U;
+    std::vector<double> values;
+    while (*cursor != ']') {
+        char* end = nullptr;
+        const double value = std::strtod(cursor, &end);
+        if (end == cursor || (*end != ',' && *end != ']')) return {};
+        values.push_back(value);
+        cursor = *end == ',' ? end + 1 : end;
+    }
+    return values;
+}
+
 // The canvas shell draws a compiled vector asset from a plan the shared core
 // writes, maps gradients exactly where canvas 2D can, and names each
 // approximation it makes.
@@ -606,11 +625,16 @@ bool vector_plans() {
         !contains(plan.json, "{\"op\":\"save\",\"alpha\":0.5,\"transform\":[1,0,0,1,5,5]}") ||
         !contains(plan.json, "{\"op\":\"clip\",\"d\":\"M0 0L10 0L10 10L0 10Z\",\"rule\":\"nonzero\"}") ||
         !contains(plan.json, "\"paint\":{\"color\":[1,0,0,1]}") ||
-        !contains(plan.json, "\"linear\":[60,30,90,30]") ||
         !contains(plan.json, "\"radial\":[5,5,0,5,5,5]") ||
         !contains(plan.json, "\"space\":[30,0,0,10,0,0]") ||
         !contains(plan.json, "{\"op\":\"stroke\",\"d\":\"M0 0L10 0L10 10L0 10Z\",\"width\":2,"
                              "\"join\":\"miter\",\"cap\":\"butt\",\"miter\":4,")) {
+        return false;
+    }
+    const auto linear = plan_numbers(plan.json, "linear");
+    if (linear.size() != 4U || linear[0] != 60.0 || linear[1] != 30.0 ||
+        std::abs(linear[2] - 90.0) > 2e-6 || std::abs(linear[3] - 30.0) > 2e-6) {
+        std::cerr << "the vector linear gradient endpoints moved: " << plan.json << '\n';
         return false;
     }
     if (plan.losses.size() != 3U || lowering.losses != 1) {
@@ -650,6 +674,110 @@ bool vector_plans() {
     if (refused.accepted || !refused.commands.empty() || refused.diagnostics.size() != 1U ||
         refused.diagnostics[0].code != vellum::graphics::kSceneVersionMismatchCode) {
         std::cerr << "the shell drew a version 8 scene with a vector node\n";
+        return false;
+    }
+    return true;
+}
+
+bool vector_large_coordinate_geometry_round_trips() {
+    using namespace vellum::graphics;
+    auto path = std::make_shared<PathGeometry>();
+    if (!parse_svg_path_data("M10000000 0H10000001V10H10000000Z", *path)) return false;
+    const auto lowered = vellum::web::lower_for_canvas_shell(vector_scene({
+        {.kind = VectorOp::Kind::path, .transform = {.tx = -10000000.0F}, .path = path,
+         .fill = {.color = Color::hex(0xFF0000)}}}));
+    if (!lowered.accepted || lowered.commands.size() != 1U) return false;
+    const auto plan = vellum::web::lower_vector_for_canvas(lowered.commands[0], 1.0F);
+    const auto begin = plan.json.find("\"d\":\"");
+    if (begin == std::string::npos) return false;
+    const auto end = plan.json.find('"', begin + 5U);
+    PathGeometry decoded;
+    const auto transform = plan_numbers(plan.json, "transform");
+    if (!parse_svg_path_data(plan.json.substr(begin + 5U, end - begin - 5U), decoded) ||
+        decoded.values != path->values || transform.size() != 6U ||
+        decoded.values[0] + transform[4] != 0.0 ||
+        decoded.values[2] + transform[4] != 1.0) {
+        std::cerr << "vector_large_coordinate_geometry_round_trips: translated one-unit "
+                     "rectangle lost its width: " << plan.json << '\n';
+        return false;
+    }
+    return true;
+}
+
+bool vector_nearly_singular_matrices_round_trip() {
+    using namespace vellum::graphics;
+    const Affine2D matrix{.a = 1.0F, .b = 1.0F, .c = 1.0F,
+                          .d = std::nextafter(1.0F, 2.0F)};
+    const auto lowered = vellum::web::lower_for_canvas_shell(vector_scene({
+        {.kind = VectorOp::Kind::path, .transform = matrix, .path = rectangle_path(0.0F),
+         .fill = {.gradient = ramp(GradientKind::two_circle_radial),
+                  .gradient_transform = matrix}}}));
+    if (!lowered.accepted || lowered.commands.size() != 1U) return false;
+    const auto plan = vellum::web::lower_vector_for_canvas(lowered.commands[0], 1.0F);
+    const std::vector<double> expected{matrix.a, matrix.b, matrix.c, matrix.d, 0.0, 0.0};
+    for (const auto key : {"transform", "space"}) {
+        const auto values = plan_numbers(plan.json, key);
+        if (values != expected || values[0] * values[3] - values[1] * values[2] <= 0.0) {
+            std::cerr << "vector_nearly_singular_matrices_round_trip: " << key
+                      << " lost its invertibility: " << plan.json << '\n';
+            return false;
+        }
+    }
+    return true;
+}
+
+bool vector_gradient_double_values_round_trip() {
+    using namespace vellum::graphics;
+    const auto lowered = vellum::web::lower_for_canvas_shell(vector_scene({
+        {.kind = VectorOp::Kind::path, .path = rectangle_path(0.0F),
+         .fill = {.gradient = ramp(GradientKind::two_circle_radial),
+                  .gradient_transform = {.a = 1.0F, .b = 1.0F, .c = -1.0F, .d = 1.0F}}}}));
+    if (!lowered.accepted || lowered.commands.size() != 1U) return false;
+    const auto plan = vellum::web::lower_vector_for_canvas(lowered.commands[0], 1.0F);
+    const auto circles = plan_numbers(plan.json, "radial");
+    if (circles.size() != 6U || circles[5] != std::sqrt(2.0) * 0.5) {
+        std::cerr << "vector_gradient_double_values_round_trip: derived radius lost precision: "
+                  << plan.json << '\n';
+        return false;
+    }
+    return true;
+}
+
+bool vector_small_scale_radial_transforms_preserve_space() {
+    using namespace vellum::graphics;
+    for (const float size : {1e-6F, 1.0F, 1e6F}) {
+        for (const Affine2D transform : {
+                 Affine2D{.a = size, .d = 10.0F * size},
+                 Affine2D{.a = size, .c = 0.5F * size, .d = size},
+                 Affine2D{.a = size, .b = size, .c = -size, .d = size}}) {
+            auto scene = vector_scene({
+                {.kind = VectorOp::Kind::path, .path = rectangle_path(0.0F),
+                 .fill = {.gradient = ramp(GradientKind::two_circle_radial),
+                          .gradient_transform = transform}}});
+            // The small gradient fills a visible frame when its view box is enlarged.
+            auto asset = std::make_shared<VectorAsset>(*scene.root.children[0].vector);
+            asset->view_box = {0.0F, 0.0F, size * 10.0F, size * 10.0F};
+            scene.root.children[0].vector = asset;
+            const auto lowered = vellum::web::lower_for_canvas_shell(scene);
+            if (!lowered.accepted || lowered.commands.size() != 1U || lowered.losses != 0 ||
+                !lowered.diagnostics.empty()) return false;
+            const auto plan = vellum::web::lower_vector_for_canvas(lowered.commands[0], 1.0F);
+            const bool circular = transform.b != 0.0F;
+            const bool has_space = !plan_numbers(plan.json, "space").empty();
+            if (has_space == circular || !plan.losses.empty()) {
+                std::cerr << "vector_small_scale_radial_transforms_preserve_space: size="
+                          << size << " circular=" << circular << ": " << plan.json << '\n';
+                return false;
+            }
+        }
+    }
+    double scale = 1.0;
+    if (vellum::web::canvas_vector_detail::similarity({.a = 0.0F, .d = 0.0F}, scale) ||
+        scale != 0.0 ||
+        vellum::web::canvas_vector_detail::similarity({.a = 0.0F, .d = 1.0F}, scale) ||
+        scale != 0.0) {
+        std::cerr << "vector_small_scale_radial_transforms_preserve_space: degenerate scale "
+                     "was treated as a similarity\n";
         return false;
     }
     return true;
@@ -701,6 +829,176 @@ bool vector_builder_helpers() {
     return true;
 }
 }  // namespace
+
+// Draws `commands` as the shell does, each rectangle with its colour times
+// its opacity source-over, and checks every pixel against the plot drawn as
+// one group: its rectangles composited at full opacity, then faded once by
+// `opacity`. It also checks that the shell's rectangles never overlap, so no
+// pixel is blended twice.
+bool digest_covers_fields() {
+    using namespace vellum::graphics;
+    using Command = PaintCommand;
+    const auto digest = [](const Command& command) {
+        return vellum::web::command_digest(std::vector<Command>{command});
+    };
+    const auto ramp_stops = std::vector<GradientStop>{{0.0F, Color::hex(0xFF0000)},
+                                                      {1.0F, Color::hex(0x0000FF)}};
+    const auto vector_digest = [&](bool repeating, float repeat_length) {
+        LinearGradient gradient;
+        gradient.stops = ramp_stops;
+        auto scene = vector_scene({{.kind = VectorOp::Kind::path, .path = rectangle_path(0.0F),
+                                    .fill = {.gradient = gradient}}});
+        auto commands = vellum::web::lower_for_canvas_shell(scene).commands;
+        auto asset = std::make_shared<VectorAsset>(*commands.at(0).vector);
+        asset->ops.at(0).fill.gradient->repeating = repeating;
+        asset->ops.at(0).fill.gradient->repeat_length = repeat_length;
+        commands.at(0).vector = asset;
+        return vellum::web::command_digest(commands);
+    };
+    if (vector_digest(true, 0.0F) == vector_digest(false, 0.0F)) {
+        std::cerr << "the digest does not carry a vector gradient's repeating flag\n";
+        return false;
+    }
+    if (vector_digest(false, 4.0F) == vector_digest(false, 0.0F)) {
+        std::cerr << "the digest does not carry a vector gradient's repeat length\n";
+        return false;
+    }
+    const Command base{.kind = Command::Kind::rectangle, .node_id = "n", .bounds = {0, 0, 10, 10}};
+    LinearGradient gradient;
+    gradient.stops = ramp_stops;
+    auto plot = std::make_shared<PlotSpec>();
+    plot->slot_count = 4;
+    plot->samples = {0.1F, 0.2F, 0.3F, 0.4F};
+    auto plot_changed = std::make_shared<PlotSpec>(*plot);
+    plot_changed->samples[2] = 0.9F;
+    auto mesh = std::make_shared<TriangleMesh>();
+    mesh->vertices = {{0, 0, 0, 0, 0xFFFFFFFFU}};
+    auto path = std::make_shared<PathGeometry>();
+    path->verbs = {PathVerb::move};
+    path->values = {1.0F, 2.0F};
+    NodeEffect effect;
+    effect.sigma = 2.0F;
+    const std::vector<std::pair<const char*, std::function<void(Command&)>>> changes{
+        {"transform", [](Command& c) { c.transform.tx = 3.0F; }},
+        {"fill gradient", [&](Command& c) { c.fill_gradients = {gradient}; }},
+        {"gradient repeating", [&](Command& c) {
+             auto g = gradient;
+             g.repeating = true;
+             c.fill_gradients = {g};
+         }},
+        {"box shadow", [](Command& c) { c.box_shadows = {BoxShadow{.blur_radius = 2.0F}}; }},
+        {"corner radii", [](Command& c) { c.corner_radii = {1.0F, 2.0F, 3.0F, 4.0F}; }},
+        {"font family", [](Command& c) { c.font_family = "Mono"; }},
+        {"font weight", [](Command& c) { c.font_weight = 700; }},
+        {"letter spacing", [](Command& c) { c.letter_spacing = 1.0F; }},
+        {"underline", [](Command& c) { c.underline = true; }},
+        {"strikethrough", [](Command& c) { c.strikethrough = true; }},
+        {"text run", [](Command& c) { c.text_runs = {TextRun{.text = "a"}}; }},
+        {"mesh", [&](Command& c) { c.mesh = mesh; }},
+        {"path", [&](Command& c) { c.path = path; }},
+        {"layer unbounded", [](Command& c) { c.layer_unbounded = true; }},
+        {"layer isolated", [](Command& c) { c.layer_isolated = true; }},
+        {"blend mode", [](Command& c) { c.blend_mode = BlendMode::multiply; }},
+        {"mask mode", [](Command& c) { c.mask_mode = MaskMode::luminance; }},
+        {"image", [](Command& c) { c.image = ImageReference{.content_hash = "sha256:x"}; }},
+        {"effects", [&](Command& c) { c.effects = {effect}; }},
+        {"plot", [&](Command& c) { c.plot = plot; }},
+        {"plot background", [](Command& c) { c.plot_background = true; }},
+        {"text layout", [](Command& c) { c.text_layout = TextLayout{}; }},
+        {"text layout align",
+         [](Command& c) { c.text_layout = TextLayout{.align = TextAlign::center}; }},
+        {"text layout line height",
+         [](Command& c) { c.text_layout = TextLayout{.line_height = 1.5F}; }},
+        {"text layout max lines", [](Command& c) { c.text_layout = TextLayout{.max_lines = 2U}; }},
+        {"text layout ellipsis", [](Command& c) {
+             c.text_layout = TextLayout{.max_lines = 1U, .ellipsis = true};
+         }},
+    };
+    for (const auto& [name, change] : changes) {
+        Command changed = base;
+        change(changed);
+        if (digest(changed) == digest(base)) {
+            std::cerr << "the command digest ignores " << name << "\n";
+            return false;
+        }
+    }
+    Command first = base;
+    first.plot = plot;
+    Command second = base;
+    second.plot = plot_changed;
+    if (digest(first) == digest(second)) {
+        std::cerr << "the command digest ignores a plot's samples\n";
+        return false;
+    }
+    Command clipped = base;
+    clipped.kind = Command::Kind::begin_clip;
+    Command moved = clipped;
+    moved.clip_rect = {1, 1, 2, 2};
+    if (digest(clipped) == digest(moved)) {
+        std::cerr << "the command digest ignores a clip rectangle\n";
+        return false;
+    }
+    return true;
+}
+
+bool composites_once(const std::vector<vellum::graphics::PaintCommand>& commands,
+                     const Scene& scene, const std::string& id, float opacity) {
+    using vellum::graphics::Color;
+    using vellum::graphics::PlotLayer;
+    const auto& node = *vellum::graphics::find_node(scene, id);
+    const auto& plot = *node.plot;
+    const auto geometry = vellum::graphics::plot_geometry(plot, node.fill, node.bounds, 1.0F);
+    const auto width = static_cast<int>(scene.width);
+    const auto height = static_cast<int>(scene.height);
+    const auto covers = [](const vellum::graphics::Rect& rect, int x, int y) {
+        const float cx = static_cast<float>(x) + 0.5F;
+        const float cy = static_cast<float>(y) + 0.5F;
+        return cx >= rect.x && cx < rect.x + rect.width && cy >= rect.y &&
+               cy < rect.y + rect.height;
+    };
+    const Color clear = Color::rgba(0.0F, 0.0F, 0.0F, 0.0F);
+    const auto opacities = vellum::graphics::effective_opacities(commands);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            Color group = clear;
+            for (const auto& piece : geometry.rects) {
+                if (!covers(piece.rect, x, y)) continue;
+                Color color = node.fill;
+                if (piece.layer == PlotLayer::fill) color = plot.fill_color;
+                if (piece.layer == PlotLayer::peak) color = plot.peak_color;
+                if (piece.layer == PlotLayer::line) color = plot.line_color;
+                group = vellum::web::canvas_shell_over(color, group);
+            }
+            group.alpha *= opacity;
+            Color shell = clear;
+            int hits = 0;
+            for (std::size_t index = 0; index < commands.size(); ++index) {
+                const auto& command = commands[index];
+                if ((command.node_id != id && command.node_id != id + "/background") ||
+                    !vellum::graphics::draws_content(command.kind) ||
+                    !covers(command.bounds, x, y)) {
+                    continue;
+                }
+                Color color = command.fill;
+                color.alpha *= opacities[index];
+                if (!(color.alpha > 0.0F)) continue;
+                ++hits;
+                shell = vellum::web::canvas_shell_over(color, shell);
+            }
+            const auto near = [](float a, float b) { return std::abs(a - b) < 1e-4F; };
+            if (hits > 1 || !near(shell.alpha, group.alpha) ||
+                (group.alpha > 0.0F &&
+                 (!near(shell.red, group.red) || !near(shell.green, group.green) ||
+                  !near(shell.blue, group.blue)))) {
+                std::cerr << "pixel " << x << "," << y << " has " << hits
+                          << " shell rectangles and alpha " << shell.alpha << " against "
+                          << group.alpha << '\n';
+                return false;
+            }
+        }
+    }
+    return true;
+}
 
 // The shell draws a scene with tracks at its clock, as the native renderer
 // does, with no loss of its own.
@@ -813,15 +1111,284 @@ bool effect_lowering() {
     return true;
 }
 
+// An untransformed plot is drawn as disjoint rectangles that composite it as
+// one group with no loss; a turned one is not drawn and is reported; a
+// version 11 scene with a plot is refused as the native renderer refuses it.
+bool plot_device_scale() {
+    using vellum::graphics::PlotChannelShape;
+    using vellum::graphics::PlotSpec;
+    using vellum::graphics::PlotStyle;
+    using vellum::graphics::SceneNode;
+    Scene scene;
+    scene.width = 16.0F;
+    scene.height = 16.0F;
+    scene.root.id = "root";
+    scene.root.kind = SceneNode::Kind::group;
+    auto spec = std::make_shared<PlotSpec>();
+    spec->style = PlotStyle::area;
+    spec->shape = PlotChannelShape::vector;
+    spec->slot_count = 1;
+    spec->samples = {1.0F};
+    SceneNode plot{.id = "snap", .kind = SceneNode::Kind::plot,
+                   .bounds = {0.26F, 0.0F, 1.0F, 4.0F}, .fill = vellum::graphics::Color::hex(0x000000)};
+    plot.plot = spec;
+    scene.root.children.push_back(plot);
+    const auto widest = [](const vellum::web::CanvasShellLowering& lowered) {
+        float left = 1e9F;
+        float right = -1e9F;
+        for (const auto& command : lowered.commands) {
+            if (command.kind != vellum::graphics::PaintCommand::Kind::rectangle) continue;
+            left = std::min(left, command.bounds.x);
+            right = std::max(right, command.bounds.x + command.bounds.width);
+        }
+        return std::pair{left, right};
+    };
+    const auto one = widest(vellum::web::lower_for_canvas_shell(scene));
+    const auto two = widest(vellum::web::lower_for_canvas_shell(scene, {.scale = 2.0F}));
+    if (one.first != 0.0F || one.second != 1.0F || two.first != 0.5F || two.second != 1.5F) {
+        std::cerr << "plot snapping ignored the shell's device scale: " << one.first << ","
+                  << one.second << " at 1, " << two.first << "," << two.second << " at 2\n";
+        return false;
+    }
+    SceneNode& wide = scene.root.children[0];
+    wide.id = "wide";
+    wide.bounds = {0.0F, 0.0F, 70000.0F, 4.0F};
+    const auto lowered = vellum::web::lower_for_canvas_shell(scene);
+    const bool reported = std::any_of(
+        lowered.diagnostics.begin(), lowered.diagnostics.end(),
+        [](const vellum::graphics::LoweringDiagnostic& diagnostic) {
+            return diagnostic.code == vellum::graphics::kPlotTooWideCode &&
+                   diagnostic.node_id == "wide";
+        });
+    if (!reported) {
+        std::cerr << "a plot wider than the column limit was lowered without a diagnostic\n";
+        return false;
+    }
+    return true;
+}
+
+bool plot_lowering() {
+    using vellum::graphics::Color;
+    using vellum::graphics::PaintCommand;
+    using vellum::graphics::PlotChannelShape;
+    using vellum::graphics::PlotSpec;
+    using vellum::graphics::PlotStyle;
+    Scene scene;
+    scene.width = 64.0F;
+    scene.height = 32.0F;
+    scene.root.id = "root";
+    auto spec = std::make_shared<PlotSpec>();
+    spec->style = PlotStyle::area;
+    spec->shape = PlotChannelShape::vector;
+    spec->slot_count = 4;
+    spec->samples = {0.25F, 0.5F, 0.75F, 1.0F};
+    spec->fill_color = Color::hex(0x22C55E);
+    SceneNode plot{.id = "spectrum", .kind = SceneNode::Kind::plot,
+                   .bounds = {8.0F, 4.0F, 8.0F, 20.0F}, .fill = Color::hex(0x111827),
+                   .opacity = 0.5F};
+    plot.plot = spec;
+    scene.root.children.push_back(plot);
+    const auto lowering = vellum::web::lower_for_canvas_shell(scene);
+    if (!lowering.accepted || lowering.losses != 0 || !lowering.diagnostics.empty() ||
+        !composites_once(lowering.commands, scene, "spectrum", 0.5F)) {
+        std::cerr << "a faded area plot over its background was not composited once\n";
+        return false;
+    }
+    // A translucent peak tick over a meter's level: the overlap is one piece
+    // of the composited colour.
+    auto meter = std::make_shared<PlotSpec>();
+    meter->style = PlotStyle::level_meter;
+    meter->shape = PlotChannelShape::meter;
+    meter->samples = {0.5F, 0.45F};
+    meter->peak_width = 4.0F;
+    meter->fill_color = Color::hex(0x22C55E);
+    meter->peak_color = Color::hex(0xF8FAFC, 0.5F);
+    Scene metered = scene;
+    metered.root.children[0].plot = meter;
+    const auto level = vellum::web::lower_for_canvas_shell(metered);
+    if (!level.accepted || level.losses != 0 ||
+        !composites_once(level.commands, metered, "spectrum", 0.5F)) {
+        std::cerr << "a faded meter's peak over its level was not composited once\n";
+        return false;
+    }
+    // A gradient background lowers to its own rectangle inside the plot's
+    // opacity layer; its colour is flattened with the plot, so the faded
+    // overlap is still blended once and the layer costs no loss. A gradient
+    // with the version 8 vocabulary is still reported, as one loss.
+    Scene shaded = scene;
+    shaded.root.children[0].fill_gradients = {
+        {.stops = {{.position = 0.0F, .color = Color::hex(0x111827)},
+                   {.position = 1.0F, .color = Color::hex(0x334155)}}}};
+    const auto linear = vellum::web::lower_for_canvas_shell(shaded);
+    const bool layered = std::any_of(linear.commands.begin(), linear.commands.end(),
+                                     [](const PaintCommand& command) {
+                                         return command.kind == PaintCommand::Kind::begin_layer;
+                                     });
+    if (!linear.accepted || linear.losses != 0 || layered ||
+        !composites_once(linear.commands, shaded, "spectrum", 0.5F)) {
+        std::cerr << "a faded plot over a gradient background was not composited once\n";
+        return false;
+    }
+    shaded.root.children[0].fill_gradients[0].kind = vellum::graphics::GradientKind::radial;
+    const auto radial = vellum::web::lower_for_canvas_shell(shaded);
+    if (!radial.accepted || radial.losses != 1 ||
+        !composites_once(radial.commands, shaded, "spectrum", 0.5F)) {
+        std::cerr << "a faded plot over a radial background was not composited once with one loss\n";
+        return false;
+    }
+    // A blended plot lowers through the compositing group main wraps every
+    // blended node in: its rectangles sit inside the `begin_layer` that
+    // carries the blend, which the shell composites with the canvas operation.
+    Scene blended = scene;
+    blended.root.children[0].blend_mode = vellum::graphics::BlendMode::multiply;
+    const auto grouped = vellum::web::lower_for_canvas_shell(blended);
+    const auto grouped_plan = vellum::web::canvas_shell_paint_plan(grouped.commands);
+    std::size_t begin = grouped.commands.size();
+    std::size_t end = grouped.commands.size();
+    std::size_t inside = 0;
+    bool plot_left = false;
+    for (std::size_t index = 0; index < grouped.commands.size(); ++index) {
+        const auto& command = grouped.commands[index];
+        if (command.kind == PaintCommand::Kind::plot) plot_left = true;
+        if (command.kind == PaintCommand::Kind::begin_layer && command.node_id == "spectrum" &&
+            command.blend_mode == vellum::graphics::BlendMode::multiply) {
+            begin = index;
+        }
+        if (command.kind == PaintCommand::Kind::end_layer && begin < index && end == grouped.commands.size()) {
+            end = index;
+        }
+        if (command.kind == PaintCommand::Kind::rectangle && command.node_id == "spectrum") {
+            if (begin < index && end == grouped.commands.size()) ++inside;
+            else plot_left = true;
+        }
+    }
+    if (!grouped.accepted || grouped.losses != 0 || !grouped.diagnostics.empty() || plot_left ||
+        begin >= grouped.commands.size() || end >= grouped.commands.size() || inside == 0U ||
+        grouped_plan.group_operations[begin].empty()) {
+        std::cerr << "a blended plot was not drawn inside its composited blend group\n";
+        return false;
+    }
+    // A Tier 2 blend falls back to normal with main's one warning and loss;
+    // the plot itself is still drawn, so no plot diagnostic is added.
+    blended.root.children[0].blend_mode = vellum::graphics::BlendMode::hue;
+    const auto fallback = vellum::web::lower_for_canvas_shell(blended);
+    if (!fallback.accepted || fallback.losses != 1 || fallback.diagnostics.size() != 1U ||
+        fallback.diagnostics[0].code != vellum::graphics::kBlendModeFallbackCode ||
+        std::any_of(fallback.commands.begin(), fallback.commands.end(),
+                    [](const PaintCommand& command) {
+                        return command.kind == PaintCommand::Kind::plot;
+                    })) {
+        std::cerr << "a Tier 2 blended plot did not fall back to normal with one warning\n";
+        return false;
+    }
+    // An ordinary rectangle whose id happens to read like a plot background,
+    // drawn just before a faded plot without one, keeps its own paint.
+    Scene sibling = scene;
+    sibling.root.children.insert(sibling.root.children.begin(),
+                                 SceneNode{.id = "spectrum/background",
+                                           .kind = SceneNode::Kind::rectangle,
+                                           .bounds = {4.0F, 2.0F, 20.0F, 24.0F},
+                                           .fill = Color::hex(0xEF4444),
+                                           .corner_radius = 3.0F});
+    const auto beside = vellum::web::lower_for_canvas_shell(sibling);
+    const auto kept = std::find_if(beside.commands.begin(), beside.commands.end(),
+                                   [](const PaintCommand& command) {
+                                       return command.node_id == "spectrum/background";
+                                   });
+    if (!beside.accepted || kept == beside.commands.end() ||
+        kept->kind != PaintCommand::Kind::rectangle || kept->fill.alpha != 1.0F ||
+        kept->opacity != 1.0F || kept->corner_radius != 3.0F || kept->plot_background) {
+        std::cerr << "an ordinary rectangle named like a plot background was swallowed\n";
+        return false;
+    }
+    scene.root.children[0].transform =
+        vellum::graphics::Affine2D{.a = 0.0F, .b = 1.0F, .c = -1.0F, .d = 0.0F};
+    const auto turned = vellum::web::lower_for_canvas_shell(scene);
+    if (!turned.accepted || turned.losses != 1 || turned.diagnostics.size() != 1U ||
+        turned.diagnostics[0].code != vellum::web::kPlotNotDrawnCode ||
+        turned.diagnostics[0].node_id != "spectrum" || turned.commands.size() != 1U ||
+        turned.commands[0].kind != PaintCommand::Kind::plot) {
+        std::cerr << "a turned plot was not reported as not drawn\n";
+        return false;
+    }
+    scene.root.children[0].transform.reset();
+    scene.scene_version = 11U;
+    return refused(scene, "scene version 11 cannot carry the plot node spectrum",
+                   vellum::graphics::kSceneVersionMismatchCode, "spectrum");
+}
+
+bool text_layout_lowering() {
+    using vellum::graphics::PaintCommand;
+    using vellum::graphics::TextAlign;
+    using vellum::graphics::TextLayout;
+    Scene scene;
+    scene.width = 64.0F;
+    scene.height = 32.0F;
+    scene.root.id = "root";
+    scene.root.children.push_back({
+        .id = "para",
+        .kind = SceneNode::Kind::text,
+        .bounds = {0.0F, 0.0F, 40.0F, 20.0F},
+        .text = "wrapped words",
+        .text_layout = TextLayout{.align = TextAlign::center, .max_lines = 2U},
+    });
+    const auto lowering = vellum::web::lower_for_canvas_shell(scene);
+    const auto reported = std::count_if(
+        lowering.diagnostics.begin(), lowering.diagnostics.end(), [](const auto& diagnostic) {
+            return diagnostic.code == vellum::web::kTextLayoutNotDrawnCode &&
+                   diagnostic.node_id == "para" &&
+                   diagnostic.severity == LoweringDiagnostic::Severity::warning;
+        });
+    if (!lowering.accepted || reported != 1 || lowering.losses != 1) {
+        std::cerr << "laid-out text was not reported as drawn on one line: accepted="
+                  << lowering.accepted << " reported=" << reported
+                  << " losses=" << lowering.losses << '\n';
+        return false;
+    }
+    PaintCommand text{.kind = PaintCommand::Kind::text, .node_id = "t", .text = "a"};
+    PaintCommand boxed = text;
+    boxed.missing_glyph_box = true;
+    if (vellum::web::command_digest({text}) != vellum::web::command_digest({boxed})) {
+        std::cerr << "the shell digest changed with the native missing-glyph policy\n";
+        return false;
+    }
+    auto plain = scene;
+    plain.root.children[0].text_layout.reset();
+    if (!vellum::web::lower_for_canvas_shell(plain).diagnostics.empty() ||
+        vellum::web::lower_for_canvas_shell(plain).losses != 0) {
+        std::cerr << "text without a layout was reported as a loss\n";
+        return false;
+    }
+    auto unbounded = scene;
+    unbounded.root.children[0].text_layout = TextLayout{.ellipsis = true};
+    if (!refused(unbounded,
+                 "the text layout of para cannot be drawn: an ellipsis needs max_lines",
+                 vellum::graphics::kInvalidTextLayoutCode, "para")) {
+        return false;
+    }
+    scene.scene_version = 12U;
+    return refused(scene, "scene version 12 cannot carry the text layout of para",
+                   vellum::graphics::kSceneVersionMismatchCode, "para");
+}
+
 int main() {
     if (!image_refusals()) return 1;
+    if (!text_layout_lowering()) return 1;
     if (!vector_plans()) return 1;
+    bool vector_regressions = vector_large_coordinate_geometry_round_trips();
+    vector_regressions &= vector_nearly_singular_matrices_round_trip();
+    vector_regressions &= vector_gradient_double_values_round_trip();
+    vector_regressions &= vector_small_scale_radial_transforms_preserve_space();
+    if (!vector_regressions) return 1;
     if (!vector_builder_helpers()) return 1;
+    if (!digest_covers_fields()) return 1;
     if (!track_evaluation()) return 1;
     if (!mask_reports()) return 1;
     if (!blend_lowering()) return 1;
     if (!gradient_reports_and_version_gate()) return 1;
     if (!effect_lowering()) return 1;
+    if (!plot_lowering()) return 1;
+    if (!plot_device_scale()) return 1;
     using vellum::graphics::Affine2D;
     using vellum::graphics::CornerRadii;
     using vellum::graphics::SceneNode;

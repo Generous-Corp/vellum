@@ -415,6 +415,31 @@ bool CpuRenderInterface::begin_frame(const CpuFrameTarget& frame) {
     return true;
 }
 
+std::size_t CpuRenderInterface::cached_bytes() const noexcept {
+    const auto& s = *state_;
+    std::size_t total = s.mask.capacity() + s.arena.capacity() * sizeof(s.arena[0]) +
+                        s.commands.capacity() * sizeof(s.commands[0]);
+    for (const auto& layer : s.layer_pool)
+        total += layer.capacity();
+    return total;
+}
+
+std::size_t CpuRenderInterface::trim() {
+    auto& s = *state_;
+    if (s.in_frame)
+        return 0;
+    const std::size_t released = cached_bytes();
+    // Assigning {} to a vector keeps its capacity; a swap with a fresh one
+    // returns the storage.
+    decltype(s.layer_pool)().swap(s.layer_pool);
+    decltype(s.layer_dirty)().swap(s.layer_dirty);
+    decltype(s.mask)().swap(s.mask);
+    decltype(s.commands)().swap(s.commands);
+    decltype(s.arena)().swap(s.arena);
+    s.mask_dirty = {};
+    return released;
+}
+
 void CpuRenderInterface::end_frame() {
     state_->flush();
     state_->in_frame = false;

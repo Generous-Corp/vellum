@@ -30,6 +30,8 @@ validate_component_source = BACKEND_MODULE["validate_component_source"]
 build_component_modules = BACKEND_MODULE["build_component_modules"]
 contains_sdk_install_path = BACKEND_MODULE["contains_sdk_install_path"]
 lower_dom_snapshot = BACKEND_MODULE["lower_dom_snapshot"]
+lower_computed_material = BACKEND_MODULE["_lower_computed_material"]
+computed_gradient = BACKEND_MODULE["_computed_gradient"]
 CAPTURE_STYLE_NAMES = BACKEND_MODULE["CAPTURE_STYLE_NAMES"]
 chrome_path = BACKEND_MODULE["chrome_path"]
 BackendFailure = BACKEND_MODULE["BackendFailure"]
@@ -40,17 +42,128 @@ run_chrome_interaction_capture = BACKEND_MODULE["run_chrome_interaction_capture"
 validate_interaction_plan = BACKEND_MODULE["validate_interaction_plan"]
 
 sys.path.insert(0, str(REPO / "cli"))
+sys.path.insert(0, str(REPO / "cli/tests"))
 try:
     import vellum_png
+    import live_browser
 finally:
+    sys.path.pop(0)
     sys.path.pop(0)
 
 
-def browser_for_capture() -> str | None:
-    try:
-        return chrome_path()
-    except BackendFailure:
-        return None
+class LiveBrowserGateTests(unittest.TestCase):
+    """Live-browser tests never reach for the installed Chrome by default."""
+
+    def run_live_capture_test(self, environ: dict[str, str]):
+        case = next(case for case in globals().values()
+                    if isinstance(case, type) and issubclass(case, unittest.TestCase)
+                    and hasattr(case, "test_a_live_browser_capture_is_a_png_of_the_page"))
+        suite = unittest.TestSuite([case("test_a_live_browser_capture_is_a_png_of_the_page")])
+        result = unittest.TestResult()
+        system = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        with mock.patch.dict("os.environ", environ, clear=True), \
+             mock.patch("subprocess.Popen") as popen, \
+             mock.patch("subprocess.run") as run, \
+             mock.patch("shutil.which", return_value="/usr/bin/google-chrome"):
+            suite.run(result)
+        launched = [call for call in popen.call_args_list + run.call_args_list
+                    if system in repr(call) or "google-chrome" in repr(call)]
+        return result, popen, run, launched
+
+    def test_unset_pinned_browser_skips_and_never_launches_system_chrome(self) -> None:
+        result, popen, run, launched = self.run_live_capture_test({})
+        self.assertEqual((len(result.skipped), len(result.failures), len(result.errors)), (1, 0, 0))
+        self.assertIn("VELLUM_CHROME_PATH", result.skipped[0][1])
+        self.assertEqual(launched, [])
+        popen.assert_not_called()
+        run.assert_not_called()
+
+    def test_computed_material_rejects_elliptical_border_radius(self) -> None:
+        node = {"kind": "view", "properties": {}}
+        with self.assertRaisesRegex(BackendFailure, "elliptical border radius top-left") as raised:
+            lower_computed_material(
+                node, {"border-top-left-radius": "12px 6px"}, (0, 0, 80, 40))
+        self.assertEqual(raised.exception.status, "unsupported_material")
+
+    def test_computed_material_rejects_percentage_radius_on_non_square_box(self) -> None:
+        node = {"kind": "view", "properties": {}}
+        with self.assertRaisesRegex(BackendFailure, "percentage border radius top-left") as raised:
+            lower_computed_material(
+                node, {"border-top-left-radius": "50%"}, (0, 0, 80, 40))
+        self.assertEqual(raised.exception.status, "unsupported_material")
+
+    def test_computed_material_rejects_background_gradient_overflow(self) -> None:
+        node = {"kind": "view", "properties": {}}
+        layers = ", ".join("linear-gradient(to right, rgb(0, 0, 0), rgb(255, 255, 255))"
+                            for _ in range(9))
+        with self.assertRaisesRegex(BackendFailure, "more than 8 background gradients") as raised:
+            lower_computed_material(
+                node, {"background-image": layers}, (0, 0, 80, 40))
+        self.assertEqual(raised.exception.status, "unsupported_material")
+
+    def test_computed_gradient_retains_circle_shape_and_position(self) -> None:
+        gradient = computed_gradient(
+            "radial-gradient(circle 40% at 25% 75%, rgb(0, 0, 0), rgb(255, 255, 255))")
+        self.assertEqual(gradient["radiusX"], 0.4)
+        self.assertEqual(gradient["radiusY"], 0.4)
+        self.assertEqual(gradient["centerX"], 0.25)
+        self.assertEqual(gradient["centerY"], 0.75)
+
+    def test_computed_material_rejects_default_radial_gradient(self) -> None:
+        node = {"kind": "view", "properties": {}}
+        with self.assertRaisesRegex(BackendFailure, "default radial gradients") as raised:
+            lower_computed_material(
+                node, {"background-image": "radial-gradient(rgb(0, 0, 0), rgb(255, 255, 255))"},
+                (0, 0, 80, 40))
+        self.assertEqual(raised.exception.status, "unsupported_material")
+
+    def test_computed_material_rejects_unsupported_gradient_direction(self) -> None:
+        node = {"kind": "view", "properties": {}}
+        with self.assertRaisesRegex(BackendFailure, "unsupported CSS gradient layer") as raised:
+            lower_computed_material(
+                node,
+                {"background-image": "linear-gradient(to bottom right, rgb(0, 0, 0), rgb(255, 255, 255))"},
+                (0, 0, 80, 40),
+            )
+        self.assertEqual(raised.exception.status, "unsupported_material")
+
+    def test_a_set_but_unusable_pinned_browser_fails_instead_of_skipping(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing = str(Path(directory) / "no-such-chrome")
+            plain = Path(directory) / "plain"
+            plain.write_text("x", encoding="utf-8")
+            plain.chmod(0o644)
+            for pin in (missing, str(plain)):
+                with self.subTest(pin=pin):
+                    self.assertIsNone(live_browser.live_browser_skip_reason({"VELLUM_CHROME_PATH": pin}))
+                    result, popen, run, launched = self.run_live_capture_test({"VELLUM_CHROME_PATH": pin})
+                    self.assertEqual(len(result.skipped), 0)
+                    self.assertEqual(len(result.failures) + len(result.errors), 1)
+                    self.assertIn("VELLUM_CHROME_PATH does not name an executable browser",
+                                  (result.failures + result.errors)[0][1])
+                    self.assertEqual(launched, [])
+                    popen.assert_not_called()
+                    run.assert_not_called()
+
+    def test_escape_hatch_is_the_only_way_to_allow_the_system_browser(self) -> None:
+        self.assertIsNone(live_browser.live_browser_skip_reason({"VELLUM_TEST_ALLOW_SYSTEM_CHROME": "1"}))
+        self.assertIsNotNone(live_browser.live_browser_skip_reason({"VELLUM_TEST_ALLOW_SYSTEM_CHROME": "0"}))
+        self.assertIsNotNone(live_browser.live_browser_skip_reason({}))
+        self.assertIsNotNone(live_browser.live_browser_skip_reason({"VELLUM_CHROME_PATH": ""}))
+
+    def test_the_escape_hatch_does_not_reach_the_installed_browser_in_a_sandbox(self) -> None:
+        sandboxed = {"VELLUM_TEST_ALLOW_SYSTEM_CHROME": "1", "CODEX_SANDBOX": "seatbelt"}
+        self.assertIsNotNone(live_browser.live_browser_skip_reason(sandboxed))
+        result, popen, run, launched = self.run_live_capture_test(sandboxed)
+        self.assertEqual((len(result.skipped), len(result.failures), len(result.errors)), (1, 0, 0))
+        self.assertEqual(launched, [])
+
+    def test_a_pinned_executable_browser_may_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            browser = Path(directory) / "chrome"
+            browser.write_text("#!/bin/sh\n", encoding="utf-8")
+            browser.chmod(0o755)
+            self.assertIsNone(live_browser.live_browser_skip_reason({"VELLUM_CHROME_PATH": str(browser)}))
 
 
 class ChromeDiscoveryTests(unittest.TestCase):
@@ -113,6 +226,22 @@ class ChromeDiscoveryTests(unittest.TestCase):
                 mock.patch.object(shutil, "which", return_value="/usr/bin/google-chrome"):
             self.assertEqual(chrome_path(), "/usr/bin/google-chrome")
 
+    def test_discovery_refuses_the_installed_app_inside_a_sandbox(self) -> None:
+        environment = {key: value for key, value in os.environ.items()
+                       if key not in ("VELLUM_CHROME_PATH", "CODEX_SANDBOX")}
+        application = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        real_is_file = Path.is_file
+        def is_file(path: Path) -> bool:
+            return str(path) == application or real_is_file(path)
+        with mock.patch.object(shutil, "which", return_value=None), \
+                mock.patch.object(Path, "is_file", is_file):
+            with mock.patch.dict("os.environ", environment, clear=True):
+                self.assertEqual(chrome_path(), application)
+            with mock.patch.dict("os.environ", {**environment, "CODEX_SANDBOX": "seatbelt"},
+                                 clear=True):
+                with self.assertRaisesRegex(BackendFailure, "sandbox"):
+                    chrome_path()
+
 
 class BrowserCaptureLoweringTests(unittest.TestCase):
     def test_dom_snapshot_treats_absent_node_value_as_empty(self) -> None:
@@ -129,6 +258,39 @@ class BrowserCaptureLoweringTests(unittest.TestCase):
             snapshot, settled_snapshot=snapshot, screenshot={},
         )
         self.assertEqual(root["name"], "#document")
+
+    def test_dom_snapshot_omits_non_rendered_inline_source(self) -> None:
+        inline_source = "x" * (64 * 1024 + 1)
+        snapshot = {
+            "strings": ["#document", "SCRIPT", "STYLE", "P", "#text", inline_source, "Visible"],
+            "documents": [{
+                "nodes": {
+                    "nodeType": [9, 1, 3, 1, 3, 1, 3],
+                    "nodeName": [0, 1, 4, 2, 4, 3, 4],
+                    "nodeValue": [-1, -1, 5, -1, 5, -1, 6],
+                    "parentIndex": [-1, 0, 1, 0, 3, 0, 5],
+                },
+                "layout": {"nodeIndex": [0, 5, 6], "styles": [[], [], []]},
+            }],
+        }
+        root, _assets, evidence = lower_dom_snapshot(
+            snapshot, settled_snapshot=snapshot, screenshot={},
+        )
+        script, style, paragraph = root["children"]
+        self.assertEqual(script["children"], [])
+        self.assertEqual(style["children"], [])
+        self.assertEqual(paragraph["children"][0]["text"], "Visible")
+        self.assertEqual(evidence["settledSnapshot"]["strings"][5], inline_source)
+
+        snapshot["documents"][0]["nodes"]["nodeValue"][6] = 5
+        with self.assertRaisesRegex(BackendFailure, r"nodeValue\[6\].*invalid bounded string"):
+            lower_dom_snapshot(snapshot, settled_snapshot=snapshot, screenshot={})
+
+        layout = snapshot["documents"][0]["layout"]
+        layout["nodeIndex"].append(2)
+        layout["styles"].append([])
+        with self.assertRaisesRegex(BackendFailure, r"nodeValue\[2\].*invalid bounded string"):
+            lower_dom_snapshot(snapshot, settled_snapshot=snapshot, screenshot={})
 
     def test_dom_snapshot_treats_empty_attribute_value_as_empty(self) -> None:
         """Chrome sends alt="" as the -1 sentinel, not an index to an empty string."""
@@ -194,6 +356,29 @@ class BrowserCaptureLoweringTests(unittest.TestCase):
         computed = root["children"][0]["properties"]["computedStyles"]
         self.assertEqual(computed[CAPTURE_STYLE_NAMES[0]], "block")
         self.assertEqual(computed[CAPTURE_STYLE_NAMES[1]], "")
+
+    def test_empty_pseudo_element_row_cannot_replace_its_painted_box(self) -> None:
+        gradient = "radial-gradient(80% 60% at 50% 20%, rgb(0, 0, 0), rgba(0, 0, 0, 0))"
+        snapshot = {
+            "strings": ["#document", "::before", gradient],
+            "documents": [{
+                "nodes": {"nodeType": [9, 1], "nodeName": [0, 1], "nodeValue": [-1, -1],
+                          "parentIndex": [-1, 0], "attributes": [[], []]},
+                "layout": {"nodeIndex": [0, 1, 1], "styles": [[], [-1, -1, -1, -1, 2], [-1, -1, -1, -1, 2]],
+                           "bounds": [[0, 0, 800, 600], [5, 6, 80, 60], [0, 0, 0, 0]]},
+            }],
+        }
+        layout = snapshot["documents"][0]["layout"]
+        for include_empty_row in (True, False):
+            with self.subTest(include_empty_row=include_empty_row):
+                if not include_empty_row:
+                    for values in layout.values():
+                        values.pop()
+                root, _assets, _evidence = lower_dom_snapshot(
+                    snapshot, settled_snapshot=snapshot, screenshot={})
+                properties = root["children"][0]["properties"]
+                self.assertEqual(properties["layout"], {"x": 5, "y": 6, "width": 80, "height": 60})
+                self.assertEqual(properties["paint"]["backgroundGradients"][0]["radiusX"], 0.8)
 
     def test_dom_snapshot_lowers_chrome_boxes_relative_to_parent(self) -> None:
         """Each laid-out node keeps Chrome's box as a parent-relative frame."""
@@ -431,7 +616,7 @@ class WebCaptureArtifactTests(unittest.TestCase):
             self.assertEqual(output.read_bytes(), b"earlier capture")
             self.assertEqual([path.name for path in output.parent.iterdir()], ["hero.png"])
 
-    @unittest.skipUnless(browser_for_capture(), "a Chrome browser is required for the live capture proof")
+    @live_browser.requires_pinned_chrome
     def test_a_live_browser_capture_is_a_png_of_the_page(self) -> None:
         site = self.project / "site"
         site.mkdir()
@@ -455,6 +640,110 @@ class WebCaptureArtifactTests(unittest.TestCase):
         # The file shows the page the browser drew: the square, then the background.
         self.assertEqual(pixel(20, 20), (250, 20, 30, 255))
         self.assertEqual(pixel(viewport["width"] // 2, viewport["height"] // 2), (10, 100, 200, 255))
+
+
+class WebNoBuildFreshnessTests(unittest.TestCase):
+    """`--no-build` drives only a build whose recorded source digest matches."""
+
+    def built_project(self, root: Path) -> tuple[dict, Path]:
+        project = root / "application"
+        (project / "src").mkdir(parents=True)
+        (project / "src/main.tsx").write_text("export {};\n", encoding="utf-8")
+        (project / "app.toml").write_text("name = 'x'\n", encoding="utf-8")
+        built = project / ".vellum/build/web"
+        built.mkdir(parents=True)
+        (built / "build-manifest.json").write_text("{}", encoding="utf-8")
+        (built / "vellum_components.json").write_text(json.dumps({
+            "schema": "vellum.web-components.v1", "components": [],
+        }), encoding="utf-8")
+        BACKEND_MODULE["write_source_digest"](built, BACKEND_MODULE["build_input_digest"](project))
+        return {"root": project}, built
+
+    def test_package_and_capture_outputs_do_not_move_the_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, built = self.built_project(Path(temporary))
+            project = context["root"]
+            before = BACKEND_MODULE["build_input_digest"](project)
+            for name in ("dist-a", "dist-b", "dist", "artifacts"):
+                (project / name).mkdir()
+                (project / name / "out.bin").write_bytes(b"x")
+            self.assertEqual(BACKEND_MODULE["build_input_digest"](project), before)
+            self.assertEqual(
+                BACKEND_MODULE["ensure_build"](context, Path("/unused"), no_build=True)["root"],
+                built)
+
+    def test_a_fresh_build_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, built = self.built_project(Path(temporary))
+            self.assertEqual(
+                BACKEND_MODULE["ensure_build"](context, Path("/unused"), no_build=True)["root"],
+                built)
+
+    def test_an_edited_source_without_a_rebuild_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, _ = self.built_project(Path(temporary))
+            (context["root"] / "src/main.tsx").write_text("export const a = 1;\n", encoding="utf-8")
+            with self.assertRaisesRegex(BackendFailure, "stale.*source digest") as caught:
+                BACKEND_MODULE["ensure_build"](context, Path("/unused"), no_build=True)
+            self.assertEqual(caught.exception.status, "build_stale")
+
+    def test_an_edited_input_outside_the_watched_directories_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, _ = self.built_project(Path(temporary))
+            helper = context["root"] / "helper.ts"
+            helper.write_text("export const a = 1;\n", encoding="utf-8")
+            BACKEND_MODULE["write_source_digest"](
+                context["root"] / ".vellum/build/web",
+                BACKEND_MODULE["build_input_digest"](context["root"]))
+            helper.write_text("export const a = 2;\n", encoding="utf-8")
+            with self.assertRaisesRegex(BackendFailure, "stale.*source digest") as caught:
+                BACKEND_MODULE["ensure_build"](context, Path("/unused"), no_build=True)
+            self.assertEqual(caught.exception.status, "build_stale")
+
+    def test_a_source_edited_during_the_build_is_not_recorded(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            context, _ = self.built_project(root)
+            project = context["root"]
+            shutil.rmtree(project / ".vellum")
+            sdk = root / "sdk"
+            (sdk / "web").mkdir(parents=True)
+            for name in ("vellum_web_core.js", "vellum_web_core.wasm", "vellum_host.js",
+                         "text_semantics.js", "style.css", "check_wasm_no_engine.py"):
+                (sdk / "web" / name).write_text("x", encoding="utf-8")
+            (sdk / "web/index.html").write_text("{{APP_NAME}}", encoding="utf-8")
+            context.update({
+                "entry": project / "src/main.tsx", "slug": "x", "components": [],
+                "manifest": {"app": {"name": "x"}},
+            })
+
+            def bundle_while_editing(arguments: list[str], **_kwargs: object) -> object:
+                if len(arguments) == 4 and arguments[-1].endswith("app.js"):
+                    Path(arguments[-1]).write_text("void 0;\n", encoding="utf-8")
+                    Path(arguments[-1] + ".map").write_text("{}", encoding="utf-8")
+                    (project / "src/main.tsx").write_text("export const b = 1;\n", encoding="utf-8")
+                return object()
+
+            with mock.patch.dict(BACKEND_MODULE["build_app"].__globals__, {
+                "validate_web_payload": lambda _sdk: {},
+                "sdk_node": lambda _sdk: Path("node"),
+                "run_checked": bundle_while_editing,
+            }):
+                with self.assertRaises(BackendFailure) as caught:
+                    BACKEND_MODULE["build_app"](context, sdk)
+            self.assertEqual(caught.exception.status, "source_changed")
+            self.assertFalse((project / ".vellum/build/web").exists())
+
+    def test_a_build_with_no_recorded_digest_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, built = self.built_project(Path(temporary))
+            (built / "source-digest.json").unlink()
+            with self.assertRaisesRegex(BackendFailure, "records no source digest") as caught:
+                BACKEND_MODULE["ensure_build"](context, Path("/unused"), no_build=True)
+            self.assertEqual(caught.exception.status, "build_stale")
+            (built / "source-digest.json").write_text("not json", encoding="utf-8")
+            with self.assertRaises(BackendFailure):
+                BACKEND_MODULE["ensure_build"](context, Path("/unused"), no_build=True)
 
 
 class WebScenarioEvidenceTests(unittest.TestCase):

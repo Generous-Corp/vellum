@@ -48,7 +48,16 @@ The Canvas2D proof shell reports `VELLUM_WEB_GRADIENT_NOT_EXPRESSIBLE` for
 each version 8 gradient and gradient stroke it cannot draw before drawing its
 base colour.
 
-Vector assets use schema version 9. `importSvgAsset` in `@vellum/design-ir`
+Vector assets use schema version 9. A `vector` node holds a compiled vector
+asset: a display list of groups (transform, clip, opacity) and paths whose
+fills and strokes carry colours or gradients, which the Skia renderer and the
+Canvas2D shell both draw. DesignIR carries it as a `vector` node with
+`properties.vector`, and vellum-ui as the `Vector` primitive. The vellum-ui
+primitive and the native materializer refuse an asset the native renderer
+would refuse; DesignIR checks versions and field gating, not the asset's
+contents.
+
+Vector assets can come from SVG. `importSvgAsset` in `@vellum/design-ir`
 turns a sanitized SVG into a canonical subtree of path and group nodes when
 it can, so colours bound through `colorTokens` keep following their tokens,
 every element keeps a stable identity, and a change redraws only its node.
@@ -64,12 +73,14 @@ references, reference cycles, expansion past 50,000 nodes or 262,144 path
 commands and points, and numbers beyond one million are refused before any
 lowering.
 
-A DesignIR document that uses these fields (path and vector nodes, their
-property buckets, image sources and the opacity, transform, clip, mask,
-isolation and overflow paint keys) is written at DesignIR schema version 6;
-one without them stays at version 1. The validator and the published schema
-refuse those fields below version 6, and versions 2 to 5 are reserved for
-blend modes, effects and materials, animation tracks and plots.
+A DesignIR document is written at the oldest schema version that carries every
+field it uses: version 1 without any of the later fields, version 2 for the
+`compositing` object (blend mode, opacity, mask and isolation), 3 for material
+references, 4 for animation tracks and 5 for plot bindings. Version 6 covers
+path and vector nodes, `properties.path`, `properties.vector`,
+`properties.image.source`, and the paint keys `transform`, `clipPath` and
+`overflow`. The validator and the published schema refuse each field below the
+version that adds it, whatever the document's version.
 
 The history-preserving Pulp projection has been removed from the active tip.
 Its authorship and exact blobs remain auditable in Git history and immutable
@@ -88,7 +99,7 @@ Its authorship and exact blobs remain auditable in Git history and immutable
 
 The following is the exact published, immutable `v0.1.6` tagged-release flow
 from `Generous-Corp/vellum`. `v0.1.6` is the current published release; the
-source tree on `main` identifies as `0.2.0`, the next release, and is
+source tree on `main` identifies as `0.2.3`, the next release, and is
 unreleased. The name `v0.1.7` is retired and is never reused: it was published
 only on a deleted incubation repository (see
 [`provenance/retired-release-tags.json`](provenance/retired-release-tags.json)).
@@ -308,7 +319,7 @@ python3 scripts/build_sdk_artifact.py \
   --node-provenance /path/to/node-provenance.json \
   --output-dir dist --json
 ./scripts/install.sh \
-  --archive dist/vellum-sdk-0.2.0-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.2.3-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS
 
 app_dir="$(mktemp -d)/palette-board"
@@ -413,10 +424,10 @@ python3 scripts/build_sdk_artifact.py \
   --node-provenance /path/to/node-provenance.json \
   --output-dir dist --json
 python3 scripts/verify_sdk_artifact.py \
-  --archive dist/vellum-sdk-0.2.0-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.2.3-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS --json
 ./scripts/install.sh \
-  --archive dist/vellum-sdk-0.2.0-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.2.3-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS
 ```
 
@@ -448,7 +459,8 @@ and line-through styles. Packaged
 fonts resolve from `share/vellum/fonts` relative to the installed GPU library,
 so moving the install prefix does not reconnect the SDK to its source tree.
 `SkiaDawnSurface::measure_text` provides the same shaping path to installed C++
-consumers without creating a surface. Concurrent callers are supported when
+consumers without creating a surface; its `TextMeasureOptions` overload measures
+a paragraph wrapped and aligned by a version 13 `TextLayout`. Concurrent callers are supported when
 they retain their own input values; Vellum serializes `ParagraphBuilder`
 creation and layout while SkParagraph uses the shared packaged-font collection. The
 locked macOS proof runs the deterministic randomized concurrency fixture for
@@ -507,12 +519,12 @@ proves the imported design is embedded in the application bundle, exercises
 build/run/test/capture/package, and builds/tests a sterile CMake consumer
 without a Vellum or Pulp checkout.
 
-An exact release is consumed without a moving `latest` pointer. Once `v0.2.0`
+An exact release is consumed without a moving `latest` pointer. Once `v0.2.3`
 is published, the checkout installer installs it with:
 
 <!-- readme-exec: id=version-install-only manual=subset-of-release-quick-start -->
 ```sh
-./scripts/install.sh --version 0.2.0
+./scripts/install.sh --version 0.2.3
 ```
 
 The release `SHA256SUMS` covers the SDK archive, `install.sh`, and

@@ -531,15 +531,10 @@ Copyright 2020 The Jost Project Authors (https://github.com/indestructible-type/
 
 Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
 
-JetBrains Mono Regular is carried only in the framework mirror
-(`mirror/external/fonts/`), not in the installed SDK, under the SIL Open Font
-License, Version 1.1 reproduced below.
-
-The installed SDK redistributes Inter Regular and Jost Regular, Medium,
-SemiBold, and Bold, plus variable-weight Noto Sans JP and variable-width/weight
-Noto Sans Arabic. All seven files are
-licensed under the SIL Open Font License, Version 1.1. Exact versions and hashes
-are recorded in `assets/fonts/README.md`.
+The installed SDK redistributes JetBrains Mono Regular, Inter Regular,
+Jost Regular, Medium, SemiBold, and Bold, variable-weight Noto Sans JP, and
+variable-width/weight Noto Sans Arabic under the SIL Open Font License,
+Version 1.1. Exact versions and hashes are recorded in `assets/fonts/README.md`.
 
 ### Noto Sans JP
 
@@ -663,6 +658,30 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 Vellum's own source is licensed under the MIT terms in `LICENSE.md`.
+
+## TypeScript
+
+The optional macOS arm64 GPU SDK redistributes TypeScript 7.0.2 and its
+matching `@typescript/typescript-darwin-arm64` binary under `ui/node_modules/`
+for installed type checking of application code.
+
+Copyright (c) Microsoft Corporation. Licensed under the Apache License,
+Version 2.0, reproduced in the "Apache License, Version 2.0" section above.
+Each package keeps its upstream `LICENSE` and `NOTICE.txt` beside the code,
+and the `NOTICE.txt` files carry the notices of the third-party material
+TypeScript incorporates.
+
+## Node.js runtime
+
+The optional macOS arm64 GPU SDK redistributes the unmodified official
+Node.js 20.20.2 darwin-arm64 executable at `node/`, so authoring tools do not
+depend on the developer's Node.js installation.
+
+Copyright Node.js contributors. Node.js is released under the MIT License
+and bundles third-party components under their own licenses. The complete
+upstream license text, including those bundled notices, ships beside the
+executable as `node/LICENSE`; `node/provenance.json` records the source
+archive and the license file's SHA-256.
 ## Three.js
 
 The repository carries the Three.js 0.183.1 runtime payload (`assets/threejs`)
@@ -1373,6 +1392,51 @@ which draws from its Mbed TLS CTR-DRBG instance.
 
 ---
 
+## Optional V8 provider
+
+With `VELLUM_ENABLE_V8=ON` the SDK installs `lib/libv8.dylib`, the sealed V8
+15.8.62.6 shared library built by danielraffel/v8-builder
+(`v8-m158-15.8.62.6-38351a002e2c`), and links it from
+`Vellum::SkiaDawnProvider`. The default Vellum build and SDK do not carry it.
+
+Copyright 2014 the V8 project authors. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+   * Redistributions of source code must retain the above copyright
+     notice, this list of conditions and the following disclaimer.
+   * Redistributions in binary form must reproduce the above
+     copyright notice, this list of conditions and the following
+     disclaimer in the documentation and/or other materials provided
+     with the distribution.
+   * Neither the name of Google Inc. nor the names of its
+     contributors may be used to endorse or promote products derived
+     from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+The library exports only the `v8::` and `cppgc::` API, and statically
+bundles libraries whose notices survive that sealing. V8 is built with `Intl`,
+so it carries ICU's code under the Unicode License V3 and the ICU license (the
+ICU section above); the mac-arm64 archive ships no separate ICU data file. It also carries zlib under the zlib
+license and Abseil under the Apache License, Version 2.0 (the Chromium zlib,
+Abseil and Apache License sections above). Re-check these bundled notices
+against the V8 source tree's `third_party` licenses whenever the V8 pin moves.
+
+---
+
 ## Optional RmlUi module
 
 The components below are fetched at pinned identities and built from source
@@ -1476,6 +1540,87 @@ SOFTWARE.
 
 ---
 
+## Optional native Perfetto tracing
+
+With `VELLUM_ENABLE_TRACING=ON` the foundation unit's library carries Perfetto
+v57.2's amalgamated tracing SDK (`perfetto.h` and `perfetto.cc`, fetched by
+SHA-256), for development builds only. The default build and every release artifact
+leave it out. A development SDK installed by hand from a tracing-ON build
+carries it in the foundation library, so these notices apply to that copy.
+
+Copyright (C) 2019 The Android Open Source Project
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use this file except in compliance with the License. You may obtain a copy of
+the License at http://www.apache.org/licenses/LICENSE-2.0. Unless required by
+applicable law or agreed to in writing, software distributed under the License
+is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+KIND, either express or implied. See the License for the specific language
+governing permissions and limitations under the License. The Apache License,
+Version 2.0 is reproduced above.
+
+The amalgamation also holds code from OpenBSD's `tree.h` (Perfetto's
+`src/base/intrusive_tree.cc`), under this license:
+
+$OpenBSD: tree.h,v 1.31 2023/03/08 04:43:09 guenther Exp $
+
+Copyright 2002 Niels Provos <provos@citi.umich.edu>
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+---
+
+## melatonin_perfetto
+
+Copyright (c) 2022 Sudara (melatonin_perfetto contributors)
+
+The framework's tracing header (`vellum/runtime/trace.hpp`) adapts the
+compile-time `PRETTY_FUNCTION` trimmer (`compileTimePrettierFunction`) from
+melatonin_perfetto v1.4.0 (https://github.com/sudara/melatonin_perfetto). That
+trimmer is the only code used, and it compiles only with
+`VELLUM_ENABLE_TRACING=ON`.
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
 ## Mirrored Pulp framework legal index
 
 This index applies only to third-party bytes admitted below `mirror/` by
@@ -1515,7 +1660,7 @@ here and must travel with the mirrored files.
 | SDL3 | zlib | `render-2d` and `view-core` unit external input, built from source as `SDL3-static`; bytes not mirrored | Carry zlib notice; license ships under `sdk/mirror/share/licenses/sdl3/` |
 | SheenBidi | Apache-2.0 | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | Carry Apache-2.0 text |
 | Skia and skcms | BSD-3-Clause | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | Text above |
-| V8 | BSD-3-Clause | not mirrored; no landed unit consumes it yet (planned scripted-view unit, when selected) | Text above plus ICU/zlib/Abseil |
+| V8 | BSD-3-Clause | `view-script` unit external input with `VELLUM_ENABLE_V8=ON`; `lib/libv8.dylib` installed beside the provider; bytes not mirrored | Text in "Optional V8 provider" plus ICU/zlib/Abseil |
 | yaml-cpp | MIT | `design-import` unit external input, built from source as `yaml-cpp`; bytes not mirrored | Carry upstream MIT text; license ships under `sdk/mirror/share/licenses/yaml-cpp/` |
 | Yoga | MIT | `view-core` unit external input, built from source as `yogacore`; bytes not mirrored | Carry upstream MIT text; license ships under `sdk/mirror/share/licenses/yoga/` |
 

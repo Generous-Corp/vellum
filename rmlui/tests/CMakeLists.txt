@@ -2,17 +2,34 @@ set(_vellum_rmlui_fixtures "${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
 function(vellum_rmlui_add_test name source)
     add_executable(${name} ${source})
+    target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(${name} PRIVATE ${ARGN})
     target_compile_definitions(${name} PRIVATE
         VELLUM_RMLUI_TEST_FIXTURES="${_vellum_rmlui_fixtures}")
+    # Windows has no rpath: a test that calls into a shared library (such as
+    # vellum-rmlui-core.dll) fails to start with STATUS_DLL_NOT_FOUND unless
+    # the DLL sits beside the executable. The executable itself is passed too
+    # so the copy never receives an empty list.
+    if(WIN32)
+        add_custom_command(TARGET ${name} POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "$<TARGET_RUNTIME_DLLS:${name}>" "$<TARGET_FILE:${name}>"
+                "$<TARGET_FILE_DIR:${name}>"
+            COMMAND_EXPAND_LISTS)
+    endif()
 endfunction()
+
+if(TARGET vellum-rmlui-plugin-view)
+    vellum_rmlui_add_test(vellum-rmlui-plugin-view-test ../plugin_view/tests/plugin_view_test.cpp vellum-rmlui-plugin-view)
+    add_test(NAME vellum.rmlui.plugin-view COMMAND vellum-rmlui-plugin-view-test)
+endif()
 
 vellum_rmlui_add_test(vellum-rmlui-backend-test backend_test.cpp VellumRmlUi::Core)
 
 # The link boundary check (cmake/VellumRmlUiLinkBoundary.cmake), on a stand-in
 # project: clean passes, and each planted violation fails it with its own
 # message, so a check that cannot see a link cannot pass.
-foreach(_case IN ITEMS clean private genex alias unlinked_renderer)
+foreach(_case IN ITEMS clean private near_match genex alias unlinked_renderer unlinked_plugin_view)
     set(_name "vellum.rmlui.link-boundary-${_case}")
     add_test(NAME "${_name}"
         COMMAND "${CMAKE_COMMAND}"
@@ -21,15 +38,19 @@ foreach(_case IN ITEMS clean private genex alias unlinked_renderer)
             "-DVELLUM_RMLUI_MODULE_DIR=${PROJECT_SOURCE_DIR}"
             "-DPLANT=${_case}")
     if(_case STREQUAL "clean")
-        set(_expect "rmlui-link-boundary: 3 targets checked; only vellum-rmlui-vellum-renderer links Vellum")
+        set(_expect "rmlui-link-boundary: [0-9]+ targets checked; only vellum-rmlui-vellum-renderer and vellum-rmlui-plugin-view may link Vellum")
     elseif(_case STREQUAL "private")
         set(_expect "rmlui-link-boundary: vellum-rmlui-native links Vellum::Gpu")
+    elseif(_case STREQUAL "near_match")
+        set(_expect "rmlui-link-boundary: vellum-rmlui-plugin-view-extra links Vellum::MirrorView_core")
     elseif(_case STREQUAL "genex")
         set(_expect "rmlui-link-boundary: vellum-rmlui-core links [^\n]*Vellum::Gpu")
     elseif(_case STREQUAL "alias")
         set(_expect "rmlui-link-boundary: vellum-rmlui-native links VellumRmlUi::Gpu \\(alias VellumRmlUi::Gpu -> Vellum::Gpu\\)")
-    else()
+    elseif(_case STREQUAL "unlinked_renderer")
         set(_expect "rmlui-link-boundary: vellum-rmlui-vellum-renderer links no Vellum target")
+    else()
+        set(_expect "rmlui-link-boundary: vellum-rmlui-plugin-view links no Vellum target")
     endif()
     set_tests_properties("${_name}" PROPERTIES PASS_REGULAR_EXPRESSION "${_expect}")
 endforeach()
@@ -40,6 +61,11 @@ if(VELLUM_RMLUI_FONTS AND EXISTS "${_vellum_rmlui_test_font}")
         VELLUM_RMLUI_TEST_FONT="${_vellum_rmlui_test_font}")
 endif()
 add_test(NAME vellum.rmlui.backend COMMAND vellum-rmlui-backend-test)
+
+vellum_rmlui_add_test(vellum-rmlui-idle-update-test idle_update_test.cpp RmlUi::Core)
+target_compile_features(vellum-rmlui-idle-update-test PRIVATE cxx_std_20)
+vellum_rmlui_require_nonfinite(vellum-rmlui-idle-update-test PRIVATE)
+add_test(NAME vellum.rmlui.idle-update COMMAND vellum-rmlui-idle-update-test)
 
 vellum_rmlui_add_test(vellum-rmlui-image-compare-test image_compare_test.cpp VellumRmlUi::Core)
 add_test(NAME vellum.rmlui.image-compare COMMAND vellum-rmlui-image-compare-test)
@@ -77,6 +103,11 @@ if(VELLUM_RMLUI_CPU)
     # NativeContext::warm(): the first frame after it loads no texture.
     vellum_rmlui_add_test(vellum-rmlui-native-warm-test native_warm_test.cpp VellumRmlUi::Native VellumRmlUi::Cpu)
     add_test(NAME vellum.rmlui.native-warm COMMAND vellum-rmlui-native-warm-test)
+
+    # The API-level macros in native.hpp name interfaces that exist.
+    vellum_rmlui_add_test(vellum-rmlui-native-api-version-test native_api_version_test.cpp
+        VellumRmlUi::Native VellumRmlUi::Cpu)
+    add_test(NAME vellum.rmlui.native-api-version COMMAND vellum-rmlui-native-api-version-test)
 
     # A newly shown element draws its first frame with every transform it
     # inherits, so a host that repaints only on change never keeps a wrong one.
@@ -142,6 +173,20 @@ if(VELLUM_RMLUI_NATIVE)
     set_tests_properties(vellum.rmlui.native-text-input PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
+if(VELLUM_RMLUI_NATIVE_HOST)
+    vellum_rmlui_add_test(vellum-rmlui-native-parent-host-test native_parent_host_test.mm
+        VellumRmlUi::NativeHost)
+    target_compile_options(vellum-rmlui-native-parent-host-test PRIVATE -fobjc-arc)
+    target_link_libraries(vellum-rmlui-native-parent-host-test PRIVATE
+        "-framework Cocoa" "-framework QuartzCore")
+    # The test names RmlUi key identifiers to check the AppKit key mapping.
+    FetchContent_GetProperties(vellum_rmlui_rmlui SOURCE_DIR _vellum_rmlui_host_test_rmlui_src)
+    target_include_directories(vellum-rmlui-native-parent-host-test PRIVATE
+        "${_vellum_rmlui_host_test_rmlui_src}/Include")
+    add_test(NAME vellum.rmlui.native-parent-host
+        COMMAND vellum-rmlui-native-parent-host-test)
+endif()
+
 # The Metal renderer drawn headless and compared with the soft renderer. The
 # reference and the Metal frames come from separate processes (Core and Native
 # each carry their own RmlUi), joined by a ctest fixture. The blend control is
@@ -188,6 +233,15 @@ if(VELLUM_RMLUI_METAL AND VELLUM_RMLUI_FONTS)
         COMMAND vellum-rmlui-metal-layers-test "${_vellum_rmlui_rmlui_src}" "${_vellum_rmlui_fixtures}")
     set_tests_properties(vellum.rmlui.metal-layers PROPERTIES SKIP_RETURN_CODE 77)
 
+    # MetalRenderInterface::trim(): releases the cached targets between frames,
+    # even with the previous frame still on the GPU, and draws the same pixels after.
+    vellum_rmlui_add_test(vellum-rmlui-metal-trim-test metal/metal_trim_test.mm
+        VellumRmlUi::Native VellumRmlUi::Metal)
+    target_compile_options(vellum-rmlui-metal-trim-test PRIVATE -fobjc-arc)
+    add_test(NAME vellum.rmlui.metal-trim
+        COMMAND vellum-rmlui-metal-trim-test "${_vellum_rmlui_rmlui_src}" "${_vellum_rmlui_fixtures}")
+    set_tests_properties(vellum.rmlui.metal-trim PROPERTIES SKIP_RETURN_CODE 77)
+
     vellum_rmlui_add_test(vellum-rmlui-metal-filters-test metal/metal_filters_test.mm
         VellumRmlUi::Native VellumRmlUi::Metal)
     target_compile_options(vellum-rmlui-metal-filters-test PRIVATE -fobjc-arc)
@@ -223,6 +277,12 @@ if(VELLUM_RMLUI_METAL AND VELLUM_RMLUI_FONTS)
             VellumRmlUi::Native VellumRmlUi::Metal VellumRmlUi::Cpu
             "-framework CoreGraphics" "-framework ImageIO")
         target_compile_options(vellum-rmlui-cpu-vs-metal-test PRIVATE -fobjc-arc)
+        if(IOS)
+            add_custom_command(TARGET vellum-rmlui-cpu-vs-metal-test POST_BUILD
+                COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                    "${_vellum_rmlui_metal_library}"
+                    "$<TARGET_FILE_DIR:vellum-rmlui-cpu-vs-metal-test>/vellum-rmlui-metal.metallib")
+        endif()
         add_test(NAME vellum.rmlui.cpu-vs-metal
             COMMAND vellum-rmlui-cpu-vs-metal-test "${_vellum_rmlui_rmlui_src}" "${_vellum_rmlui_fixtures}")
         set_tests_properties(vellum.rmlui.cpu-vs-metal PROPERTIES SKIP_RETURN_CODE 77)
@@ -282,6 +342,7 @@ if(VELLUM_RMLUI_INSTALL AND NOT CMAKE_CROSSCOMPILING)
             "-DVELLUM_RMLUI_BUILD_DIR=${PROJECT_BINARY_DIR}"
             "-DVELLUM_RMLUI_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
             "-DVELLUM_RMLUI_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
+            "-DVELLUM_RMLUI_NATIVE_HOST=${VELLUM_RMLUI_NATIVE_HOST}"
             "-DTEST_CONFIG=$<CONFIG>"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/RunInstallConsumer.cmake")
     if(APPLE)
@@ -319,6 +380,7 @@ if(VELLUM_RMLUI_INSTALL AND NOT CMAKE_CROSSCOMPILING)
                 "-DVELLUM_RMLUI_BUILD_DIR=${PROJECT_BINARY_DIR}"
                 "-DVELLUM_RMLUI_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
                 "-DVELLUM_RMLUI_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
+                "-DVELLUM_RMLUI_NATIVE_HOST=${VELLUM_RMLUI_NATIVE_HOST}"
                 "-DVELLUM_RMLUI_CONSUMER=native"
                 "-DVELLUM_RMLUI_FONTS=${VELLUM_RMLUI_FONTS}"
                 "-DTEST_CONFIG=$<CONFIG>"

@@ -1,10 +1,26 @@
 import { services } from './services.js';
+import { utf8ByteLength } from './utf8.js';
 import {
     adoptLiveEffects,
     cloneEffect,
     registerEffect,
     scheduleCommittedEffects,
 } from './effects.js';
+import {
+    MAX_FLOAT32,
+    MAX_DESIGN_TOKENS as MAXIMUM_TOKENS,
+    MAX_PATH_DASHES as MAXIMUM_PATH_DASHES,
+    MAX_PATH_DATA_BYTES as MAXIMUM_PATH_DATA_LENGTH,
+    MAX_PLOT_AUDIO_CHANNEL as MAXIMUM_PLOT_AUDIO_CHANNEL,
+    MAX_PLOT_SLOTS as MAXIMUM_PLOT_SLOTS,
+    MAX_PLOT_STROKE as MAXIMUM_PLOT_STROKE,
+    MAX_GRADIENT_STOPS,
+    MAX_SOURCE_ANCHOR_BYTES,
+    MAX_SOURCE_FILE_BYTES,
+    MAX_TEXT_INPUT_BYTES as MAXIMUM_TEXT_INPUT_LENGTH,
+    MAX_VECTOR_GROUP_DEPTH as MAXIMUM_VECTOR_GROUP_DEPTH,
+    MAX_VECTOR_OPS as MAXIMUM_VECTOR_OPS,
+} from './limits.generated.js';
 
 const ELEMENT = Symbol.for('vellum.element');
 const FRAGMENT = Symbol.for('vellum.fragment');
@@ -12,17 +28,12 @@ const PROTOCOL = 'vellum.authoring-host.v1';
 const ASYNC_HOST_PROTOCOL = 'vellum.authoring-host.v2';
 const SNAPSHOT_SCHEMA = 'vellum.authoring-state.v1';
 const TEXT_INPUT_PRIMITIVE_VERSION = 1;
-const MAXIMUM_TEXT_INPUT_LENGTH = 65536;
 const MAXIMUM_TEXT_INPUT_PLACEHOLDER_LENGTH = 1024;
-const MAXIMUM_PATH_DATA_LENGTH = 65536;
-const MAXIMUM_PATH_DASHES = 64;
 const HEX_COLOR = /^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$/;
 const INTRINSIC_TYPES = new Set([
     'view', 'stack', 'text', 'text-run', 'text-input', 'button', 'image', 'canvas', 'custom',
-    'path', 'vector',
+    'path', 'vector', 'plot',
 ]);
-const MAXIMUM_VECTOR_OPS = 16384;
-const MAXIMUM_VECTOR_GROUP_DEPTH = 64;
 
 let renderingRuntime = null;
 
@@ -161,6 +172,7 @@ export const Image = primitive('image');
 export const Canvas = primitive('canvas');
 export const Path = primitive('path');
 export const Vector = primitive('vector');
+export const Plot = primitive('plot');
 export function TextInput(properties = {}) {
     return jsx('text-input', { ...properties, primitiveVersion: TEXT_INPUT_PRIMITIVE_VERSION });
 }
@@ -349,8 +361,8 @@ function validateLinearGradient(value, path, { coincidentStops = false } = {}) {
         finitePaintNumber(gradient[name], `${path}.${name}`, { optional: true, nonNegative: true });
     }
     if (!Array.isArray(gradient.stops) ||
-        gradient.stops.length < 2 || gradient.stops.length > 64) {
-        throw new TypeError(`${path}.stops must contain between 2 and 64 stops`);
+        gradient.stops.length < 2 || gradient.stops.length > MAX_GRADIENT_STOPS) {
+        throw new TypeError(`${path}.stops must contain between 2 and ${MAX_GRADIENT_STOPS} stops`);
     }
     let previous = -1;
     for (let index = 0; index < gradient.stops.length; index += 1) {
@@ -369,6 +381,16 @@ function validateLinearGradient(value, path, { coincidentStops = false } = {}) {
 }
 
 function validateBoxShadow(value, path) {
+    if (Array.isArray(value)) {
+        if (value.length === 0 || value.length > 8) {
+            throw new TypeError(`${path} must contain between 1 and 8 shadows`);
+        }
+        return value.map((shadow, index) => validateBoxShadowEntry(shadow, `${path}[${index}]`));
+    }
+    return validateBoxShadowEntry(value, path);
+}
+
+function validateBoxShadowEntry(value, path) {
     const shadow = paintStyleObject(
         value, path, ['offsetX', 'offsetY', 'blurRadius', 'spreadRadius', 'color']);
     for (const name of ['offsetX', 'offsetY']) {
@@ -385,6 +407,19 @@ function validateBoxShadow(value, path) {
     return cloneJson(shadow, path);
 }
 
+function validateBorder(value, path) {
+    const border = paintStyleObject(value, path, ['width', 'style', 'color']);
+    finitePaintNumber(border.width, `${path}.width`, { optional: true, nonNegative: true });
+    if (border.style !== undefined && border.style !== 'solid') {
+        throw new TypeError(`${path}.style must be solid`);
+    }
+    if (typeof border.color !== 'string' ||
+        !/^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$/.test(border.color)) {
+        throw new TypeError(`${path}.color must be a hex color`);
+    }
+    return cloneJson(border, path);
+}
+
 function pathKeyword(value, path, names) {
     if (value !== undefined && !names.includes(value)) {
         throw new TypeError(`${path} must be one of ${names.join(', ')}`);
@@ -393,10 +428,10 @@ function pathKeyword(value, path, names) {
 }
 
 function validatePath(properties, path) {
-    if (typeof properties.d !== 'string' || properties.d.length > MAXIMUM_PATH_DATA_LENGTH) {
+    if (typeof properties.d !== 'string' || utf8ByteLength(properties.d) > MAXIMUM_PATH_DATA_LENGTH) {
         throw new TypeError(
             `${path}.Path d must be SVG path data of at most ` +
-            `${MAXIMUM_PATH_DATA_LENGTH} characters`,
+            `${MAXIMUM_PATH_DATA_LENGTH} UTF-8 bytes`,
         );
     }
     const output = { d: properties.d };
@@ -461,9 +496,29 @@ function vectorMatrix(value, path) {
 }
 
 function vectorPathData(value, path) {
-    if (typeof value !== 'string' || value.length > MAXIMUM_PATH_DATA_LENGTH) {
+    if (typeof value !== 'string' || utf8ByteLength(value) > MAXIMUM_PATH_DATA_LENGTH) {
         throw new TypeError(
-            `${path} must be SVG path data of at most ${MAXIMUM_PATH_DATA_LENGTH} characters`);
+            `${path} must be SVG path data of at most ${MAXIMUM_PATH_DATA_LENGTH} UTF-8 bytes`);
+    }
+}
+
+function vectorGradientGeometry(gradient, path) {
+    const kind = gradient.kind ?? 'linear';
+    // Compare the native defaults after the materializer's float32 conversion.
+    const radiusX = Math.fround(gradient.radiusX ?? 0);
+    const radiusY = Math.fround(gradient.radiusY ?? 0);
+    const startRadius = Math.fround(gradient.startRadius ?? 0);
+    const endRadius = Math.fround(gradient.endRadius ?? 0.5);
+    if (kind !== 'radial' && (radiusX !== 0 || radiusY !== 0)) {
+        throw new TypeError(`${path}: radius x and y apply only to radial gradients`);
+    }
+    if (kind !== 'two-circle-radial' && (startRadius !== 0 || endRadius !== 0.5)) {
+        throw new TypeError(`${path}: start and end radius apply only to two-circle radial gradients`);
+    }
+    if (kind === 'two-circle-radial' && startRadius === endRadius &&
+        Math.fround(gradient.focalX ?? 0.5) === Math.fround(gradient.centerX ?? 0.5) &&
+        Math.fround(gradient.focalY ?? 0.5) === Math.fround(gradient.centerY ?? 0.5)) {
+        throw new TypeError(`${path}: the start and end circles of a two-circle radial gradient are identical`);
     }
 }
 
@@ -475,6 +530,7 @@ function vectorPaint(value, path) {
     }
     const paint = paintStyleObject(value, path, ['gradient', 'transform']);
     validateLinearGradient(paint.gradient, `${path}.gradient`, { coincidentStops: true });
+    vectorGradientGeometry(paint.gradient, `${path}.gradient`);
     if (paint.gradient.repeatLength !== undefined) {
         throw new TypeError(`${path}.gradient cannot set a repeat length in a vector asset`);
     }
@@ -578,6 +634,89 @@ function validateVector(properties, path) {
     return { asset: cloneJson(asset, `${path}.Vector asset`) };
 }
 
+function plotWhole(value, path, minimum, maximum) {
+    if (value === undefined) return;
+    if (!Number.isInteger(value) || value < minimum || value > maximum) {
+        throw new TypeError(`${path} must be a whole number from ${minimum} to ${maximum}`);
+    }
+}
+
+const PLOT_SOURCES_BY_STYLE = Object.freeze({
+    line: Object.freeze(['scalar', 'vector']),
+    area: Object.freeze(['scalar', 'vector']),
+    bar: Object.freeze(['vector']),
+    meter: Object.freeze(['meter']),
+});
+
+// A plot names a value-feed channel and how to draw it; the samples arrive at
+// run time, so a plot carries none.
+function validatePlot(properties, path) {
+    const style = pathKeyword(properties.plot, `${path}.plot`, ['line', 'area', 'bar', 'meter']);
+    if (style === undefined) throw new TypeError(`${path}.Plot plot must be line, area, bar or meter`);
+    if (typeof properties.channel !== 'string' || properties.channel.length === 0) {
+        throw new TypeError(`${path}.Plot channel must name a value-feed channel`);
+    }
+    const output = { plot: style, channel: properties.channel };
+    for (const [name, values] of [
+        ['source', ['scalar', 'meter', 'vector']],
+        ['history', ['scroll', 'sweep']],
+        ['orientation', ['vertical', 'horizontal']],
+    ]) {
+        const value = pathKeyword(properties[name], `${path}.${name}`, values);
+        if (value !== undefined) output[name] = value;
+    }
+    // The channel shape each style reads, matching native plot_is_valid: an
+    // omitted source defaults to vector, or meter for a meter plot.
+    const shapes = PLOT_SOURCES_BY_STYLE[style];
+    if (output.source !== undefined && !shapes.includes(output.source)) {
+        throw new TypeError(
+            `${path}.source must be ${shapes.join(' or ')} for a ${style} plot`);
+    }
+    plotWhole(properties.slots, `${path}.slots`, 1, MAXIMUM_PLOT_SLOTS);
+    plotWhole(properties.audioChannel, `${path}.audioChannel`, 0, MAXIMUM_PLOT_AUDIO_CHANNEL);
+    if (style !== 'meter' && properties.slots === undefined) {
+        throw new TypeError(`${path}.Plot slots is required for a ${style} plot`);
+    }
+    // The renderer holds these as single-precision floats: a value must fit
+    // one, and the stroke limit and the range compare the rounded values.
+    for (const name of ['min', 'max', 'baseline', 'lineWidth', 'barGap', 'peakWidth']) {
+        const value = properties[name];
+        if (value === undefined) continue;
+        finitePaintNumber(value, `${path}.${name}`);
+        if (Math.abs(value) > MAX_FLOAT32) {
+            throw new TypeError(`${path}.${name} must be within float range`);
+        }
+    }
+    for (const name of ['lineWidth', 'barGap', 'peakWidth']) {
+        const value = properties[name];
+        if (value === undefined) continue;
+        if (Math.fround(value) < 0) {
+            throw new TypeError(`${path}.${name} must be a non-negative finite number`);
+        }
+        if (Math.fround(value) > MAXIMUM_PLOT_STROKE) {
+            throw new TypeError(`${path}.${name} must be at most ${MAXIMUM_PLOT_STROKE}`);
+        }
+    }
+    // Native plot_is_valid refuses an empty range of floats; min defaults to 0
+    // and max to 1.
+    const low = properties.min === undefined ? 0 : properties.min;
+    const high = properties.max === undefined ? 1 : properties.max;
+    if (Math.fround(low) === Math.fround(high)) {
+        throw new TypeError(`${path}.Plot value range must not be empty once rounded to float (min equals max)`);
+    }
+    for (const name of ['lineColor', 'fillColor', 'peakColor']) {
+        const color = properties[name];
+        if (color !== undefined && !(typeof color === 'string' && HEX_COLOR.test(color))) {
+            throw new TypeError(`${path}.${name} must be a hex color`);
+        }
+    }
+    for (const name of ['slots', 'audioChannel', 'min', 'max', 'baseline', 'lineWidth', 'barGap',
+        'peakWidth', 'lineColor', 'fillColor', 'peakColor']) {
+        if (properties[name] !== undefined) output[name] = properties[name];
+    }
+    return output;
+}
+
 function validateImage(properties, path) {
     const output = {};
     const fit = pathKeyword(properties.fit, `${path}.fit`, ['fill', 'contain', 'cover', 'none']);
@@ -619,8 +758,20 @@ function validateStyle(style, path) {
             result[name] = validateLinearGradient(value, `${path}.style.${name}`);
             continue;
         }
+        if (name === 'backgroundGradients') {
+            if (!Array.isArray(value) || value.length > 8) {
+                throw new TypeError(`${path}.style.backgroundGradients requires up to eight layers`);
+            }
+            result[name] = value.map((layer, index) => validateLinearGradient(
+                layer, `${path}.style.backgroundGradients.${index}`, { coincidentStops: true }));
+            continue;
+        }
         if (name === 'boxShadow') {
             result[name] = validateBoxShadow(value, `${path}.style.${name}`);
+            continue;
+        }
+        if (name === 'border') {
+            result[name] = validateBorder(value, `${path}.style.${name}`);
             continue;
         }
         if (!['string', 'number', 'boolean'].includes(typeof value)) {
@@ -632,6 +783,92 @@ function validateStyle(style, path) {
         result[name] = value;
     }
     return result;
+}
+
+const TOKEN_COLOR = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+
+function canonicalTokenColor(value) {
+    if (typeof value !== 'string' || !TOKEN_COLOR.test(value)) return undefined;
+    const digits = value.length <= 5
+        ? [...value.slice(1)].map((digit) => digit + digit).join('') : value.slice(1);
+    return `#${digits.toLowerCase()}`;
+}
+
+// The colour each token slot names, by element type: `[property, colour]`, or
+// undefined when the slot does not exist on that element.
+function tokenSlotColor(slot, type, style, pathProperties) {
+    const stop = /^(backgroundLinearGradient|backgroundGradients\.([0-7]))\.stops\.(0|[1-9][0-9]*)$/.exec(slot);
+    const pathStop = /^fill\.stops\.(0|[1-9][0-9]*)$/.exec(slot);
+    if (type === 'path') {
+        if (slot === 'fill' && typeof pathProperties?.fill === 'string') {
+            return ['fill', pathProperties.fill];
+        }
+        if (slot === 'stroke') return ['stroke', pathProperties?.stroke];
+        if (pathStop && typeof pathProperties?.fill === 'object') {
+            return [slot, pathProperties.fill.stops?.[Number(pathStop[1])]?.color];
+        }
+        return undefined;
+    }
+    if (slot === 'color') return ['style.color', style?.color];
+    if (type === 'text-run') return undefined;
+    if (slot === 'backgroundColor') return ['style.backgroundColor', style?.backgroundColor];
+    if (slot === 'boxShadow') {
+        const shadows = style?.boxShadow;
+        if (Array.isArray(shadows) && shadows.length !== 1) return undefined;
+        const shadow = Array.isArray(shadows) ? shadows[0] : shadows;
+        return ['style.boxShadow.color', shadow?.color];
+    }
+    if (stop) {
+        const layer = stop[1] === 'backgroundLinearGradient'
+            ? style?.backgroundLinearGradient
+            : style?.backgroundGradients?.[Number(stop[2])];
+        return [`style.${slot}`, layer?.stops?.[Number(stop[3] ?? stop[2])]?.color];
+    }
+    return undefined;
+}
+
+function internTokenRefs(value, type, style, pathProperties, state, path) {
+    if (value === undefined) return undefined;
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+        throw new TypeError(`${path}.tokenRefs must be an object`);
+    }
+    const result = {};
+    for (const slot of Object.keys(value).sort()) {
+        const target = tokenSlotColor(slot, type, style, pathProperties);
+        if (target === undefined) {
+            throw new TypeError(`${path}.tokenRefs.${slot} is not a token slot of ${type}`);
+        }
+        const receipt = value[slot];
+        if (receipt === null || typeof receipt !== 'object' ||
+            typeof receipt.path !== 'string' || receipt.path.length === 0 ||
+            typeof receipt.layer !== 'string' || receipt.layer.length === 0 ||
+            typeof receipt.value !== 'string' || !TOKEN_COLOR.test(receipt.value)) {
+            throw new TypeError(
+                `${path}.tokenRefs.${slot} must hold a path, a layer and a colour value`);
+        }
+        const [property, color] = target;
+        if (canonicalTokenColor(color) !== canonicalTokenColor(receipt.value)) {
+            throw new Error(`${path}.tokenRefs.${slot} disagrees with ${property}`);
+        }
+        const canonical = canonicalTokenColor(receipt.value);
+        const known = state.tokens.get(receipt.path);
+        if (known === undefined) {
+            if (state.tokens.size >= MAXIMUM_TOKENS) {
+                throw new Error('the token table exceeds its size limit');
+            }
+            state.tokens.set(receipt.path, {
+                index: state.tokens.size,
+                receipt: { layer: receipt.layer, path: receipt.path, value: canonical },
+            });
+            result[slot] = state.tokens.size - 1;
+        } else {
+            if (known.receipt.layer !== receipt.layer || known.receipt.value !== canonical) {
+                throw new Error(`token ${receipt.path} resolves to two different receipts`);
+            }
+            result[slot] = known.index;
+        }
+    }
+    return Object.keys(result).length === 0 ? undefined : result;
 }
 
 function textNode(value, runtime, path) {
@@ -687,10 +924,10 @@ function materialize(value, runtime, path) {
             throw new Error(`${path}.TextInput requires an explicit stable id`);
         }
         if (typeof value.props.value !== 'string' ||
-            value.props.value.length > MAXIMUM_TEXT_INPUT_LENGTH) {
+            utf8ByteLength(value.props.value) > MAXIMUM_TEXT_INPUT_LENGTH) {
             throw new TypeError(
                 `${path}.TextInput value must be a string of at most ` +
-                `${MAXIMUM_TEXT_INPUT_LENGTH} code units`,
+                `${MAXIMUM_TEXT_INPUT_LENGTH} UTF-8 bytes`,
             );
         }
         if (value.props.placeholder !== undefined &&
@@ -714,6 +951,9 @@ function materialize(value, runtime, path) {
     if (value.type === 'vector' && childValues.length > 0) {
         throw new TypeError(`${path}.Vector does not accept children`);
     }
+    if (value.type === 'plot' && childValues.length > 0) {
+        throw new TypeError(`${path}.Plot does not accept children`);
+    }
     if (value.type === 'image' && childValues.length > 0 &&
         typeof value.props.source === 'string' &&
         /^(?:sha256:)?[0-9a-f]{64}$/i.test(value.props.source.trim())) {
@@ -722,10 +962,11 @@ function materialize(value, runtime, path) {
     const pathProperties = value.type === 'path' ? validatePath(value.props, path) : undefined;
     const imageProperties = value.type === 'image' ? validateImage(value.props, path) : undefined;
     const vectorProperties = value.type === 'vector' ? validateVector(value.props, path) : undefined;
+    const plotProperties = value.type === 'plot' ? validatePlot(value.props, path) : undefined;
     let textRunText;
     if (value.type === 'text-run') {
         const unsupported = Object.keys(value.props).filter(
-            (name) => !['style', 'text', 'children', 'key'].includes(name));
+            (name) => !['style', 'text', 'tokenRefs', 'children', 'key'].includes(name));
         if (unsupported.length > 0) {
             throw new TypeError(
                 `${path}.TextRun does not support prop ${unsupported.sort()[0]}`,
@@ -783,16 +1024,19 @@ function materialize(value, runtime, path) {
     };
     const style = validateStyle(value.props.style, path);
     if (style !== undefined) node.style = style;
+    const tokenRefs = internTokenRefs(
+        value.props.tokenRefs, value.type, style, pathProperties, state, path);
+    if (tokenRefs !== undefined) node.tokenRefs = tokenRefs;
     if (value.type === 'text-run') node.text = textRunText;
     else if (typeof value.props.text === 'string') node.text = value.props.text;
     if (typeof value.props.source === 'string') node.source = value.props.source;
     if (typeof value.props.anchor === 'string' && value.props.anchor.length > 0 &&
-        value.props.anchor.length <= 1024) {
+        utf8ByteLength(value.props.anchor) <= MAX_SOURCE_ANCHOR_BYTES) {
         node.anchor = value.props.anchor;
     }
     const where = value.props.sourceLocation;
     if (where !== null && typeof where === 'object' && typeof where.file === 'string' &&
-        where.file.length > 0 && where.file.length <= 4096) {
+        where.file.length > 0 && utf8ByteLength(where.file) <= MAX_SOURCE_FILE_BYTES) {
         node.sourceLocation = { file: where.file };
         for (const key of ['line', 'column']) {
             if (Number.isInteger(where[key]) && where[key] >= 0) {
@@ -803,6 +1047,7 @@ function materialize(value, runtime, path) {
     if (pathProperties !== undefined) Object.assign(node, pathProperties);
     if (imageProperties !== undefined) Object.assign(node, imageProperties);
     if (vectorProperties !== undefined) Object.assign(node, vectorProperties);
+    if (plotProperties !== undefined) Object.assign(node, plotProperties);
     if (value.type === 'custom') {
         if (typeof value.props.component !== 'string' ||
             !/^[a-z][a-z0-9-]{0,63}$/.test(value.props.component)) {
@@ -977,6 +1222,7 @@ class Runtime {
             frames: cloneFrames(baseFrames),
             handlers: new Map(),
             nodeIds: new Set(),
+            tokens: new Map(),
             visitedFrames: new Set(),
             componentTypes: new Map(),
             frameStack: [],
@@ -999,6 +1245,9 @@ class Runtime {
             if (typeof rootStyle.width !== 'number') rootStyle.width = 800;
             if (typeof rootStyle.height !== 'number') rootStyle.height = 600;
             materialized[0].style = rootStyle;
+            if (state.tokens.size > 0) {
+                materialized[0].tokens = [...state.tokens.values()].map((entry) => entry.receipt);
+            }
             return { frames: state.frames, handlers: state.handlers, tree: materialized[0] };
         } finally {
             this.renderState = null;

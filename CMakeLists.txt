@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(Vellum
-    VERSION 0.2.0
+    VERSION 0.2.3
     DESCRIPTION "Experimental audio-free native application kernel"
     LANGUAGES CXX)
 
@@ -22,10 +22,25 @@ option(VELLUM_ENABLE_AUTHORING "Build the native JavaScript/TypeScript applicati
 option(VELLUM_ENABLE_WEB "Build the experimental browser/Wasm proof" OFF)
 option(VELLUM_ENABLE_MIRROR
     "Package the landed mirror's units (needs the locked Skia/Dawn archive)" OFF)
+option(VELLUM_ENABLE_V8
+    "Compile the mirror's view-script unit with the sealed V8 provider and install libv8 (needs VELLUM_ENABLE_MIRROR)" OFF)
+option(VELLUM_INSTALL_THREEJS
+    "Install the pinned Three.js runtime payload for native scripted consumers" ON)
+if(VELLUM_INSTALL_THREEJS)
+    set(VELLUM_THREEJS_PACKAGE_ROOT "${CMAKE_INSTALL_DATADIR}/vellum/threejs")
+else()
+    set(VELLUM_THREEJS_PACKAGE_ROOT "")
+endif()
+set(VELLUM_V8_ARCHIVE "" CACHE FILEPATH
+    "Local copy of the pinned sealed V8 archive; digest-checked like a download")
 option(VELLUM_ENABLE_ADDRESS_SANITIZER
     "Instrument Vellum targets with AddressSanitizer" OFF)
+option(VELLUM_ENABLE_TRACING
+    "Compile development-only native Perfetto tracing into the mirrored framework units (needs VELLUM_ENABLE_MIRROR; never ship enabled)" OFF)
 option(VELLUM_ENABLE_RMLUI
     "Build the optional RmlUi module (rmlui/; fetches its pinned RmlUi source)" OFF)
+set(VELLUM_PULP_CENSUS_LIBRARIES "" CACHE STRING
+    "Static libraries of a Pulp build (a list); the install census then requires that no installed dylib exports a name they define")
 set(VELLUM_AUTHORING_TEST_BUNDLE "" CACHE FILEPATH
     "Optional @vellum/ui classic-script bundle for the real JavaScriptCore integration test")
 set(VELLUM_PHASE3_TEST_BUNDLE "" CACHE FILEPATH
@@ -64,6 +79,7 @@ if(APPLE AND VELLUM_ENABLE_GPU AND
 endif()
 
 include(cmake/VellumThreeJsPayload.cmake)
+include(cmake/VellumTracing.cmake)
 add_subdirectory(foundation)
 add_subdirectory(runtime)
 add_subdirectory(components)
@@ -80,13 +96,19 @@ endif()
 # library has no native default here: the embedding executable bootstraps it.
 set(GPU_RUNTIME_BUILD_TESTS ${VELLUM_BUILD_TESTS})
 set(GPU_RUNTIME_HOST_OWNS_DAWN_PROCS ON)
+set(GPU_RUNTIME_BUILD_PROVIDER OFF)
 if(VELLUM_HAS_SKIA_DAWN)
     set(GPU_RUNTIME_SKIA_DIR "${VELLUM_SKIA_DIR}")
     set(GPU_RUNTIME_REQUIRE_DEVICE ON)
+    set(GPU_RUNTIME_BUILD_PROVIDER ON)
 endif()
 add_subdirectory(gpu-runtime)
 
 set(VELLUM_PACKAGE_HAS_MIRROR OFF)
+if(VELLUM_ENABLE_V8 AND NOT VELLUM_ENABLE_MIRROR)
+    message(FATAL_ERROR "Vellum: VELLUM_ENABLE_V8 compiles the mirror's view-script unit; "
+        "it needs VELLUM_ENABLE_MIRROR=ON")
+endif()
 if(VELLUM_ENABLE_MIRROR)
     include(tools/mirror/VellumMirror.cmake)
 endif()
@@ -99,7 +121,8 @@ if(VELLUM_ENABLE_GRAPHICS)
     if(VELLUM_BUILD_TESTS AND TARGET vellum-gpu)
         foreach(_vellum_graphics_test IN ITEMS
                 vellum-layer-cache-gpu-test vellum-render-cache-gpu-test
-                vellum-partial-present-test vellum-scene-capture-harness-test)
+                vellum-device-recovery-gpu-test vellum-partial-present-test
+                vellum-scene-capture-harness-test vellum-frame-debug-test)
             if(NOT TARGET ${_vellum_graphics_test})
                 message(FATAL_ERROR
                     "Vellum: VELLUM_BUILD_TESTS is on and the GPU backend is built, "
@@ -148,8 +171,8 @@ if(APPLE AND VELLUM_BUILD_TESTS)
 endif()
 
 # The RmlUi module is a self-contained project; it is also built on its own
-# with `cmake -S rmlui`. It is added after the graphics targets so its optional
-# VellumRenderer can link Vellum::Gpu; nothing else in it uses Vellum.
+# with `cmake -S rmlui`. Add it after the Vellum targets so its optional
+# VellumRenderer and PluginView bridges can link their Vellum units.
 if(VELLUM_ENABLE_RMLUI)
     add_subdirectory(rmlui)
 endif()
@@ -162,6 +185,25 @@ if(VELLUM_BUILD_TESTS)
         foundation/tests/foundation_test.cpp)
     target_link_libraries(vellum-foundation-test PRIVATE Vellum::Foundation)
     add_test(NAME vellum.foundation COMMAND vellum-foundation-test)
+    find_program(VELLUM_NODE_EXECUTABLE NAMES node)
+    if(VELLUM_NODE_EXECUTABLE)
+        add_test(NAME vellum.limits-drift
+            COMMAND "${VELLUM_NODE_EXECUTABLE}" --test
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/limits/test/limits.test.mjs")
+        add_test(NAME vellum.feature-versions-drift
+            COMMAND "${VELLUM_NODE_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/versions/generate_feature_versions.mjs" --check)
+        # Inert until the shared limits header and its generated copies exist.
+        if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/graphics/include/vellum/graphics/limits.hpp")
+            add_test(NAME vellum.limits-production-drift
+                COMMAND "${VELLUM_NODE_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tools/limits/generate_limits.mjs" --check
+                    --header "${CMAKE_CURRENT_SOURCE_DIR}/graphics/include/vellum/graphics/limits.hpp"
+                    --label graphics/include/vellum/graphics/limits.hpp
+                    --out "${CMAKE_CURRENT_SOURCE_DIR}/packages/vellum-design-ir/src/limits.generated.js"
+                    --out "${CMAKE_CURRENT_SOURCE_DIR}/packages/vellum-ui/src/limits.generated.js")
+        endif()
+    endif()
 
     add_executable(vellum-value-param-model-test
         foundation/tests/value/param_model_test.cpp)
@@ -211,6 +253,16 @@ if(VELLUM_BUILD_TESTS)
             graphics/tests/paint_command_test.cpp)
         target_link_libraries(vellum-paint-command-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.paint-command COMMAND vellum-paint-command-test)
+        add_executable(vellum-hit-test-test
+            graphics/tests/hit_test_test.cpp)
+        target_link_libraries(vellum-hit-test-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.hit-test COMMAND vellum-hit-test-test)
+
+        add_executable(vellum-pointer-router-test
+            graphics/tests/pointer_router_test.cpp)
+        target_link_libraries(vellum-pointer-router-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.pointer-router COMMAND vellum-pointer-router-test)
+
         add_executable(vellum-image-node-test
             graphics/tests/image_node_test.cpp)
         target_link_libraries(vellum-image-node-test PRIVATE Vellum::Graphics)
@@ -240,17 +292,44 @@ if(VELLUM_BUILD_TESTS)
             graphics/tests/vector_asset_test.cpp)
         target_link_libraries(vellum-vector-asset-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.vector-asset COMMAND vellum-vector-asset-test)
+        add_executable(vellum-plot-test
+            graphics/tests/plot_test.cpp)
+        target_link_libraries(vellum-plot-test PRIVATE Vellum::Graphics Threads::Threads)
+        add_test(NAME vellum.plot COMMAND vellum-plot-test)
+
+        add_executable(vellum-text-layout-test
+            graphics/tests/text_layout_test.cpp)
+        target_link_libraries(vellum-text-layout-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.text-layout COMMAND vellum-text-layout-test)
 
         add_executable(vellum-damage-test
             graphics/tests/damage_test.cpp)
         target_link_libraries(vellum-damage-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.damage COMMAND vellum-damage-test)
 
+        add_executable(vellum-token-receipts-test
+            graphics/tests/token_receipts_test.cpp)
+        target_link_libraries(vellum-token-receipts-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.token-receipts COMMAND vellum-token-receipts-test)
         add_executable(vellum-animation-test
             graphics/tests/animation_test.cpp)
         target_include_directories(vellum-animation-test PRIVATE graphics/src)
         target_link_libraries(vellum-animation-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.animation COMMAND vellum-animation-test)
+        add_executable(vellum-feature-versions-test
+            graphics/tests/feature_versions_test.cpp)
+        target_link_libraries(vellum-feature-versions-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.feature-versions COMMAND vellum-feature-versions-test)
+
+        add_executable(vellum-frame-pump-test
+            foundation/tests/frame_pump_test.cpp)
+        target_link_libraries(vellum-frame-pump-test PRIVATE Vellum::Foundation)
+        add_test(NAME vellum.frame-pump COMMAND vellum-frame-pump-test)
+
+        add_executable(vellum-frame-driver-test
+            graphics/tests/frame_driver_test.cpp)
+        target_link_libraries(vellum-frame-driver-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.frame-driver COMMAND vellum-frame-driver-test)
 
         add_executable(vellum-effect-test
             graphics/tests/effect_test.cpp)
@@ -481,6 +560,10 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}"
             authoring/adapters/illustrator/test_illustrator_to_svg.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.cli-illustrator-to-svg
+        COMMAND "${Python3_EXECUTABLE}"
+            cli/tests/test_illustrator_cli.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.parity-packaging-unit
         COMMAND "${Python3_EXECUTABLE}"
             tools/parity/packaging/test_packaging_lane.py
@@ -518,6 +601,67 @@ if(VELLUM_BUILD_TESTS)
     add_test(NAME vellum.rmlui-sdk-artifact-unit
         COMMAND "${Python3_EXECUTABLE}" -I scripts/test_verify_rmlui_sdk_artifact.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    # Native Perfetto tracing stays out of a default build and is wired once
+    # in a tracing build: the source and pin checks, then the built tree
+    # against the option it was configured with.
+    if(VELLUM_ENABLE_TRACING)
+        set(_vellum_tracing_expect on)
+    else()
+        set(_vellum_tracing_expect off)
+    endif()
+    add_test(NAME vellum.tracing-source
+        COMMAND "${Python3_EXECUTABLE}" -I tools/tracing/check_tracing.py
+            source "${CMAKE_CURRENT_SOURCE_DIR}"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.tracing-check-unit
+        COMMAND "${Python3_EXECUTABLE}" -I tools/tracing/test_check_tracing.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    # The guard reads CMake's own system variables. Each probe sets them as a
+    # cross-compile would; the VELLUM_TRACING_SYSTEM and VELLUM_TRACING_ARCH
+    # cache entries the guard once read are passed too, to prove they no longer
+    # bypass it.
+    set(_vellum_tracing_probes
+        "Linux|x86_64|"
+        "Windows|AMD64|"
+        "Darwin|x86_64|"
+        "Linux|x86_64|bypass"
+        "Darwin|x86_64|bypass"
+        "Darwin|arm64|x86_64"
+        "Darwin|arm64|arm64$<SEMICOLON>x86_64")
+    foreach(_vellum_probe IN LISTS _vellum_tracing_probes)
+        string(REPLACE "|" ";" _vellum_probe_parts "${_vellum_probe}")
+        list(GET _vellum_probe_parts 0 _vellum_probe_system)
+        list(GET _vellum_probe_parts 1 _vellum_probe_arch)
+        list(LENGTH _vellum_probe_parts _vellum_probe_length)
+        set(_vellum_probe_extra)
+        set(_vellum_probe_tag "")
+        if(_vellum_probe_length GREATER 2)
+            list(GET _vellum_probe_parts 2 _vellum_probe_tag)
+        endif()
+        if(_vellum_probe_tag STREQUAL "bypass")
+            set(_vellum_probe_extra -DVELLUM_TRACING_SYSTEM=Darwin -DVELLUM_TRACING_ARCH=arm64)
+        elseif(_vellum_probe_tag)
+            set(_vellum_probe_extra "-DCMAKE_OSX_ARCHITECTURES=${_vellum_probe_tag}")
+        endif()
+        string(REGEX REPLACE "[^A-Za-z0-9]" "-"
+            _vellum_probe_name "${_vellum_probe_system}-${_vellum_probe_arch}-${_vellum_probe_tag}")
+        add_test(NAME vellum.tracing-refused-${_vellum_probe_name}
+            COMMAND "${CMAKE_COMMAND}" -S tools/tracing/platform-probe
+                -B "${CMAKE_CURRENT_BINARY_DIR}/tracing-probe-${_vellum_probe_name}"
+                "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                -DVELLUM_ENABLE_TRACING=ON -DVELLUM_ENABLE_MIRROR=ON
+                -DCMAKE_SYSTEM_NAME=${_vellum_probe_system}
+                -DCMAKE_SYSTEM_PROCESSOR=${_vellum_probe_arch}
+                ${_vellum_probe_extra}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+        set_tests_properties(vellum.tracing-refused-${_vellum_probe_name} PROPERTIES
+            PASS_REGULAR_EXPRESSION "supported only on macos-arm64")
+    endforeach()
+    add_test(NAME vellum.tracing-build-state
+        COMMAND "${Python3_EXECUTABLE}" -I tools/tracing/check_tracing.py
+            build "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}"
+            --expect ${_vellum_tracing_expect}
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.provenance-unit
         COMMAND "${Python3_EXECUTABLE}"
             tools/provenance/test_verify_extraction.py
@@ -552,6 +696,12 @@ if(VELLUM_BUILD_TESTS)
             set(_vellum_view_audio_archive_arg
                 "-DVELLUM_VIEW_AUDIO_ARCHIVE=${VELLUM_VIEW_AUDIO_ARCHIVE}")
         endif()
+        set(_vellum_gpu_runtime_prefix_arg)
+        if(DEFINED VELLUM_GPU_RUNTIME_PREFIX AND
+           NOT VELLUM_GPU_RUNTIME_PREFIX STREQUAL "")
+            set(_vellum_gpu_runtime_prefix_arg
+                "-DVELLUM_GPU_RUNTIME_PREFIX=${VELLUM_GPU_RUNTIME_PREFIX}")
+        endif()
         add_test(NAME vellum.mirror-install-consumer
             COMMAND "${CMAKE_COMMAND}"
                 "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
@@ -560,6 +710,11 @@ if(VELLUM_BUILD_TESTS)
                 "-DVELLUM_MIRROR_DEPS_DIR=${VELLUM_MIRROR_DEPS_DIR}"
                 "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
                 "-DPython3_EXECUTABLE=${Python3_EXECUTABLE}"
+                "-DVELLUM_ENABLE_V8=${VELLUM_MIRROR_HAS_V8}"
+                "-DVELLUM_V8_VERSION=${VELLUM_V8_VERSION}"
+                "-DVELLUM_INSTALL_THREEJS=${VELLUM_INSTALL_THREEJS}"
+                "-DVELLUM_PULP_CENSUS_LIBRARIES=${VELLUM_PULP_CENSUS_LIBRARIES}"
+                ${_vellum_gpu_runtime_prefix_arg}
                 ${_vellum_view_audio_archive_arg}
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/mirror/RunMirrorConsumer.cmake")
         # An installed consumer reaches Vellum's value model through the view
@@ -622,6 +777,37 @@ if(TARGET vellum-authoring)
     install(DIRECTORY authoring/include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 endif()
 
+# Keep the SDK's notice index and its per-dependency texts together.  Generate
+# at configure time so an incomplete lock or NOTICE.md stops the install.
+find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
+set(_vellum_notices_dir "${CMAKE_CURRENT_BINARY_DIR}/share/vellum/notices")
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_CURRENT_SOURCE_DIR}/scripts/build_notices_manifest.py"
+            --repo "${CMAKE_CURRENT_SOURCE_DIR}" --output "${_vellum_notices_dir}"
+    RESULT_VARIABLE _vellum_notices_result
+    OUTPUT_VARIABLE _vellum_notices_stdout
+    ERROR_VARIABLE _vellum_notices_stderr)
+# A changed lock, NOTICE.md or generator reconfigures, so the index never goes
+# stale in an existing build tree.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/provenance/third-party-lock.json"
+    "${CMAKE_CURRENT_SOURCE_DIR}/NOTICE.md"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scripts/build_notices_manifest.py")
+if(NOT _vellum_notices_result EQUAL 0)
+    message(FATAL_ERROR "Vellum notices manifest generation failed:\n${_vellum_notices_stdout}${_vellum_notices_stderr}")
+endif()
+install(DIRECTORY "${_vellum_notices_dir}/"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/vellum/notices")
+if(BUILD_TESTING)
+    add_test(NAME vellum-notices-manifest
+        COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_build_notices_manifest.py")
+    set_tests_properties(vellum-notices-manifest PROPERTIES LABELS "pr-fast")
+endif()
+
+# Every test carries one of the pr-fast, gpu or slow class labels.
+include(cmake/VellumTestClasses.cmake)
+vellum_apply_test_classes("${CMAKE_CURRENT_SOURCE_DIR}/scripts/ctest_classes.json")
+
 # The system and architectures the installed binaries are built for. The
 # package config reports "not found" to a consumer that targets others.
 set(VELLUM_PACKAGE_SYSTEM_NAME "${CMAKE_SYSTEM_NAME}")
@@ -647,5 +833,17 @@ install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/VellumConfig.cmake"
     "${CMAKE_CURRENT_BINARY_DIR}/VellumConfigVersion.cmake"
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/Vellum")
+include(cmake/VellumWebCompat.cmake)
 install(FILES LICENSE.md NOTICE.md DEPENDENCIES.md
     DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/Vellum")
+if(VELLUM_INSTALL_THREEJS)
+    if(NOT IS_DIRECTORY "${VELLUM_THREEJS_DIR}"
+       OR NOT EXISTS "${VELLUM_THREEJS_DIR}/payload-manifest.json")
+        message(FATAL_ERROR
+            "Vellum: VELLUM_INSTALL_THREEJS needs a verified Three.js payload; "
+            "VELLUM_THREEJS_DIR='${VELLUM_THREEJS_DIR}' has no payload-manifest.json")
+    endif()
+    install(DIRECTORY "${VELLUM_THREEJS_DIR}/"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/vellum/threejs"
+        COMPONENT threejs)
+endif()

@@ -25,9 +25,9 @@ cmake_minimum_required(VERSION 3.24)
 #                              and Apple frameworks.
 #   VellumRmlUi::VellumRenderer draws the backend's commands as triangle meshes
 #                              through Vellum's SkiaDawnSurface
-#                              (VELLUM_RMLUI_VELLUM_RENDERER=ON). It is the only
-#                              target that links Vellum; Core and SoftRenderer
-#                              never do.
+#                              (VELLUM_RMLUI_VELLUM_RENDERER=ON).
+#   VellumRmlUi::PluginView    exposes a CPU-rendered document as a Vellum View
+#                              when the Vellum mirror view unit is available.
 # On its own the module pins the macOS deployment target Vellum uses, so the
 # archives Native installs (RmlUi, FreeType) can link into a plug-in that runs
 # on older macOS than the build host. Inside a Vellum build the parent decides.
@@ -51,6 +51,44 @@ endif()
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
+set(VELLUM_RMLUI_RENDERER "" CACHE STRING
+    "RmlUi renderer to enable (vellum, metal or cpu)")
+set_property(CACHE VELLUM_RMLUI_RENDERER PROPERTY STRINGS
+    vellum metal cpu dx11 dx12 gl2 gl3 vk sdl sdl_gpu)
+if(VELLUM_RMLUI_RENDERER)
+    set(_vellum_rmlui_renderer_ids vellum metal cpu dx11 dx12 gl2 gl3 vk sdl sdl_gpu)
+    set(_vellum_rmlui_implemented_renderer_ids vellum metal cpu)
+    if(NOT VELLUM_RMLUI_RENDERER IN_LIST _vellum_rmlui_renderer_ids)
+        message(FATAL_ERROR
+            "Unknown VELLUM_RMLUI_RENDERER '${VELLUM_RMLUI_RENDERER}'. "
+            "Choose one of: ${_vellum_rmlui_renderer_ids}")
+    endif()
+    if(VELLUM_RMLUI_RENDERER STREQUAL "metal" AND NOT APPLE)
+        message(FATAL_ERROR "VELLUM_RMLUI_RENDERER=metal is unsupported on this platform")
+    elseif(VELLUM_RMLUI_RENDERER IN_LIST _vellum_rmlui_renderer_ids AND
+           VELLUM_RMLUI_RENDERER MATCHES "^(dx11|dx12)$" AND NOT WIN32)
+        message(FATAL_ERROR
+            "VELLUM_RMLUI_RENDERER=${VELLUM_RMLUI_RENDERER} is unsupported on this platform")
+    elseif(VELLUM_RMLUI_RENDERER IN_LIST _vellum_rmlui_renderer_ids AND
+           VELLUM_RMLUI_RENDERER MATCHES "^(gl2|gl3|vk|sdl|sdl_gpu)$" AND
+           NOT (WIN32 OR UNIX))
+        message(FATAL_ERROR
+            "VELLUM_RMLUI_RENDERER=${VELLUM_RMLUI_RENDERER} is unsupported on this platform")
+    elseif(NOT VELLUM_RMLUI_RENDERER IN_LIST _vellum_rmlui_implemented_renderer_ids)
+        message(FATAL_ERROR
+            "VELLUM_RMLUI_RENDERER=${VELLUM_RMLUI_RENDERER} is not yet implemented; "
+            "the upstream MIT backend is cataloged for future consumer tests")
+    elseif(VELLUM_RMLUI_RENDERER STREQUAL "vellum")
+        set(VELLUM_RMLUI_VELLUM_RENDERER ON CACHE BOOL "" FORCE)
+    elseif(VELLUM_RMLUI_RENDERER STREQUAL "metal")
+        set(VELLUM_RMLUI_NATIVE ON CACHE BOOL "" FORCE)
+        set(VELLUM_RMLUI_METAL ON CACHE BOOL "" FORCE)
+    elseif(VELLUM_RMLUI_RENDERER STREQUAL "cpu")
+        set(VELLUM_RMLUI_NATIVE ON CACHE BOOL "" FORCE)
+        set(VELLUM_RMLUI_CPU ON CACHE BOOL "" FORCE)
+    endif()
+endif()
+
 option(VELLUM_RMLUI_FONTS
     "Build RmlUi's FreeType font engine from the pinned FreeType source" OFF)
 option(VELLUM_RMLUI_LUA
@@ -63,6 +101,8 @@ option(VELLUM_RMLUI_METAL
     "Build VellumRmlUi::Metal, an Rml::RenderInterface on Metal (Apple only; needs VELLUM_RMLUI_NATIVE)" OFF)
 option(VELLUM_RMLUI_CPU
     "Build VellumRmlUi::Cpu, an Rml::RenderInterface on the CPU into an RGBA8 buffer (needs VELLUM_RMLUI_NATIVE)" OFF)
+option(VELLUM_RMLUI_NATIVE_HOST
+    "Build VellumRmlUi::NativeHost, a native-parent editor host" ${APPLE})
 if(VELLUM_RMLUI_CPU AND NOT VELLUM_RMLUI_NATIVE)
     message(FATAL_ERROR "VELLUM_RMLUI_CPU needs VELLUM_RMLUI_NATIVE=ON, which packages RmlUi for it")
 endif()
@@ -159,6 +199,50 @@ set(VELLUM_RMLUI_COMPONENTS Core SoftRenderer DevAssets)
 set(_vellum_rmlui_install_targets
     vellum-rmlui-core vellum-rmlui-soft-renderer vellum-rmlui-dev-assets)
 
+# The mirror unit lets PluginView use the platform host's native child window,
+# paint surface, and event dispatch.
+if(TARGET Vellum::MirrorView_core)
+    add_library(vellum-rmlui-plugin-view STATIC plugin_view/plugin_view.cpp)
+    add_library(VellumRmlUi::PluginView ALIAS vellum-rmlui-plugin-view)
+    target_compile_features(vellum-rmlui-plugin-view PUBLIC cxx_std_20)
+    set_target_properties(vellum-rmlui-plugin-view PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    # The view core keeps its headers private; the mirror publishes them in
+    # one list, the same one the framework tests use.
+    target_include_directories(vellum-rmlui-plugin-view PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/plugin_view/include>
+        "$<BUILD_INTERFACE:${_vellum_mirror_public_includes}>"
+        $<BUILD_INTERFACE:${VELLUM_MIRROR_BUILD_INFO_DIR}>
+        $<BUILD_INTERFACE:${VELLUM_MIRROR_CHOC_ROOT}>)
+    target_link_libraries(vellum-rmlui-plugin-view
+        PUBLIC Vellum::MirrorView_core vellum-rmlui-core vellum-rmlui-soft-renderer
+        PRIVATE RmlUi::Core)
+endif()
+
+if(VELLUM_RMLUI_NATIVE_HOST)
+    if(NOT APPLE)
+        message(FATAL_ERROR "VELLUM_RMLUI_NATIVE_HOST is currently supported on macOS only")
+    endif()
+    add_library(vellum-rmlui-native-host STATIC src/native_parent_host.mm)
+    add_library(VellumRmlUi::NativeHost ALIAS vellum-rmlui-native-host)
+    set_target_properties(vellum-rmlui-native-host PROPERTIES
+        EXPORT_NAME NativeHost POSITION_INDEPENDENT_CODE ON)
+    target_compile_features(vellum-rmlui-native-host PUBLIC cxx_std_20)
+    target_compile_options(vellum-rmlui-native-host PRIVATE -fobjc-arc)
+    target_include_directories(vellum-rmlui-native-host PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+    target_link_libraries(vellum-rmlui-native-host PUBLIC
+        vellum-rmlui-soft-renderer "-framework Cocoa" "-framework QuartzCore")
+    # RmlUi's key and modifier identifiers, which AppKit events are mapped to.
+    # Header-only use: the host still reaches RmlUi only through Core.
+    FetchContent_GetProperties(vellum_rmlui_rmlui SOURCE_DIR _vellum_rmlui_native_host_rmlui_src)
+    target_include_directories(vellum-rmlui-native-host PRIVATE
+        $<BUILD_INTERFACE:${_vellum_rmlui_native_host_rmlui_src}/Include>)
+    list(APPEND VELLUM_RMLUI_COMPONENTS NativeHost)
+    list(APPEND _vellum_rmlui_install_targets vellum-rmlui-native-host)
+endif()
+
 if(VELLUM_RMLUI_LUA)
     add_library(vellum-rmlui-lua STATIC
         src/lua_host.cpp)
@@ -214,6 +298,30 @@ if(VELLUM_RMLUI_METAL)
     target_link_libraries(vellum-rmlui-metal
         PUBLIC RmlUi::Core "-framework Metal" "-framework QuartzCore" "-framework Foundation"
         PRIVATE "-framework CoreGraphics" "-framework ImageIO")
+    if(IOS)
+        find_package(Python3 COMPONENTS Interpreter REQUIRED)
+        if(CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator")
+            set(_vellum_rmlui_metal_sdk iphonesimulator)
+        else()
+            set(_vellum_rmlui_metal_sdk iphoneos)
+        endif()
+        set(_vellum_rmlui_metal_build_dir "${CMAKE_CURRENT_BINARY_DIR}/metal")
+        set(_vellum_rmlui_metal_source "${_vellum_rmlui_metal_build_dir}/metal_shaders.metal")
+        set(_vellum_rmlui_metal_air "${_vellum_rmlui_metal_build_dir}/metal_shaders.air")
+        set(_vellum_rmlui_metal_library "${_vellum_rmlui_metal_build_dir}/vellum-rmlui-metal.metallib")
+        add_custom_command(OUTPUT "${_vellum_rmlui_metal_library}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${_vellum_rmlui_metal_build_dir}"
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/extract_metal_source.py"
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/metal_shaders.hpp" "${_vellum_rmlui_metal_source}"
+            COMMAND xcrun -sdk "${_vellum_rmlui_metal_sdk}" metal -c "${_vellum_rmlui_metal_source}"
+                -o "${_vellum_rmlui_metal_air}"
+            COMMAND xcrun -sdk "${_vellum_rmlui_metal_sdk}" metallib "${_vellum_rmlui_metal_air}"
+                -o "${_vellum_rmlui_metal_library}"
+            DEPENDS src/metal_shaders.hpp cmake/extract_metal_source.py
+            VERBATIM)
+        add_custom_target(vellum-rmlui-metal-library DEPENDS "${_vellum_rmlui_metal_library}")
+        add_dependencies(vellum-rmlui-metal vellum-rmlui-metal-library)
+    endif()
     vellum_rmlui_mark_runtime(vellum-rmlui-metal native)
     list(APPEND VELLUM_RMLUI_COMPONENTS Metal)
 endif()
@@ -262,11 +370,37 @@ if(VELLUM_RMLUI_VELLUM_RENDERER)
     list(APPEND VELLUM_RMLUI_COMPONENTS VellumRenderer)
 endif()
 
-# Only VellumRenderer may link Vellum; every other library here stays usable
-# without it.
+# RmlUi uses infinity for an idle context's next update. Vellum also checks for
+# non-finite input. Target options follow inherited toolchain and directory flags.
+function(vellum_rmlui_require_nonfinite target scope)
+    if(MSVC)
+        target_compile_options(${target} ${scope} /fp:precise)
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+            target_compile_options(${target} ${scope} /clang:-fno-finite-math-only)
+        endif()
+    else()
+        target_compile_options(${target} ${scope}
+            $<$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang,GNU>:-fno-finite-math-only>
+            $<$<COMPILE_LANG_AND_ID:OBJCXX,AppleClang,Clang,GNU>:-fno-finite-math-only>)
+    endif()
+endfunction()
+
+foreach(_target IN ITEMS rmlui_core vellum-rmlui-soft-renderer vellum-rmlui-native-host
+                         vellum-rmlui-cpu vellum-rmlui-vellum-renderer)
+    if(TARGET ${_target})
+        vellum_rmlui_require_nonfinite(${_target} PRIVATE)
+    endif()
+endforeach()
+# Core and Native consumers compile the inline settings validation in their own
+# translation units, so those targets carry the floating-point requirement.
+vellum_rmlui_require_nonfinite(vellum-rmlui-core PUBLIC)
+if(TARGET vellum-rmlui-native)
+    vellum_rmlui_require_nonfinite(vellum-rmlui-native PUBLIC)
+endif()
+
 include(cmake/VellumRmlUiLinkBoundary.cmake)
 get_property(_vellum_rmlui_targets DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" PROPERTY BUILDSYSTEM_TARGETS)
-vellum_rmlui_check_link_boundary(ALLOW vellum-rmlui-vellum-renderer TARGETS ${_vellum_rmlui_targets})
+vellum_rmlui_check_link_boundary(TARGETS ${_vellum_rmlui_targets})
 
 if(VELLUM_RMLUI_INSTALL)
     set(_vellum_rmlui_cmake_dir "${CMAKE_INSTALL_LIBDIR}/cmake/VellumRmlUi")
@@ -281,7 +415,12 @@ if(VELLUM_RMLUI_INSTALL)
     set(_vellum_rmlui_native_headers
         native.hpp element_classes_native.hpp midi_learn_native.hpp
         cpu_render_interface.hpp metal_render_interface.hpp)
-    set(_vellum_rmlui_native_header_excludes)
+    if(VELLUM_RMLUI_NATIVE_HOST)
+        install(FILES include/vellum/rmlui/native_parent_host.hpp
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/vellum/rmlui
+            COMPONENT VellumRmlUi)
+    endif()
+    set(_vellum_rmlui_native_header_excludes PATTERN native_parent_host.hpp EXCLUDE)
     foreach(_header IN LISTS _vellum_rmlui_native_headers)
         list(APPEND _vellum_rmlui_native_header_excludes PATTERN "${_header}" EXCLUDE)
     endforeach()
@@ -289,6 +428,8 @@ if(VELLUM_RMLUI_INSTALL)
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
         COMPONENT VellumRmlUi
         ${_vellum_rmlui_native_header_excludes})
+    # plugin_view.hpp stays in-tree: it includes vellum/view headers, which the
+    # SDK payload scan refuses outside the mirror scope.
     install(FILES assets/midi-learn.rcss assets/midi-panic.rcss
         DESTINATION ${CMAKE_INSTALL_DATADIR}/VellumRmlUi
         COMPONENT VellumRmlUi)
@@ -361,6 +502,13 @@ if(VELLUM_RMLUI_INSTALL)
                 EXPORT VellumRmlUiMetalTargets
                 COMPONENT VellumRmlUiNative
                 ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+            if(IOS)
+                # The precompiled shader library the iOS renderer prefers; consumers
+                # bundle it into their app (the renderer compiles source without it).
+                install(FILES "${_vellum_rmlui_metal_library}"
+                    DESTINATION ${CMAKE_INSTALL_DATADIR}/vellum/rmlui
+                    COMPONENT VellumRmlUiNative)
+            endif()
             install(EXPORT VellumRmlUiMetalTargets
                 NAMESPACE VellumRmlUi::
                 DESTINATION ${_vellum_rmlui_native_cmake_dir}

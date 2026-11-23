@@ -1,3 +1,4 @@
+#include "support/gpu_test_environment.hpp"
 #include "support/scene_capture_harness.hpp"
 
 #include <vellum/graphics/damage.hpp>
@@ -225,8 +226,6 @@ int animated_path() {
 
 static std::vector<double> last_wait;
 
-constexpr int kSkip = 77;
-
 int check_native() {
     constexpr std::uint32_t width = 400;
     constexpr std::uint32_t height = 300;
@@ -246,8 +245,8 @@ int check_native() {
         return 1;
     }
     if (!native || !native->evidence().native_surface) {
-        std::cout << "SKIP no usable CAMetalLayer surface: " << error << '\n';
-        return kSkip;
+        std::cerr << "FAIL no usable CAMetalLayer surface: " << error << '\n';
+        return 1;
     }
     Scene scene = tiled_scene(static_cast<float>(width), static_cast<float>(height));
     int failures = 0;
@@ -255,13 +254,14 @@ int check_native() {
     for (int frame = 0; frame < 8; ++frame) {
         move(scene, frame * 7 + 1);
         if (frame == 4) native->invalidate(InvalidationReason::reload);
+        if (frame == 6) native->simulate_device_loss();
         harness::CaptureResult expected;
         harness::CaptureResult actual;
         if (frame == 0 && !native->render_incremental(scene, &error)) {
             if (error.find("acquire the native surface texture") != std::string::npos) {
-                std::cout << "SKIP no drawable from a CAMetalLayer outside a window: " << error
+                std::cerr << "FAIL no drawable from a CAMetalLayer outside a window: " << error
                           << '\n';
-                return kSkip;
+                return 1;
             }
             std::cerr << "FAIL first native frame: " << error << '\n';
             return 1;
@@ -276,12 +276,15 @@ int check_native() {
         }
         expected.ok = actual.ok = true;
         const auto stats = native->frame_stats();
-        const bool expected_full = frame == 0 || frame == 4;
+        const bool expected_full = frame == 0 || frame == 4 || frame == 6;
         const auto verdict = harness::assert_identical(expected, actual);
         if (frame == 0) first = actual;
         const bool advanced = frame == 0 || !harness::assert_identical(first, actual);
+        const bool recovered = frame != 6 ||
+            (stats.full_repaint_reason == FullRepaintReason::device_recovered &&
+             stats.device_recoveries == 1U);
         const bool ok = static_cast<bool>(verdict) && advanced && stats.presented &&
-            stats.full_repaint == expected_full;
+            stats.full_repaint == expected_full && recovered;
         std::cout << (ok ? "PASS" : "FAIL") << " native frame " << frame
                   << " full=" << stats.full_repaint << " reason="
                   << to_string(stats.full_repaint_reason) << " presented=" << stats.presented
@@ -301,7 +304,11 @@ int main(int argc, char** argv) {
         std::cerr << "device bootstrap failed: " << error << '\n';
         return 1;
     }
-    if (mode == "--check-native") return check_native();
+    if (mode == "--check-native") {
+        const auto environment = harness::prepare_gpu_environment();
+        if (!environment.ready()) return harness::report_gpu_status(environment);
+        return check_native();
+    }
     if (mode == "--animated-path") return animated_path();
     const std::vector<std::pair<std::uint32_t, std::uint32_t>> sizes{
         {400, 300}, {1280, 800}, {2560, 1600}};

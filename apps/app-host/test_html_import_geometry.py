@@ -40,10 +40,13 @@ import tempfile
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "cli"))
+sys.path.insert(0, str(REPO / "cli/tests"))
+from live_browser import live_browser_skip_reason  # noqa: E402
 from vellum_cli import default_html_interaction_plan  # noqa: E402
 from vellum_html_source import stage_html_source  # noqa: E402
 from vellum_web_backend import BackendFailure, chrome_path  # noqa: E402
 from vellum_web_backend import run_chrome_interaction_capture  # noqa: E402
+sys.path.pop(0)
 sys.path.pop(0)
 
 TOLERANCE = 1.0
@@ -98,6 +101,84 @@ def capture_and_import(source: Path, work: Path, node: str) -> tuple[dict, Path]
     return envelope, project / "ui" / "generated" / "main.materialized.json"
 
 
+def retained_material(node: str, design: Path) -> dict:
+    script = """
+import { readFileSync } from 'node:fs';
+import { createApp, materializeDesign, mount } from './packages/vellum-ui/src/index.js';
+const document = JSON.parse(readFileSync(process.argv[1], 'utf8'));
+const app = createApp({
+    id: 'html-import-material', render: () => materializeDesign(document),
+});
+console.log(mount(app).renderJSON());
+"""
+    tree = json.loads(run([node, "--input-type=module", "-e", script, str(design)], cwd=REPO))["tree"]
+    pending = [tree]
+    by_anchor = {}
+    while pending:
+        current = pending.pop()
+        by_anchor[current.get("anchor")] = current
+        pending.extend(current.get("children", []))
+    return by_anchor
+
+
+def material_values(tree: dict) -> dict:
+    panel = tree["semantic:html-proof-root"]["style"]
+    title = tree["semantic:html-proof-title"]["children"][0]["style"]
+    button = tree["semantic:html-proof-button"]["style"]
+    document = next(item for item in tree.values() if item.get("accessibilityLabel") == "#document")
+    return {
+        "pageFill": document["style"].get("backgroundColor"),
+        "panelFill": panel.get("backgroundColor"),
+        "panelRadius": panel.get("borderRadius"),
+        "panelBorderColor": panel.get("borderTopColor"),
+        "panelBorderWidth": panel.get("borderTopWidth"),
+        "titleColor": title.get("color"),
+        "titleFont": title.get("fontFamily"),
+        "titleWeight": title.get("fontWeight"),
+        "buttonFill": button.get("backgroundColor"),
+        "buttonGradients": button.get("backgroundGradients"),
+    }
+
+
+def check_material(node: str, design: Path, work: Path) -> None:
+    expected = {
+        "pageFill": "#f4f0e8",
+        "panelFill": "#ffffff",
+        "panelRadius": 12,
+        "panelBorderColor": "#475569",
+        "panelBorderWidth": 2,
+        "titleColor": "#b45309",
+        "titleFont": '"Courier New", monospace',
+        "titleWeight": 700,
+        "buttonFill": "#134e4a",
+        "buttonGradients": [
+            {"kind": "radial", "centerX": 0.5, "centerY": 0.2, "radiusX": 0.8, "radiusY": 0.6,
+             "stops": [{"position": 0, "color": "#000000"}, {"position": 0.6, "color": "#00000000"}]},
+            {"kind": "linear", "angle": 0, "stops": [
+                {"position": 0, "color": "#14b8a680"}, {"position": 1, "color": "#0f766e"},
+            ]},
+        ],
+    }
+    actual = material_values(retained_material(node, design))
+    mismatches = {key: (value, actual[key]) for key, value in expected.items() if actual[key] != value}
+    assert not mismatches, mismatches
+
+    # Strip exactly the groups the old capture omitted. Raw computed styles
+    # stay in the design, so a style assertion cannot pass on evidence alone.
+    document = json.loads(design.read_text(encoding="utf-8"))
+    pending = [document["root"]]
+    while pending:
+        current = pending.pop()
+        for group in ("paint", "text"):
+            current["properties"].pop(group, None)
+        pending.extend(current["children"])
+    stripped = work / "no-material.json"
+    stripped.write_text(json.dumps(document), encoding="utf-8")
+    control = material_values(retained_material(node, stripped))
+    assert control == dict.fromkeys(expected), control
+    print(f"material: {len(expected)} values passed, all absent in the stripped control")
+
+
 def build_and_dump(host: str, node: str, design: Path, work: Path) -> dict:
     work.mkdir(parents=True, exist_ok=True)
     entry = work / "main.jsx"
@@ -133,7 +214,9 @@ def chrome_layout(envelope: dict) -> tuple[dict[str, tuple], dict[str, str], set
             continue
         if nodes["nodeType"][index] == 3 and not (rect[2] > 0 and rect[3] > 0):
             continue  # collapsed whitespace: a layout object with no box
-        boxes[index] = tuple(rect)
+        # Some pseudo-elements get a second, empty layout row from Chrome.
+        if index not in boxes or (rect[2] > 0 and rect[3] > 0):
+            boxes[index] = tuple(rect)
     parents: dict[str, str] = {}
     for index in boxes:
         parent = nodes["parentIndex"][index]
@@ -218,7 +301,12 @@ def report(name: str, result: dict) -> None:
 
 def main() -> int:
     host = sys.argv[1]
+    material_only = host == "--material-only"
     node = sys.argv[2] if len(sys.argv) > 2 else "node"
+    reason = live_browser_skip_reason()
+    if reason is not None:
+        print(f"SKIP: {reason}")
+        return 77
     if not os.environ.get("VELLUM_CHROME_PATH"):
         try:
             chrome_path()
@@ -229,6 +317,9 @@ def main() -> int:
         work = Path(temporary)
 
         envelope, design = import_case("fixture", node, work)
+        check_material(node, design, work)
+        if material_only:
+            return 0
         clean = compare(build_and_dump(host, node, design, work / "fixture"), envelope)
         report("fixture", clean)
         assert clean["compared"] >= 10, clean

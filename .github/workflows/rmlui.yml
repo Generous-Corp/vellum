@@ -48,6 +48,12 @@ on:
 permissions:
   contents: read
 
+env:
+  # A pull request must class every test it adds in scripts/ctest_classes.json.
+  # A merge group or main run, where a test added by a sibling PR may not be
+  # listed yet, runs an unlisted test as gpu and warns instead of failing.
+  VELLUM_UNLISTED_TEST_POLICY: ${{ github.event_name == 'pull_request' && 'fail' || 'gpu' }}
+
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('vellum-rmlui-pr-{0}', github.ref) || format('vellum-rmlui-run-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -237,6 +243,9 @@ jobs:
 
       - name: Configure
         shell: bash
+        env:
+          # Exercise idle scheduling and settings validation under inherited finite-math.
+          CXXFLAGS: ${{ matrix.name == 'Linux' && '-ffinite-math-only' || '' }}
         run: |
           set -euo pipefail
           cmake -S rmlui -B build-rmlui-cpu \
@@ -246,14 +255,15 @@ jobs:
             -DVELLUM_RMLUI_FONTS=OFF \
             -DVELLUM_RMLUI_CPU=ON
 
-      - name: Build the CPU tests
+      - name: Build the headless tests
         shell: bash
         run: |
           cmake --build build-rmlui-cpu --config Release --parallel 4 \
-            --target vellum-rmlui-cpu-render-test vellum-rmlui-cpu-hash-test
+            --target vellum-rmlui-cpu-render-test vellum-rmlui-cpu-hash-test \
+              vellum-rmlui-idle-update-test vellum-rmlui-settings-test vellum-rmlui-settings-bridge-test
 
       - name: Test
         shell: bash
         run: |
           ctest --test-dir build-rmlui-cpu -C Release --output-on-failure \
-            -R '^vellum\.rmlui\.cpu-(render|hash)$' --no-tests=error
+            -R '^vellum\.rmlui\.(cpu-(render|hash)|idle-update|settings(-bridge)?)$' --no-tests=error

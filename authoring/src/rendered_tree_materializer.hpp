@@ -2,6 +2,7 @@
 
 #include <vellum/authoring/js_application.hpp>
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -26,5 +27,11 @@ namespace vellum::authoring {
     RenderedApplication& output,
     std::string* error,
     std::vector<vellum::graphics::LoweringDiagnostic>* failure_diagnostics = nullptr);
+
+/// Whether `number`, a JSON protocol number, is a non-negative integer below
+/// `limit`; when it is, `output` receives it. The double is checked before any
+/// integer conversion, so a fractional, negative, non-finite or out-of-range
+/// value is refused rather than converted.
+[[nodiscard]] bool protocol_integer(double number, std::uint64_t limit, std::uint64_t& output);
 
 }  // namespace vellum::authoring

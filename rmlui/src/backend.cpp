@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -366,10 +367,25 @@ Status Backend::open(std::uint32_t width, std::uint32_t height) {
         return Status::rejected;
     }
     runtime_->context->SetDensityIndependentPixelRatio(density_ratio_);
+    runtime_->context->SetContentChangedCallback([this] {
+        content_changed_.store(true, std::memory_order_release);
+    });
     width_ = width;
     height_ = height;
     open_ = true;
     return Status::ok;
+}
+
+void Backend::set_dimensions(std::uint32_t width, std::uint32_t height) {
+    if (!open_ || !runtime_ || !runtime_->context || width == 0 || height == 0 ||
+        width > INT_MAX || height > INT_MAX)
+        return;
+    detail::AssetScope scope(&assets_, runtime_->scope_prefix, runtime_.get());
+    runtime_->context->SetDimensions({static_cast<int>(width), static_cast<int>(height)});
+    width_ = width;
+    height_ = height;
+    // A resize always needs one new frame, whether or not RmlUi dirtied layout.
+    content_changed_.store(true, std::memory_order_release);
 }
 
 Status Backend::set_density_ratio(float ratio) {
@@ -432,6 +448,7 @@ Status Backend::load_document(std::string_view path) {
         runtime_->document = document;
         runtime_->document->Show();
     }
+    content_changed_.store(true, std::memory_order_release);
     document_ = std::move(asset);
     return Status::ok;
 }
@@ -556,6 +573,8 @@ Status Backend::dirty_model(std::string_view name, std::string_view field) {
     if (it == runtime_->models.end() || field.empty())
         return Status::rejected;
     it->second.handle.DirtyVariable(Rml::String(field));
+    if (runtime_->context)
+        runtime_->context->NotifyContentChanged();
     return Status::ok;
 }
 
@@ -583,6 +602,7 @@ Status Backend::set_element_class(std::string_view element_id, std::string_view 
     if (!element)
         return Status::rejected;
     element->SetClass(Rml::String(class_name), on);
+    runtime_->context->NotifyContentChanged();
     return Status::ok;
 }
 
@@ -658,19 +678,42 @@ bool Backend::mouse_interacting() const noexcept {
     return open_ && runtime_ && runtime_->context && runtime_->context->IsMouseInteracting();
 }
 
+bool Backend::needs_render() const noexcept {
+    if (!open_ || !runtime_ || !runtime_->context)
+        return false;
+    if (content_changed_.load(std::memory_order_acquire))
+        return true;
+    // A finite positive delay is a future deadline (a caret blink), not work now.
+    return runtime_->context->GetNextUpdateDelay() <= 0.0;
+}
+
 void Backend::render() {
     if (!open_)
         return;
+    content_changed_.store(false, std::memory_order_release);
     renderer_.begin_frame(width_, height_);
     if (runtime_ && runtime_->context) {
         detail::AssetScope scope(&assets_, runtime_->scope_prefix, runtime_.get());
         runtime_->context->Update();
+        // Update itself dirties elements (a data-bound class, a restyle) and the
+        // Render below paints those changes, so they must not schedule a second
+        // frame. Anything notified after this point is genuinely new.
+        content_changed_.store(false, std::memory_order_release);
         runtime_->context->Render();
     }
     renderer_.end_frame();
 }
 
+void Backend::on_attach() { renderer_.on_attach(); }
+
+void Backend::on_detach() { renderer_.on_detach(); }
+
+void Backend::on_visibility_changed(bool visible) { renderer_.on_visibility_changed(visible); }
+
+void Backend::on_idle() { renderer_.on_idle(); }
+
 void Backend::close() {
+    renderer_.on_close();
     if (runtime_) {
         if (runtime_->context) {
             detail::AssetScope scope(&assets_, runtime_->scope_prefix, runtime_.get());
@@ -695,6 +738,7 @@ void Backend::close() {
     document_ = {};
     open_ = false;
     width_ = height_ = 0;
+    content_changed_.store(false, std::memory_order_release);
 }
 
 } // namespace vellum::rmlui

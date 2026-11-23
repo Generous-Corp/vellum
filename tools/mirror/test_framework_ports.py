@@ -303,5 +303,218 @@ class DeclaredUnitsTest(unittest.TestCase):
                                    "is not a directory framework/ holds")
 
 
+
+class PlatformScopeTest(unittest.TestCase):
+    """Schema v2: a compiled source carries the platforms it is compiled on."""
+
+    SRC = "framework/core/a/src/new.cpp"
+
+    def scoped(self, platforms, path: str = SRC, **overrides) -> dict:
+        fields = {"target": "a-target", "framework_blob": None, "platforms": platforms, **overrides}
+        return row(path, "scoped", **fields)
+
+    def errors(self, candidate) -> list:
+        return fp.row_errors(candidate, "row")
+
+    def assertRefused(self, candidate, fragment: str) -> None:
+        errors = self.errors(candidate)
+        self.assertTrue(any(fragment in error for error in errors), errors)
+
+    def test_a_compiled_row_may_name_known_platforms(self) -> None:
+        self.assertEqual(self.errors(row(platforms=["linux-x64", "macos-arm64"])), [])
+        self.assertEqual(self.errors(self.scoped(["windows-x64"])), [])
+
+    def test_platform_lists_are_checked(self) -> None:
+        self.assertRefused(row(platforms=["beos-ppc"]), "unknown platform")
+        self.assertRefused(row(platforms=[]), "non-empty list")
+        self.assertRefused(row(platforms=["linux-x64", "linux-x64"]), "non-empty list")
+        self.assertRefused(row(platforms="linux-x64"), "non-empty list")
+
+    def test_only_compiled_sources_carry_a_scope(self) -> None:
+        self.assertRefused(row("framework/core/a/include/vellum/a/new.hpp", platforms=["linux-x64"]),
+                           "platforms scope only a compilable source")
+        self.assertRefused(row("framework/core/a/src/old.cpp", "removed", platforms=["linux-x64"]),
+                           "platforms scope only a compilable source")
+        self.assertRefused(self.scoped(["linux-x64"], path="framework/core/a/include/a.hpp", target=None),
+                           "only a compilable source can be scoped")
+
+    def test_a_scoped_row_names_its_platforms_and_target(self) -> None:
+        missing = self.scoped(["linux-x64"])
+        del missing["platforms"]
+        self.assertRefused(missing, "names the platforms")
+        self.assertRefused(self.scoped(["linux-x64"], target=None), "target must name")
+        self.assertRefused(self.scoped(["linux-x64"], framework_blob="b" * 40), "framework_blob is null")
+
+    def test_a_v1_document_holds_no_scope(self) -> None:
+        document = json.dumps({"schema": fp.SCHEMA_V1, "rows": [row(platforms=["linux-x64"])]})
+        rows, errors = fp.parse(document)
+        self.assertEqual(rows, [])
+        self.assertTrue(any("needs schema" in error for error in errors), errors)
+        document = json.dumps({"schema": fp.SCHEMA_V1, "rows": [row(), self.scoped(["linux-x64"])]})
+        self.assertTrue(any("needs schema" in error for error in fp.parse(document)[1]))
+        # Control: the landed v1 shape still reads, and v2 reads the same rows with a scope.
+        self.assertEqual(fp.parse(json.dumps({"schema": fp.SCHEMA_V1, "rows": [row()]}))[1], [])
+        self.assertEqual(fp.parse(ledger([row(platforms=["linux-x64"])]))[1], [])
+
+    def test_the_committed_ledger_reads_the_same_as_v1_and_v2(self) -> None:
+        # The ledger moved from v1 to v2 with its rows unchanged: every
+        # unscoped row reads identically under both schemas, and a scope is
+        # refused only under v1.
+        repo = HERE.parent.parent
+        committed = json.loads((repo / fp.LEDGER).read_text(encoding="utf-8"))
+        self.assertEqual(committed["schema"], fp.SCHEMA)
+        unscoped = [r for r in committed["rows"] if "platforms" not in r and r["change"] != "scoped"]
+        self.assertGreaterEqual(len(unscoped), 29)
+        as_v1 = fp.parse(json.dumps({"schema": fp.SCHEMA_V1, "rows": unscoped}))
+        as_v2 = fp.parse(json.dumps({"schema": fp.SCHEMA, "rows": unscoped}))
+        self.assertEqual(as_v1[1], [])
+        self.assertEqual(as_v1, as_v2)
+        self.assertEqual(as_v2[0], unscoped)
+        # Control: a v1 document carrying a scoped row is refused, so the equality
+        # above is not the parser accepting anything.
+        scoped = [dict(unscoped[0], platforms=["linux-x64"])] if fp.compiled(unscoped[0]["framework_path"]) else \
+            [row(platforms=["linux-x64"])]
+        self.assertTrue(fp.parse(json.dumps({"schema": fp.SCHEMA_V1, "rows": scoped}))[1])
+
+    def test_replay_scopes_each_added_source(self) -> None:
+        header = row("framework/core/a/include/vellum/a/new.hpp")
+        added, _, scopes, errors = fp.replay_scoped([row(), header], set())
+        self.assertEqual(errors, [])
+        self.assertEqual(scopes, {self.SRC: frozenset({"macos-arm64"})})
+        self.assertIn(header["framework_path"], added)
+        _, _, scopes, _ = fp.replay_scoped([row(platforms=["linux-x64"])], set())
+        self.assertEqual(scopes[self.SRC], frozenset({"linux-x64"}))
+
+    def test_a_scoped_row_replaces_the_scope_and_keeps_the_adding_row(self) -> None:
+        adding = row(platforms=["linux-x64"])
+        added, _, scopes, errors = fp.replay_scoped([adding, self.scoped(["linux-x64", "windows-x64"])], set())
+        self.assertEqual(errors, [])
+        self.assertEqual(scopes[self.SRC], frozenset({"linux-x64", "windows-x64"}))
+        # The joining-blob check keys on the adding row; a scope change never replaces it.
+        self.assertIs(added[self.SRC], adding)
+
+    def test_a_scoped_row_needs_a_source_the_ledger_adds_to_the_same_target(self) -> None:
+        _, _, scopes, errors = fp.replay_scoped([self.scoped(["linux-x64"])], set())
+        self.assertTrue(any("cannot be scoped" in error for error in errors), errors)
+        _, _, _, errors = fp.replay_scoped([self.scoped(["linux-x64"])], {self.SRC})
+        self.assertTrue(any("cannot be scoped" in error for error in errors), errors)  # a transferred file
+        _, _, _, errors = fp.replay_scoped([row(), self.scoped(["linux-x64"], target="b-target")], set())
+        self.assertTrue(any("cannot move it" in error for error in errors), errors)
+
+    def test_removing_and_re_adding_resets_the_scope(self) -> None:
+        rows = [row(platforms=["linux-x64"]), self.scoped(["windows-x64"]), row(change="removed"), row()]
+        _, _, scopes, errors = fp.replay_scoped(rows, set())
+        self.assertEqual(errors, [])
+        self.assertEqual(scopes[self.SRC], frozenset({"macos-arm64"}))
+        _, removed, scopes, _ = fp.replay_scoped(rows[:3], set())
+        self.assertNotIn(self.SRC, scopes)
+        self.assertIn(self.SRC, removed)
+
+    def test_a_scope_change_cannot_leave_the_macos_build(self) -> None:
+        # The macOS closure is the only one landed: leaving it would leave the
+        # source compiled nowhere a lane checks.
+        for adding in (row(), row(platforms=["macos-arm64", "linux-x64"])):
+            _, _, scopes, errors = fp.replay_scoped([adding, self.scoped(["linux-x64"])], set())
+            self.assertTrue(any("cannot take it out of the macos-arm64 build" in e for e in errors), errors)
+            # Control: a scope change that keeps macOS is accepted.
+            _, _, scopes, errors = fp.replay_scoped([adding, self.scoped(["macos-arm64", "wasm32"])], set())
+            self.assertEqual(errors, [])
+            self.assertEqual(scopes[self.SRC], frozenset({"macos-arm64", "wasm32"}))
+        # A source never compiled on macOS may gain it, then cannot lose it again.
+        rows = [row(platforms=["linux-x64"]), self.scoped(["linux-x64", "macos-arm64"])]
+        self.assertEqual(fp.replay_scoped(rows, set())[3], [])
+        errors = fp.replay_scoped(rows + [self.scoped(["linux-x64"])], set())[3]
+        self.assertTrue(any("cannot take it out" in e for e in errors), errors)
+
+    def test_a_removal_cannot_carry_a_source_out_of_the_macos_build(self) -> None:
+        removed = row(change="removed")
+        for readd in (row(platforms=["wasm32"]), row(platforms=["linux-x64"])):
+            errors = fp.replay_scoped([row(), removed, readd], set())[3]
+            self.assertTrue(any("comes back only with macos-arm64" in e for e in errors), errors)
+        # Also after a scope change brought it into macOS.
+        rows = [row(platforms=["linux-x64"]), self.scoped(["linux-x64", "macos-arm64"]), removed,
+                row(platforms=["linux-x64"])]
+        self.assertTrue(any("comes back only" in e for e in fp.replay_scoped(rows, set())[3]))
+        # Controls: back with macOS is fine; a source never on macOS may come back off it.
+        self.assertEqual(fp.replay_scoped([row(), removed, row(platforms=["macos-arm64", "wasm32"])],
+                                          set())[3], [])
+        self.assertEqual(fp.replay_scoped([row(platforms=["linux-x64"]), removed, row(platforms=["wasm32"])],
+                                          set())[3], [])
+
+    def test_a_scoped_row_makes_no_provenance_claim_of_its_own(self) -> None:
+        adding = row(platforms=["linux-x64"])
+        for other, fragment in (({"pulp_path": "core/unrelated/x.cpp"}, "a scope change names the same"),
+                                ({"origin": "native", "pulp_path": None, "pulp_commits": []},
+                                 "a scope change names the same")):
+            errors = fp.replay_scoped([adding, self.scoped(["windows-x64"], **other)], set())[3]
+            self.assertTrue(any(fragment in e for e in errors), (other, errors))
+        errors = fp.replay_scoped([adding, self.scoped(["windows-x64"], pulp_commits=["c" * 40])], set())[3]
+        self.assertTrue(any("a scope change names the same" in e for e in errors), errors)
+        # Control: the adding row's origin, Pulp path and commits.
+        self.assertEqual(fp.replay_scoped([adding, self.scoped(["windows-x64"])], set())[3], [])
+
+    def test_the_landed_ledger_scopes_only_rows_that_name_a_platform(self) -> None:
+        # A row that names no scope keeps compiling exactly where it did, on
+        # macOS; a source compiles elsewhere only when its adding row says so.
+        repo = HERE.parents[1]
+        rows, errors = fp.load(repo)
+        self.assertEqual(errors, [])
+        added = {r["framework_path"]: r for r in rows
+                 if r["change"] == "added" and fp.compiled(r["framework_path"])}
+        self.assertTrue(added, "the landed ledger adds no compiled source; this check sees nothing")
+        _, _, scopes, replay_errors = fp.replay_scoped(rows, set())
+        self.assertEqual(replay_errors, [])
+        unscoped = [path for path, r in added.items() if "platforms" not in r]
+        self.assertTrue(unscoped, "no unscoped compiled row; this check sees nothing")
+        self.assertEqual({scopes[path] for path in unscoped}, {frozenset({"macos-arm64"})})
+        for path, r in added.items():
+            if "platforms" in r:
+                self.assertEqual(scopes[path], frozenset(r["platforms"]))
+                self.assertNotIn("macos-arm64", scopes[path], path)
+
+    def test_scopes_reads_the_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            (repo / fp.LEDGER).parent.mkdir(parents=True)
+            (repo / fp.LEDGER).write_text(ledger([row(platforms=["linux-x64"])]), encoding="utf-8")
+            scopes, errors = fp.scopes(repo, set())
+            self.assertEqual(errors, [])
+            self.assertTrue(fp.compiled_on(scopes, self.SRC, "linux-x64"))
+            self.assertFalse(fp.compiled_on(scopes, self.SRC, "macos-arm64"))
+            # A broken ledger scopes nothing.
+            (repo / fp.LEDGER).write_text(ledger([row(platforms=["nope"])]), encoding="utf-8")
+            self.assertEqual(fp.scopes(repo, set())[0], {})
+
+    def test_declared_targets_carry_a_covered_scope(self) -> None:
+        target = {"name": "vellum-a", "type": "STATIC_LIBRARY", "unit": "a", "sources": [self.SRC],
+                  "include_dirs": [], "compile_definitions": [], "link_targets": [], "reason": "r",
+                  "platforms": ["linux-x64"]}
+        self.assertEqual(fp.unit_target_errors(target, "t"), [])
+        self.assertTrue(fp.unit_target_errors({**target, "platforms": ["nope"]}, "t"))
+        added = {self.SRC: row(target="vellum-a", platforms=["linux-x64"])}
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            self.assertEqual(fp.units_errors(repo, [target], added), [])
+            wider = {**target, "platforms": ["linux-x64", "macos-arm64"]}
+            self.assertTrue(any("is not scoped" in e for e in fp.units_errors(repo, [wider], added)))
+            # An unscoped target means macOS, which this source is not scoped to.
+            plain = {k: v for k, v in target.items() if k != "platforms"}
+            self.assertTrue(any("is not scoped" in e for e in fp.units_errors(repo, [plain], added)))
+            # A later scoped row widens the source, so the wider target is covered.
+            widened = {self.SRC: frozenset({"linux-x64", "macos-arm64"})}
+            self.assertEqual(fp.units_errors(repo, [wider], added, widened), [])
+        # A declared target links only declared targets that cover its platforms.
+        lib_b = {**target, "name": "vellum-b", "unit": "b", "sources": [], "link_targets": ["vellum-a"],
+                 "platforms": ["linux-x64", "macos-arm64"]}
+        with tempfile.TemporaryDirectory() as directory:
+            errors = fp.units_errors(Path(directory), [target, lib_b], added)
+            self.assertTrue(any("where the target it links, vellum-a, is not" in e for e in errors), errors)
+            lib_b["platforms"] = ["linux-x64"]
+            self.assertFalse(any("target it links" in e for e in fp.units_errors(Path(directory),
+                                                                                    [target, lib_b], added)))
+        v1 = json.dumps({"schema": fp.UNITS_SCHEMA_V1, "targets": [target]})
+        self.assertTrue(any("needs schema" in e for e in fp.parse_units(v1)[1]))
+
+
 if __name__ == "__main__":
     unittest.main()

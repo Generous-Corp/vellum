@@ -119,7 +119,7 @@ def source_argument(arguments: list[str], command: str) -> tuple[int, Path] | No
     options_with_values = {
         "--project", "--source-type", "--as", "--source-key",
         "--framework-version", "--cli-api", "--target",
-        "--capture-envelope", "--interaction-plan",
+        "--capture-envelope", "--interaction-plan", "--frame", "--page", "--file",
         "--source-archive", "--source-archive-sha256",
         "--source-archive-name", "--source-archive-member",
     }
@@ -132,7 +132,7 @@ def source_argument(arguments: list[str], command: str) -> tuple[int, Path] | No
                 raise ArchiveFailure(f"{value} requires a value")
             index += 2
             continue
-        if value == "--json":
+        if value in {"--json", "--outline"}:
             index += 1
             continue
         if value.startswith("--"):
@@ -392,8 +392,12 @@ def invoke_backend_with_archive_staging(
     source = source_argument(forwarded, command)
     if source is None or not is_pulp_zip_candidate(source[1]):
         return subprocess.run([str(backend), command, *forwarded], check=False)
-    if command == "import" and (option_value(forwarded, "--source-type") or "figma") != "figma":
-        raise ArchiveFailure("Pulp ZIP sources require --source-type figma")
+    if "--file" in forwarded:
+        raise ArchiveFailure("Repeated Figma sources require JSON envelopes")
+    if command == "import" and (option_value(forwarded, "--source-type") or "figma") not in {
+        "figma", "figma-plugin",
+    }:
+        raise ArchiveFailure("Pulp ZIP sources require a Figma plugin source type")
     with stage_pulp_archive(source[1]) as staged:
         staged_arguments = list(forwarded)
         staged_arguments[source[0]] = str(staged["scene"])

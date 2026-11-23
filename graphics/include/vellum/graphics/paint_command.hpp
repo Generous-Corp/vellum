@@ -68,6 +68,9 @@ struct PaintCommand final {
         /// Draws the compiled vector asset `vector`, its view box stretched
         /// onto `bounds`.
         vector,
+        /// Draws `plot` over `bounds` on `fill`, as `plot_geometry` lays it
+        /// out at the renderer's scale.
+        plot,
     };
 
     Kind kind = Kind::rectangle;
@@ -76,6 +79,8 @@ struct PaintCommand final {
     Color fill{};
     std::vector<LinearGradient> fill_gradients;
     std::vector<BoxShadow> box_shadows;
+    float border_width = 0.0F;
+    Color border_color = Color::rgba(0.0F, 0.0F, 0.0F, 0.0F);
     float corner_radius = 0.0F;
     std::string text;
     float font_size = 14.0F;
@@ -85,6 +90,12 @@ struct PaintCommand final {
     bool underline = false;
     bool strikethrough = false;
     std::vector<TextRun> text_runs;
+    /// On a `text` command, the node's `SceneNode::text_layout`.
+    std::optional<TextLayout> text_layout;
+    /// On a `text` command, set when a character no packaged face covers is
+    /// drawn as the font's missing-glyph box rather than as `?`; see
+    /// `draws_missing_glyph_box`.
+    bool missing_glyph_box = false;
     /// Mesh geometry, relative to `bounds.x`/`bounds.y`.
     std::shared_ptr<const TriangleMesh> mesh;
     /// Path geometry and stroke, relative to `bounds.x`/`bounds.y`. The fill
@@ -131,6 +142,11 @@ struct PaintCommand final {
     /// transform; `corner_radii` gives the box's corners. A backdrop effect
     /// draws within it.
     Rect effect_box{};
+    /// What a `plot` command draws.
+    std::shared_ptr<const PlotSpec> plot;
+    /// On a `rectangle`, set when lowering emitted it as the gradient
+    /// background of the `plot` command that follows it.
+    bool plot_background = false;
 };
 
 [[nodiscard]] constexpr std::string_view to_string(PaintCommand::Kind kind) noexcept {
@@ -147,6 +163,7 @@ struct PaintCommand final {
     case PaintCommand::Kind::begin_mask: return "begin_mask";
     case PaintCommand::Kind::end_mask: return "end_mask";
     case PaintCommand::Kind::vector: return "vector";
+    case PaintCommand::Kind::plot: return "plot";
     }
     return "unknown";
 }
@@ -167,7 +184,9 @@ struct PaintCommand final {
 /// `transform`: the box grown by each shadow's offset, spread, and 1.5 times
 /// its blur radius, a mesh's clipped vertex extent, a path's
 /// `path_paint_box`, or a vector asset's `vector_paint_bounds`. Text may
-/// overflow its box, so its extent is the box with `bounded` false.
+/// overflow its box, so its extent is the box with `bounded` false. A plot's
+/// is its box grown by two logical pixels, which holds the device grid it
+/// snaps to at any scale of 0.25 or more.
 struct PaintExtent final {
     Rect rect{};
     bool bounded = true;
@@ -179,7 +198,8 @@ struct PaintExtent final {
 [[nodiscard]] constexpr bool draws_content(PaintCommand::Kind kind) noexcept {
     return kind == PaintCommand::Kind::rectangle || kind == PaintCommand::Kind::text ||
            kind == PaintCommand::Kind::mesh || kind == PaintCommand::Kind::path ||
-           kind == PaintCommand::Kind::image || kind == PaintCommand::Kind::vector;
+           kind == PaintCommand::Kind::image || kind == PaintCommand::Kind::vector ||
+           kind == PaintCommand::Kind::plot;
 }
 
 /// The axis-aligned box that contains `rect` once mapped by `transform`.
@@ -231,6 +251,10 @@ struct ResolvedLinearGradient final {
 /// so the renderer refuses it rather than silently skipping it; a valid path
 /// with no commands emits nothing. An image node always emits its command,
 /// with the asset `find_image_asset` resolves, or none when it is missing.
+/// A plot node with a spec emits its command, preceded by a rectangle named
+/// `node_id + "/background"` with `plot_background` set when it has fill
+/// gradients; one without a spec
+/// contributes nothing for itself.
 ///
 /// A node whose opacity is below one and whose subtree draws more than one
 /// command is wrapped in a `begin_layer`/`end_layer` pair; when it draws
@@ -294,6 +318,13 @@ struct PaintCommandRange final {
 /// one. `ranges`, when non-null, is cleared first; `node` points into `scene`.
 [[nodiscard]] std::vector<PaintCommand> make_paint_commands(
     const Scene& scene, std::vector<PaintCommandRange>* ranges);
+
+/// Lowers a scene whose tracks `evaluate_tracks` has already applied. Token
+/// receipts name authored colours, so the caller validates them on the
+/// authored scene (`accept_scene`) and this does not check them again; an
+/// animated token fill therefore keeps the colour its track gave it.
+[[nodiscard]] std::vector<PaintCommand> make_evaluated_paint_commands(
+    const Scene& evaluated, std::vector<PaintCommandRange>* ranges);
 
 /// Whether a mesh can be drawn as given: every index names a vertex, the index
 /// count is a multiple of three, every position and texture coordinate is

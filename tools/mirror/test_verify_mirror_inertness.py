@@ -423,9 +423,18 @@ class VerifyTest(unittest.TestCase):
             f"main.cpp.o: main.cpp {mirror}/include/pulp/canvas/canvas.hpp\n")
         self.image = self.build / "consumer"
         self.image.write_bytes(b"\0")
+        host_exports = [
+            "pulp::view::PluginViewHost::create(pulp::view::View&, pulp::view::PluginViewHost::Size)",
+            "pulp::view::PluginViewHost::create(pulp::view::View&, pulp::view::PluginViewHost::Options const&)",
+            "pulp::view::PluginViewHost::set_factory()",
+            "pulp::view::PluginViewHost::clear_factory()",
+            "pulp::view::PluginViewHost::has_factory()",
+            "pulp::view::register_platform_plugin_view_host()",
+        ]
+        self.undefined: dict[Path, set[str]] = {}
         self.symbols = {self.image: CLEAN_SYMBOLS["consumer"],
                         mirror / "lib/libvellum-mirror-canvas.dylib": CLEAN_SYMBOLS["libvellum-mirror-canvas.dylib"],
-                        self.provider: ["SkFont::setSize(float)"]}
+                        self.provider: ["SkFont::setSize(float)", *host_exports]}
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -433,26 +442,89 @@ class VerifyTest(unittest.TestCase):
     def run_verify(self, floor: set[str] | None = None,
                    install_libdir: str = "lib") -> dict:
         with mock.patch.object(vi, "image_symbols", side_effect=lambda path: self.symbols[path]), \
+                mock.patch.object(vi, "image_defined_symbols",
+                                  side_effect=lambda path: [s for s in self.symbols[path]
+                                                            if s not in self.undefined.get(path, ())]), \
                 mock.patch.object(vi, "view_audio_floor", side_effect=lambda archive: floor):
             return vi.verify(self.prefix, self.build, self.image,
                              Path("libpulp-view-audio.a") if floor is not None else None,
                              install_libdir)
 
-    def test_a_packaged_plugin_view_host_reference_is_not_inert(self) -> None:
+    def test_a_packaged_plugin_view_host_export_is_required(self) -> None:
         clean = self.run_verify()
-        self.assertTrue(clean["checks"]["no-pulp-kept-references"])
+        self.assertTrue(clean["checks"]["plugin-view-host-exports"])
         self.assertEqual(clean["name_debts"]["view-core-plugin-view-host-declarations"]["matched"], 0)
         reference = "pulp::view::PluginViewHost::create(pulp::view::View&, pulp::view::Size)"
         self.symbols[self.provider] = [*self.symbols[self.provider], reference]
         proof = self.run_verify()
+        # A PluginViewHost symbol that is not one of the exports is judged like
+        # any other view symbol, not skipped.
         self.assertFalse(proof["inert"])
-        self.assertFalse(proof["checks"]["no-pulp-kept-references"])
+        self.assertFalse(proof["checks"]["no-audio-symbols"])
+        self.assertTrue(proof["checks"]["plugin-view-host-exports"])
         self.assertEqual(proof["name_debts"]["view-core-plugin-view-host-declarations"]["matched"], 1)
+
+    def test_missing_plugin_view_host_exports_are_not_inert(self) -> None:
+        exports = self.symbols[self.provider][1:]
+        for index, dropped in enumerate(exports):
+            with self.subTest(dropped=dropped):
+                self.symbols[self.provider] = ["SkFont::setSize(float)",
+                                               *exports[:index], *exports[index + 1:]]
+                proof = self.run_verify()
+                self.assertFalse(proof["checks"]["plugin-view-host-exports"])
+                self.assertFalse(proof["inert"])
+        self.symbols[self.provider] = ["SkFont::setSize(float)"]
+        self.assertFalse(self.run_verify()["inert"])
+
+    def test_a_duplicated_export_does_not_stand_in_for_a_missing_one(self) -> None:
+        exports = self.symbols[self.provider][1:]
+        self.symbols[self.provider] = ["SkFont::setSize(float)", *exports[:-1], exports[0]]
+        self.assertFalse(self.run_verify()["checks"]["plugin-view-host-exports"])
+
+    def test_cold_split_outlines_of_the_exports_stay_exports(self) -> None:
+        options = "pulp::view::PluginViewHost::create(pulp::view::View&, pulp::view::PluginViewHost::Options const&)"
+        size = "pulp::view::PluginViewHost::create(pulp::view::View&, pulp::view::PluginViewHost::Size)"
+        self.symbols[self.provider] = [*self.symbols[self.provider],
+                                       f"{options} (.cold.1)", f"{options} (.cold.2)",
+                                       f"{size} (.cold.1)"]
+        proof = self.run_verify()
+        self.assertTrue(proof["checks"]["no-pulp-kept-references"])
+        self.assertTrue(proof["checks"]["plugin-view-host-exports"])
+
+    def test_other_plugin_view_host_audio_symbols_are_still_judged(self) -> None:
+        self.symbols[self.provider] = [*self.symbols[self.provider],
+                                       "pulp::view::PluginViewHost::WaveformView::paint()"]
+        self.assertFalse(self.run_verify()["inert"])
+
+    FLOOR = {"pulp::view::Meter::~Meter()"}
+
+    def test_a_non_export_host_reference_fails_under_a_floor(self) -> None:
+        reference = "pulp::view::PluginViewHost::create(pulp::view::View&, pulp::view::Size)"
+        self.symbols[self.provider] = [*self.symbols[self.provider], reference]
+        proof = self.run_verify(floor=self.FLOOR)
+        self.assertFalse(proof["checks"]["no-pulp-kept-references"])
+        self.assertFalse(proof["inert"])
+        self.assertTrue(self.run_verify(floor=self.FLOOR)["checks"]["plugin-view-host-exports"])
+
+    def test_host_nested_audio_symbols_fail_under_a_floor(self) -> None:
+        self.symbols[self.provider] = [*self.symbols[self.provider],
+                                       "pulp::view::PluginViewHost::WaveformView::paint()"]
+        proof = self.run_verify(floor=self.FLOOR)
+        self.assertFalse(proof["checks"]["no-audio-symbols"])
+        self.assertFalse(proof["inert"])
+
+    def test_exports_that_are_only_referenced_are_not_provided(self) -> None:
+        self.undefined[self.provider] = set(self.symbols[self.provider][1:])
+        proof = self.run_verify()
+        self.assertFalse(proof["checks"]["plugin-view-host-exports"])
+        self.assertFalse(proof["inert"])
+        self.undefined[self.provider] = {self.symbols[self.provider][1]}
+        self.assertFalse(self.run_verify()["checks"]["plugin-view-host-exports"])
 
     def test_the_consumer_may_reference_plugin_view_host(self) -> None:
         reference = "pulp::view::register_platform_plugin_view_host()"
         self.symbols[self.image] = [*self.symbols[self.image], reference]
-        self.assertTrue(self.run_verify()["checks"]["no-pulp-kept-references"])
+        self.assertTrue(self.run_verify()["checks"]["plugin-view-host-exports"])
 
     def test_clean_package_is_inert_and_records_debt_absence(self) -> None:
         proof = self.run_verify()

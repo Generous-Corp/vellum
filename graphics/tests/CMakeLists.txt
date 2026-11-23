@@ -1,5 +1,6 @@
 add_library(vellum-scene-capture-harness STATIC
-    support/scene_capture_harness.cpp)
+    support/scene_capture_harness.cpp
+    support/gpu_test_environment.cpp)
 target_include_directories(vellum-scene-capture-harness PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(vellum-scene-capture-harness PUBLIC
@@ -39,7 +40,7 @@ set_tests_properties(vellum.scene-capture-harness.compare PROPERTIES
     FIXTURES_REQUIRED vellum_scene_capture_goldens)
 
 add_executable(vellum-partial-present-test
-    partial_present_test.cpp)
+    partial_present_test.cpp rectangle_batch_gpu_test.cpp)
 target_link_libraries(vellum-partial-present-test PRIVATE
     vellum-scene-capture-harness)
 set_target_properties(vellum-partial-present-test PROPERTIES
@@ -48,6 +49,12 @@ set_target_properties(vellum-partial-present-test PROPERTIES
     BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
 add_test(NAME vellum.gpu.partial-present
     COMMAND vellum-partial-present-test)
+# The rectangle-batch parity, eligibility and fallback checks run only
+# under --rectangle-batches; without this registration CI never runs them.
+add_test(NAME vellum.gpu.rectangle-batches
+    COMMAND vellum-partial-present-test --rectangle-batches)
+set_tests_properties(vellum.gpu.rectangle-batches PROPERTIES
+    SKIP_RETURN_CODE 77)
 
 add_executable(vellum-animation-gpu-test
     animation_gpu_test.cpp)
@@ -64,6 +71,34 @@ set_target_properties(vellum-animation-gpu-test PROPERTIES
 add_test(NAME vellum.gpu.animation
     COMMAND vellum-animation-gpu-test)
 
+add_executable(vellum-gpu-test-environment-test
+    gpu_test_environment_test.cpp)
+target_link_libraries(vellum-gpu-test-environment-test PRIVATE
+    vellum-scene-capture-harness)
+target_include_directories(vellum-gpu-test-environment-test PRIVATE
+    ${PROJECT_SOURCE_DIR}/graphics/src)
+set_target_properties(vellum-gpu-test-environment-test PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
+add_test(NAME vellum.gpu.test-environment
+    COMMAND vellum-gpu-test-environment-test)
+set_tests_properties(vellum.gpu.test-environment PROPERTIES
+    SKIP_RETURN_CODE 77)
+
+add_executable(vellum-frame-driver-gpu-test
+    frame_driver_gpu_test.cpp)
+target_link_libraries(vellum-frame-driver-gpu-test PRIVATE
+    vellum-scene-capture-harness)
+set_target_properties(vellum-frame-driver-gpu-test PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
+add_test(NAME vellum.gpu.frame-driver
+    COMMAND vellum-frame-driver-gpu-test)
+set_tests_properties(vellum.gpu.frame-driver PROPERTIES
+    SKIP_RETURN_CODE 77)
+
 add_executable(vellum-render-cache-gpu-test
     render_cache_gpu_test.cpp)
 target_link_libraries(vellum-render-cache-gpu-test PRIVATE
@@ -74,6 +109,17 @@ set_target_properties(vellum-render-cache-gpu-test PROPERTIES
     BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
 add_test(NAME vellum.gpu.render-cache
     COMMAND vellum-render-cache-gpu-test)
+
+add_executable(vellum-device-recovery-gpu-test
+    device_recovery_gpu_test.cpp)
+target_link_libraries(vellum-device-recovery-gpu-test PRIVATE
+    vellum-scene-capture-harness)
+set_target_properties(vellum-device-recovery-gpu-test PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
+add_test(NAME vellum.gpu.device-recovery
+    COMMAND vellum-device-recovery-gpu-test)
 
 add_executable(vellum-image-gpu-test
     image_gpu_test.cpp)
@@ -178,3 +224,50 @@ if(VELLUM_ENABLE_AUTHORING AND APPLE)
                 "${PROJECT_SOURCE_DIR}/web/tests/vector_canvas_builder_test.mjs")
     endif()
 endif()
+add_executable(vellum-text-layout-gpu-test
+    text_layout_gpu_test.cpp)
+target_link_libraries(vellum-text-layout-gpu-test PRIVATE
+    vellum-scene-capture-harness)
+# The test reaches SkiaDawnSurfaceTestAccess, which is not installed.
+target_include_directories(vellum-text-layout-gpu-test PRIVATE
+    ${PROJECT_SOURCE_DIR}/graphics/src)
+set_target_properties(vellum-text-layout-gpu-test PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
+add_test(NAME vellum.gpu.text-layout
+    COMMAND vellum-text-layout-gpu-test)
+set_tests_properties(vellum.gpu.text-layout PROPERTIES
+    SKIP_RETURN_CODE 77)
+
+add_executable(vellum-plot-gpu-test
+    plot_gpu_test.cpp)
+target_link_libraries(vellum-plot-gpu-test PRIVATE
+    vellum-scene-capture-harness)
+# The test reaches SkiaDawnSurfaceTestAccess and the plot hooks, which are not
+# installed.
+target_include_directories(vellum-plot-gpu-test PRIVATE
+    ${PROJECT_SOURCE_DIR}/graphics/src)
+set_target_properties(vellum-plot-gpu-test PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
+add_test(NAME vellum.gpu.plots
+    COMMAND vellum-plot-gpu-test)
+set_tests_properties(vellum.gpu.plots PROPERTIES
+    SKIP_RETURN_CODE 77)
+
+add_executable(vellum-frame-debug-test
+    frame_debug_test.mm)
+target_link_libraries(vellum-frame-debug-test PRIVATE
+    vellum-scene-capture-harness
+    "-framework QuartzCore")
+# The test reaches SkiaDawnSurfaceTestAccess, which is not installed.
+target_include_directories(vellum-frame-debug-test PRIVATE
+    ${PROJECT_SOURCE_DIR}/graphics/src)
+set_target_properties(vellum-frame-debug-test PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
+add_test(NAME vellum.gpu.frame-debug
+    COMMAND vellum-frame-debug-test)

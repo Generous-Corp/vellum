@@ -11,10 +11,15 @@
 include(FetchContent)
 
 set(VELLUM_RMLUI_RMLUI_COMMIT ba95ffe8bfb6370efb2cdcca927eaad4710c5413)
+# The tag archive of FreeType's GitHub mirror, whose tag VER-2-13-3 is the same
+# object as upstream's (gitlab.freedesktop.org/freetype/freetype). It omits
+# only generated autotools files, ChangeLog, the HTML reference and the dlg
+# submodule, none of which the CMake build reads; every other file matches the
+# 2.13.3 release tarball byte for byte.
 set(VELLUM_RMLUI_FREETYPE_URL
-    https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.gz)
+    https://codeload.github.com/freetype/freetype/tar.gz/refs/tags/VER-2-13-3)
 set(VELLUM_RMLUI_FREETYPE_SHA256
-    5c3a8e78f7b24c20b25b54ee575d6daa40007a5f4eea2845861c3409b3021747)
+    bc5c898e4756d373e0d991bab053036c5eb2aa7c0d5c67e8662ddc6da40c4103)
 set(VELLUM_RMLUI_LUA_URL https://www.lua.org/ftp/lua-5.4.7.tar.gz)
 set(VELLUM_RMLUI_LUA_SHA256
     9fbf5e28ef86c69858f6d3d34eccc32e911c1a28b4120ff3e84aaa70cfbf1e30)
@@ -81,7 +86,8 @@ function(vellum_rmlui_fetch_dependencies)
     # text no longer comes out up to 5 % wider at small sizes. Upstream has the
     # same code; retire it only if upstream takes an equivalent change.
     set(_vellum_rmlui_patches
-        "${CMAKE_CURRENT_LIST_DIR}/patches/rmlui-fractional-glyph-advances.patch")
+        "${CMAKE_CURRENT_LIST_DIR}/patches/rmlui-fractional-glyph-advances.patch"
+        "${CMAKE_CURRENT_LIST_DIR}/patches/rmlui-content-changed.patch")
     FetchContent_Declare(vellum_rmlui_rmlui
         GIT_REPOSITORY https://github.com/mikke89/RmlUi.git
         GIT_TAG "${VELLUM_RMLUI_RMLUI_COMMIT}"

@@ -19,6 +19,15 @@
       "surface": "installed deterministic native text face"
     },
     {
+      "name": "JetBrains Mono",
+      "version": "2.304",
+      "license": "SIL-OFL-1.1",
+      "source": "https://github.com/JetBrains/JetBrainsMono",
+      "path": "assets/fonts/JetBrainsMono-Regular.ttf",
+      "sha256": "a0bf60ef0f83c5ed4d7a75d45838548b1f6873372dfac88f71804491898d138f",
+      "surface": "installed deterministic monospace face"
+    },
+    {
       "name": "Jost Regular",
       "version": "3.710",
       "license": "SIL-OFL-1.1",
@@ -87,8 +96,8 @@
       "name": "FreeType",
       "version": "2.13.3",
       "license": "FTL",
-      "source": "https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.gz",
-      "sha256": "5c3a8e78f7b24c20b25b54ee575d6daa40007a5f4eea2845861c3409b3021747",
+      "source": "https://codeload.github.com/freetype/freetype/tar.gz/refs/tags/VER-2-13-3",
+      "sha256": "bc5c898e4756d373e0d991bab053036c5eb2aa7c0d5c67e8662ddc6da40c4103",
       "surface": "optional rmlui/ module only (VELLUM_ENABLE_RMLUI or a standalone rmlui build); built from source as a static hidden-visibility archive linked privately into VellumRmlUi::Core when VELLUM_RMLUI_FONTS=ON, and redistributed as an archive in the opt-in VellumRmlUi::Native package and the optional vellum-rmlui-sdk release archive (VellumRmlUiNative) under FTL; PNG, zlib, bzip2, Brotli and HarfBuzz disabled"
     },
     {
@@ -117,6 +126,23 @@
       "surface": "optional rmlui/ module only; single header compiled into the VellumRmlUi::SoftRenderer PNG encoder"
     },
     {
+      "name": "V8",
+      "version": "v8-m158-15.8.62.6-38351a002e2c",
+      "v8_version": "15.8.62.6",
+      "license": "BSD-3-Clause; bundles ICU (Unicode-3.0), zlib (Zlib) and Abseil (Apache-2.0)",
+      "source": "https://github.com/danielraffel/v8-builder",
+      "builder_ref": "bf4751122bf0c2c916336c73e7806e1d714536d6",
+      "built_revision": "38351a002e2c2890eca99d3abb6622728bfd7798",
+      "skia_release_tag": "chrome/m158",
+      "paired_skia": "be7d7c3e996e567eda7dc9774274f7a0103cdb8c",
+      "paired_dawn": "1716e88cc9e58398fab5d4473f7f2e858667b677",
+      "url": "https://github.com/danielraffel/v8-builder/releases/download/v8-m158-15.8.62.6-38351a002e2c/v8-mac-arm64-m158-15.8.62.6-38351a002e2c.zip",
+      "sha256": "828ec374aad252afd284da044743c2099ce3c9401d5e914df79aec4713517eff",
+      "release_metadata_url": "https://github.com/danielraffel/v8-builder/releases/download/v8-m158-15.8.62.6-38351a002e2c/release-metadata.json",
+      "release_metadata_sha256": "5393fe41d2b16e39bed2e5e526dab8e08bc1d4b865eb13ea5b3056c05b67e6b1",
+      "surface": "optional VELLUM_ENABLE_V8 only; the sealed shared libv8.dylib (exports only the v8:: and cppgc:: API; its ICU, zlib and Abseil stay internal) is linked by the installed Vellum::SkiaDawnProvider and installed beside it in lib/, with its manifest under share/vellum/v8/; the mirror's view-script unit compiles its V8 backend against the archive's headers and consumer_defines"
+    },
+    {
       "name": "Three.js",
       "version": "0.183.1",
       "revision": "077dd13c0e869d9f3dbe55875686f920367de457",
@@ -125,6 +151,14 @@
       "path": "assets/threejs",
       "payload_manifest_sha256": "1ed7c6f46541a8b803ba7c6386ae6b7751d4b30c1b82b3532db534481eba5b34",
       "surface": "unmodified runtime payload (three.webgpu build, core and module companions, OrbitControls, GLTFLoader, BufferGeometryUtils, SkeletonUtils) that scripted views load as ES modules; each file is pinned by SHA-256 in assets/threejs/payload-manifest.json"
+    },
+    {
+      "name": "Perfetto",
+      "version": "v57.2",
+      "license": "Apache-2.0",
+      "source": "https://github.com/google/perfetto/releases/download/v57.2/perfetto-cpp-sdk-src.zip",
+      "sha256": "c6fa3d89aee30f7da39402c9cd178c9f2e344544fda5c2109fd8457e319c3a2f",
+      "surface": "development-only native tracing (VELLUM_ENABLE_TRACING=ON, default OFF; needs VELLUM_ENABLE_MIRROR); the amalgamated perfetto.h and perfetto.cc are fetched by URL and SHA-256 by cmake/VellumTracing.cmake, built as one static library and linked into the mirror's foundation unit library only in that configuration; never part of a default build or a release artifact; a development SDK installed by hand from a tracing-ON build does contain it"
     }
   ],
   "runtime_toolchain_dependencies": {

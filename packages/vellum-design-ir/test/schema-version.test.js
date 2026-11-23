@@ -9,14 +9,17 @@ import {
     DESIGN_IR_VECTOR_ASSET_VERSION,
     DESIGN_IR_VERSION,
     normalizeImport,
-    svgAssetToDesignIR,
     validateDesignIR,
 } from '../src/index.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const schema = JSON.parse(await readFile(join(here, '..', 'schema', 'design-ir-v1.schema.json'), 'utf8'));
 const source = { key: 'assets', adapter: 'svg', adapterVersion: '1', formatVersion: '1.1', revision: 'test' };
-const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="5" height="5" fill="#ff0000"/></svg>';
+// A document with one path node, as a vector source writes one.
+const pathRoot = () => ({ kind: 'view', sourceId: 'svg', properties: { layout: { width: 10, height: 10 }, paint: {} },
+    children: [{ kind: 'path', sourceId: 'svg.0', properties: { layout: { x: 0, y: 0, width: 0, height: 0 },
+        path: { d: 'M0 0L5 0L5 5L0 5Z', fillRule: 'nonzero' },
+        paint: { fill: '#ff0000', stroke: 'none' } }, children: [] }] });
 
 function refused(document, pattern) {
     const { valid, issues } = validateDesignIR(document);
@@ -71,8 +74,20 @@ test('a document without vector asset fields stays at version 1', () => {
     assert.ok(matches(document, schema), 'the published schema accepts it');
 });
 
-test('vector asset fields need version 6 in the validator and the published schema', () => {
-    const { document } = svgAssetToDesignIR(svg, { source });
+test('compiled vector asset fields need version 6 while paths stay in the earlier contract', () => {
+    const pathDocument = normalizeImport({ source, root: pathRoot() });
+    assert.equal(pathDocument.schemaVersion, DESIGN_IR_VERSION);
+    assert.doesNotThrow(() => validateDesignIR(pathDocument, { throwOnError: true }));
+    assert.ok(matches(pathDocument, schema), 'the published schema accepts a version 1 path');
+    for (const version of [1, 2, 3, 4, 5]) {
+        assert.doesNotThrow(() => validateDesignIR({ ...pathDocument, schemaVersion: version }, { throwOnError: true }), `path at ${version}`);
+        assert.ok(matches({ ...pathDocument, schemaVersion: version }, schema), `schema accepts path at ${version}`);
+    }
+    const document = normalizeImport({ source, root: {
+        ...pathRoot(),
+        children: [...pathRoot().children, { kind: 'vector', sourceId: 'svg.1',
+            properties: { vector: { asset: { contentHash: `sha256:${'a'.repeat(64)}` } } }, children: [] }],
+    } });
     assert.equal(DESIGN_IR_VERSION, 1);
     assert.equal(document.schemaVersion, DESIGN_IR_VECTOR_ASSET_VERSION);
     assert.doesNotThrow(() => validateDesignIR(document, { throwOnError: true }));
@@ -81,7 +96,6 @@ test('vector asset fields need version 6 in the validator and the published sche
     assert.ok(refused(older, /needs schemaVersion 6/));
     assert.equal(matches(older, schema), false, 'the published schema refuses version 1');
     for (const [field, edit] of [
-        ['a path kind', (node) => ({ ...node, kind: 'path', properties: {} })],
         ['a vector bucket', (node) => ({ ...node, properties: { vector: {} } })],
         ['an image source', (node) => ({ ...node, properties: { image: { source: 'x' } } })],
         ['a paint transform', (node) => ({ ...node, properties: { paint: { transform: 'none' } } })],
@@ -124,28 +138,6 @@ test('compositing stays version 2 vocabulary in every later version', () => {
     }
 });
 
-test('SVG opacity and masks lower into compositing, not vector paint keys', () => {
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">
-      <mask id="m"><rect width="10" height="20" fill="#ffffff"/></mask>
-      <g id="g" opacity="0.5" mask="url(#m)"><rect width="20" height="20" fill="#ff0000"/></g></svg>`;
-    const { document } = svgAssetToDesignIR(svg, { source });
-    assert.equal(document.schemaVersion, 6);
-    const nodes = [];
-    const visit = (node) => { nodes.push(node); node.children.forEach(visit); };
-    visit(document.root);
-    const group = nodes.find((node) => node.id === 'assets/svg:1_g');
-    assert.deepEqual(group.compositing, { opacity: 0.5 });
-    const mask = nodes.find((node) => node.id === 'assets/svg:1_g:mask');
-    assert.deepEqual(mask.compositing, { mask: 'luminance' });
-    const content = nodes.find((node) => node.id === 'assets/svg:1_g:content');
-    assert.deepEqual(content.compositing, { maskRef: 'assets/svg:1_g:mask' });
-    for (const node of nodes) {
-        for (const key of ['opacity', 'maskMode', 'isolation']) {
-            assert.equal(node.properties.paint?.[key], undefined, `${node.id} paint.${key}`);
-        }
-    }
-});
-
 test('the required version counts material references, recursively', async () => {
     const { requiredDesignIRVersion } = await import('../src/index.js');
     const node = (extra = {}, children = []) => ({ kind: 'view', properties: {}, children, ...extra });
@@ -153,7 +145,22 @@ test('the required version counts material references, recursively', async () =>
     assert.equal(requiredDesignIRVersion(node({ material: glass })), 3, 'material only');
     assert.equal(requiredDesignIRVersion(node({}, [node({}, [node({ material: glass })])])), 3, 'nested material');
     assert.equal(requiredDesignIRVersion(node({ compositing: { opacity: 0.5 } }, [node({ material: glass })])), 3, 'material and compositing');
-    assert.equal(requiredDesignIRVersion(node({ material: glass }, [node({ kind: 'path' })])), 6, 'material and a vector field');
+    assert.equal(requiredDesignIRVersion(node({ material: glass }, [node({ kind: 'path' })])), 3, 'material and a path');
+    assert.equal(requiredDesignIRVersion(node({ material: glass }, [node({ kind: 'vector' })])), 6, 'material and a vector');
     assert.equal(requiredDesignIRVersion(node({ compositing: { opacity: 0.5 } })), 2, 'compositing only');
     assert.equal(requiredDesignIRVersion(node()), 1, 'nothing');
+});
+
+test('the required version covers every versioned field, alone, nested and mixed', async () => {
+    const { requiredDesignIRVersion } = await import('../src/index.js');
+    const node = (extra = {}, children = []) => ({ kind: 'view', properties: {}, children, ...extra });
+    const plot = { style: 'meter', channel: 'meters' };
+    const glass = { id: 'vellum.frosted-glass', values: {} };
+    assert.equal(requiredDesignIRVersion(node({ plot })), 5, 'plot only');
+    assert.equal(requiredDesignIRVersion(node({}, [node({}, [node({ plot })])])), 5, 'nested plot');
+    assert.equal(requiredDesignIRVersion(node({ tracks: [] }, [node({ plot })])), 5, 'plot and tracks');
+    assert.equal(requiredDesignIRVersion(node({ material: glass }, [node({ plot })])), 5, 'plot and material');
+    assert.equal(requiredDesignIRVersion(node({ plot }, [node({ kind: 'vector' })])), 6, 'plot and vector');
+    assert.equal(requiredDesignIRVersion(node({ tracks: [] })), 4, 'tracks only');
+    assert.equal(requiredDesignIRVersion(node({ tracks: [] }, [node({ material: glass })])), 4, 'tracks and material');
 });

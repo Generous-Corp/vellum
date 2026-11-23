@@ -28,7 +28,7 @@ from vellum_manifest import (
 from vellum_interaction import InteractionPlanError, validate_interaction_plan
 
 
-FRAMEWORK_VERSION = "0.2.0"
+FRAMEWORK_VERSION = "0.2.3"
 CLI_VERSION = FRAMEWORK_VERSION
 UI_VERSION = "0.1.0-experimental.0"
 CLI_API_VERSION = 1
@@ -72,6 +72,44 @@ TEMPLATE_TOKENS = {
     "ARTIFACT_IDENTITY_JSON", "TEMPLATE_NAME",
 }
 TEMPLATE_TOKEN_RE = re.compile(r"{{([A-Z][A-Z0-9_]*)}}")
+
+
+def rmlui_renderer_catalog() -> dict[str, Any]:
+    catalog_path = Path(__file__).resolve().parent.parent / "rmlui" / "renderers.json"
+    try:
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise CliFailure(
+            f"Could not read the RmlUi renderer catalog: {error}",
+            status="renderer_catalog_unavailable", exit_code=EXIT_UNAVAILABLE,
+        ) from error
+    if not isinstance(catalog, dict) or not isinstance(catalog.get("renderers"), list):
+        raise CliFailure(
+            "The RmlUi renderer catalog is invalid.",
+            status="renderer_catalog_invalid", exit_code=EXIT_PROJECT,
+        )
+    return catalog
+
+
+def rmlui_renderers_command() -> dict[str, Any]:
+    catalog = rmlui_renderer_catalog()
+    rows = catalog["renderers"]
+    lines = ["ID       KIND         API              PLATFORMS                 STATUS"]
+    lines.append("-" * len(lines[0]))
+    for renderer in rows:
+        statuses = ", ".join(
+            f"{platform}:{status}" for platform, status in renderer["status"].items()
+        )
+        lines.append(
+            f"{renderer['id']:<8} {renderer['kind']:<12} {renderer['graphics_api']:<16} "
+            f"{', '.join(renderer['platforms']):<25} {statuses}"
+        )
+    lines.append(f"Community: {catalog['community']['url']}")
+    lines.append(catalog["community"]["note"])
+    return result(
+        "rmlui.renderers", ok=True, status="ok", message="\n".join(lines),
+        data=catalog,
+    )
 
 
 class CliFailure(RuntimeError):
@@ -159,7 +197,7 @@ def selected_template(requested: str | None, has_import: bool) -> str:
         return "imported-app" if has_import else "blank"
     if requested == "imported-app" and not has_import:
         raise CliFailure(
-            "The imported-app template requires --from figma/design-ir/html/claude-design FILE.",
+            "The imported-app template requires --from figma/design-ir/html/claude-design/fig FILE.",
             status="template_requires_source",
             exit_code=EXIT_USAGE,
         )
@@ -560,7 +598,7 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
     import_request: tuple[str, Path, str] | None = None
     if args.import_source:
         source_type, source_value = args.import_source
-        if source_type not in {"figma", "design-ir", "html", "claude-design"}:
+        if source_type not in {"fig", "figma", "design-ir", "html", "claude-design"}:
             raise CliFailure(
                 f"Unsupported create source type: {source_type}",
                 status="unsupported_source_type", exit_code=EXIT_USAGE,
@@ -1226,6 +1264,11 @@ def backend_command(args: argparse.Namespace, forwarded: list[str]) -> dict[str,
                 f"Reimport source does not exist: {source_path}",
                 status="source_not_found", exit_code=EXIT_PROJECT,
             )
+        if args.file and source_path.suffix.casefold() in {".html", ".htm"}:
+            raise CliFailure(
+                "--file requires Figma plugin JSON inputs.",
+                status="invalid_arguments", exit_code=EXIT_USAGE,
+            )
         if source_path.suffix.casefold() in {".html", ".htm"}:
             backend_payload, return_code = invoke_import_backend(
                 root, lock, "html", source_path, args.source_key,
@@ -1304,8 +1347,50 @@ def compare_command(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def illustrator_command(args: argparse.Namespace) -> dict[str, Any]:
+    """Convert a PDF-compatible Illustrator file without requiring the SDK backend."""
+    if args.source != "illustrator" or not getattr(args, "illustrator_input", None):
+        raise CliFailure(
+            "import illustrator requires an .ai or .pdf input.",
+            status="invalid_arguments", exit_code=EXIT_USAGE,
+        )
+    from vellum_illustrator import ConversionError, convert
+
+    try:
+        page = int(args.page) if args.page is not None else 1
+    except ValueError as error:
+        raise CliFailure(
+            "Illustrator --page must be an integer.",
+            status="invalid_arguments", exit_code=EXIT_USAGE,
+        ) from error
+    try:
+        receipt = convert(
+            Path(args.illustrator_input),
+            Path(args.output) if args.output else None,
+            Path(args.provenance) if args.provenance else None,
+            page=page,
+            timeout=args.timeout,
+        )
+    except ConversionError as error:
+        raise CliFailure(
+            f"illustrator import refused: {error}",
+            status="illustrator_import_refused", exit_code=EXIT_PROJECT,
+        ) from error
+    output = receipt["output"]["path"]
+    provenance = str(
+        Path(args.provenance).expanduser().resolve()
+        if args.provenance
+        else Path(output + ".provenance.json")
+    )
+    return result(
+        "import illustrator", ok=True, status="converted",
+        message=f"SVG: {output}\nProvenance: {provenance}",
+        data={"svg": output, "provenance": provenance, "receipt": receipt},
+    )
+
+
 def invoke_backend(
-    command: str, root: Path, lock: dict[str, Any], forwarded: list[str]
+    command: str, root: Path | None, lock: dict[str, Any], forwarded: list[str]
 ) -> tuple[dict[str, Any], int]:
     backend = locate_backend()
     if backend is None:
@@ -1321,7 +1406,7 @@ def invoke_backend(
         )
     invocation = [
         str(backend), command,
-        "--project", str(root),
+        *(["--project", str(root)] if root is not None else []),
         "--json",
         "--framework-version", lock["framework"]["version"],
         "--cli-api", str(CLI_API_VERSION),
@@ -1374,7 +1459,7 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument(
         "--from", dest="import_source", nargs=2, metavar=("SOURCE_TYPE", "SOURCE"),
         choices=None,
-        help="create from an initial source: --from figma/design-ir/html/claude-design FILE",
+        help="create from an initial source: --from figma/design-ir/html/claude-design/fig FILE",
     )
     create.add_argument("--as", dest="source_key", default="main", help="permanent source key for --from")
     create.add_argument("--interaction-plan", help="bounded browser interaction plan for an HTML import")
@@ -1388,6 +1473,10 @@ def parser() -> argparse.ArgumentParser:
         "--require-target", choices=["macos", "web"],
         help="fail unless the installed SDK provides the complete requested application lane",
     )
+
+    rmlui = commands.add_parser("rmlui", help="inspect the RmlUi integration")
+    rmlui_actions = rmlui.add_subparsers(dest="rmlui_command", required=True)
+    rmlui_actions.add_parser("renderers", help="list supported RmlUi renderers")
 
     dev = commands.add_parser("dev", help="watch portable app sources and reload a native or web app")
     dev.add_argument("--project")
@@ -1441,13 +1530,21 @@ def parser() -> argparse.ArgumentParser:
 
     backend_specs = {
         "import": [
-            ("source", {}),
-            ("--source-type", {"choices": ["figma", "design-ir", "html", "claude-design"], "default": "figma"}),
+            ("source", {"nargs": "*"}),
+            ("--file", {"action": "append", "help": "add an ordered Figma plugin JSON export"}),
+            ("--source-type", {"choices": ["fig", "figma", "figma-plugin", "design-ir", "html", "claude-design", "pencil", "designmd", "v0"], "default": "figma"}),
             ("--as", {"dest": "source_key", "default": "main"}),
             ("--interaction-plan", {}),
+            ("--frame", {"help": "select a Figma frame by GUID or name"}),
+            ("--outline", {"action": "store_true", "help": "list pages and frames in a local .fig file"}),
+            ("--out", {"dest": "output", "metavar": "SVG"}),
+            ("--provenance", {}),
+            ("--page", {"help": "Figma page name for frame lookup, or Illustrator page number"}),
+            ("--timeout", {"type": int, "default": 60}),
         ],
         "reimport": [
             ("--source", {"required": True}),
+            ("--file", {"action": "append", "help": "add an ordered Figma plugin JSON export"}),
             ("--as", {"dest": "source_key", "default": "main"}),
             ("--interaction-plan", {}),
         ],
@@ -1479,6 +1576,8 @@ def parser() -> argparse.ArgumentParser:
 
 def forwarded_arguments(args: argparse.Namespace) -> list[str]:
     ignored = {"json", "command", "project"}
+    if args.command == "import":
+        ignored.update({"output", "provenance", "timeout", "illustrator_input"})
     forwarded: list[str] = []
     for key, value in vars(args).items():
         if key in ignored or value is None or value is False:
@@ -1486,6 +1585,9 @@ def forwarded_arguments(args: argparse.Namespace) -> list[str]:
         option = "--" + key.replace("_", "-")
         if isinstance(value, bool):
             forwarded.append(option)
+        elif key == "file":
+            for path in value:
+                forwarded.extend([option, path])
         elif key == "source" and args.command == "import":
             forwarded.append(str(value))
         else:
@@ -1502,10 +1604,55 @@ def main(argv: Iterable[str] | None = None) -> int:
     command = next((item for item in raw if not item.startswith("-")), "unknown")
     try:
         args = parser().parse_args(raw)
+        if args.command == "import" and isinstance(args.source, list):
+            if len(args.source) == 2 and args.source[0] == "illustrator":
+                args.source, args.illustrator_input = args.source
+            elif len(args.source) == 2 and args.source[0] in {"pencil", "designmd", "v0"}:
+                args.source_type, args.source = args.source
+            elif len(args.source) == 1:
+                args.source = args.source[0]
+            elif not args.source and args.file and args.source_type == "figma-plugin":
+                args.source, *args.file = args.file
+            else:
+                raise CliFailure(
+                    "import accepts a source path or a source name followed by its file.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
+        if args.command == "import":
+            is_illustrator = args.source == "illustrator" and (
+                hasattr(args, "illustrator_input") or args.source_type not in {"pencil", "designmd", "v0"}
+            )
+            is_fig = args.source_type == "fig" or (
+                args.source_type == "figma" and Path(args.source).suffix.lower() == ".fig"
+            )
+            if args.file and (args.source_type != "figma-plugin" or is_illustrator):
+                raise CliFailure(
+                    "--file requires --source-type figma-plugin.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
+            is_plugin = args.source_type in {"figma", "figma-plugin"}
+            if args.frame is not None and (is_illustrator or not (is_fig or is_plugin)):
+                raise CliFailure(
+                    "--frame requires a local Figma .fig file or plugin envelope.",
+                    status="invalid_fig_frame", exit_code=EXIT_USAGE,
+                )
+            if args.outline and (not is_fig or is_illustrator or
+                                 args.frame is not None or args.page is not None):
+                raise CliFailure(
+                    "--outline requires a local Figma .fig source and takes no frame or page selector.",
+                    status="invalid_fig_outline", exit_code=EXIT_USAGE,
+                )
+            if args.page is not None and not is_illustrator and (not is_fig or args.frame is None):
+                raise CliFailure(
+                    "--page requires a local Figma .fig frame selector or an Illustrator input.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
         if args.command == "create":
             payload = create_project(args)
         elif args.command == "doctor":
             payload = doctor(args)
+        elif args.command == "rmlui":
+            payload = rmlui_renderers_command()
         elif args.command == "dev":
             if args.poll_interval <= 0 or args.debounce < 0:
                 raise CliFailure(
@@ -1537,7 +1684,29 @@ def main(argv: Iterable[str] | None = None) -> int:
             payload = design_command(args)
         elif args.command == "compare":
             payload = compare_command(args)
+        elif args.command == "import" and is_illustrator:
+            payload = illustrator_command(args)
+        elif args.command == "import" and args.outline:
+            sdk = load_sdk_metadata()
+            if args.project:
+                root, lock = load_project(args.project)
+                validate_project_sdk(lock, sdk)
+            else:
+                root = None
+                lock = {"framework": {"version": sdk[1]["framework_version"] if sdk else FRAMEWORK_VERSION}}
+            backend, return_code = invoke_backend("import", root, lock, forwarded_arguments(args))
+            payload = result(
+                "import", ok=return_code == 0 and bool(backend.get("ok")),
+                status=str(backend.get("status", "backend_failed")),
+                message=str(backend.get("message", "Backend completed import outline.")),
+                data=backend.get("data"), diagnostics=backend.get("diagnostics"),
+            )
         else:
+            if args.command == "import" and not args.source:
+                raise CliFailure(
+                    "import requires a source path.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
             payload = backend_command(args, forwarded_arguments(args))
         emit(payload, json_output=args.json)
         if payload["ok"]:

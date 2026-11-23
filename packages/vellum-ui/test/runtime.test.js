@@ -7,6 +7,7 @@ import {
     Design,
     Image,
     Path,
+    Plot,
     Stack,
     Text,
     TextRun,
@@ -342,6 +343,53 @@ test('serializes bounded gradient, shadow, and attributed-run styles', () => {
     })).renderJSON(), /between 2 and 64 stops/);
 });
 
+function renderPaintStyle(style, tokenRefs) {
+    return JSON.parse(mount(() => jsx(View, {
+        id: 'paint', style, tokenRefs,
+    })).renderJSON()).tree.style;
+}
+
+const shadow = { offsetX: -2, offsetY: 3, blurRadius: 4, spreadRadius: 1, color: '#00000080' };
+
+test('retains one to eight box shadows and rejects a ninth', () => {
+    const shadows = Array.from({ length: 9 }, (_, offsetY) => ({ ...shadow, offsetY }));
+    for (const count of [1, 8]) {
+        const boxShadow = shadows.slice(0, count);
+        assert.deepEqual(renderPaintStyle({ boxShadow }).boxShadow, boxShadow);
+    }
+    assert.throws(() => renderPaintStyle({ boxShadow: shadows }), /between 1 and 8 shadows/);
+});
+
+test('rejects a nested box-shadow array at the invalid entry', () => {
+    assert.throws(() => renderPaintStyle({ boxShadow: [shadow, [shadow]] }),
+        /style\.boxShadow\[1\] must be a plain object/);
+});
+
+test('retains a solid border and rejects malformed fields', () => {
+    const border = { width: 2.5, style: 'solid', color: '#a1B2c380' };
+    assert.deepEqual(renderPaintStyle({ border }).border, border);
+    for (const [fields, error] of [
+        [{ width: -1 }, /border\.width must be a non-negative finite number/],
+        [{ width: '2px' }, /border\.width must be a non-negative finite number/],
+        [{ style: 'dashed' }, /border\.style must be solid/],
+        [{ color: 'red' }, /border\.color must be a hex color/],
+        [{ color: '#12345g' }, /border\.color must be a hex color/],
+    ]) {
+        assert.throws(() => renderPaintStyle({ border: { ...border, ...fields } }), error);
+    }
+});
+
+test('rejects box-shadow token slots on multiple shadows', () => {
+    const tokenRefs = {
+        boxShadow: { path: 'shadow.color', layer: 'import', value: shadow.color },
+    };
+    const single = { boxShadow: [shadow] };
+    const multiple = { boxShadow: [shadow, { ...shadow, color: '#ffffff' }] };
+    assert.throws(() => renderPaintStyle(multiple, tokenRefs),
+        /tokenRefs\.boxShadow is not a token slot/);
+    assert.deepEqual(renderPaintStyle(single, tokenRefs).boxShadow, single.boxShadow);
+});
+
 test('serializes and validates the gradient vocabulary', () => {
     const stops = [{ position: 0, color: '#ff0000' }, { position: 1, color: '#0000ff' }];
     const twoCircle = {
@@ -425,7 +473,7 @@ test('serializes a path node with SVG paint properties', () => {
         () => mount(() => jsx(Path, { id: 'bad', d: 'M0 0', ...properties })).renderJSON(),
         pattern);
     rejects({ d: undefined }, /Path d must be SVG path data/);
-    rejects({ d: 'M'.repeat(65537) }, /at most 65536 characters/);
+    rejects({ d: 'M'.repeat(65537) }, /at most 65536 UTF-8 bytes/);
     rejects({ fillRule: 'winding' }, /fillRule must be one of nonzero, evenodd/);
     rejects({ fill: 'red' }, /fill must be a hex color, none, or a linear gradient/);
     rejects({ fill: { angle: 0, stops: [] } }, /between 2 and 64 stops/);
@@ -438,6 +486,80 @@ test('serializes a path node with SVG paint properties', () => {
     rejects({ strokeDasharray: Array(65).fill(1) }, /at most 64 numbers/);
     rejects({ strokeDashoffset: Infinity }, /strokeDashoffset must be a finite number/);
     rejects({ children: jsx(View, {}) }, /Path does not accept children/);
+});
+
+test('serializes a plot node bound to a value-feed channel', () => {
+    const tree = JSON.parse(mount(() => jsx(View, {
+        id: 'scopes',
+        style: { width: 200, height: 100 },
+        children: [
+            jsx(Plot, {
+                id: 'scope', plot: 'line', channel: 'output', source: 'scalar', slots: 240,
+                history: 'sweep', min: -1, max: 1, lineWidth: 2, lineColor: '#f97316',
+                style: { width: 120, height: 60, backgroundColor: '#111827' },
+            }),
+            jsx(Plot, { id: 'level', plot: 'meter', channel: 'meters', audioChannel: 1 }),
+        ],
+    })).renderJSON()).tree;
+    const [scope, level] = tree.children;
+    assert.equal(scope.type, 'plot');
+    assert.deepEqual(
+        Object.keys(scope).filter((name) => !['style', 'children'].includes(name)).sort(),
+        ['channel', 'history', 'id', 'lineColor', 'lineWidth', 'max', 'min', 'plot', 'slots',
+            'source', 'type'],
+    );
+    assert.equal(scope.slots, 240);
+    assert.equal(level.audioChannel, 1);
+    assert.deepEqual(level.children, []);
+
+    const rejects = (properties, pattern) => assert.throws(
+        () => mount(() => jsx(Plot, { id: 'bad', plot: 'line', channel: 'c', slots: 4,
+            ...properties })).renderJSON(),
+        pattern);
+    rejects({ plot: 'pie' }, /plot must be one of line, area, bar, meter/);
+    rejects({ channel: '' }, /channel must name a value-feed channel/);
+    rejects({ slots: undefined }, /slots is required for a line plot/);
+    rejects({ slots: 2.5 }, /slots must be a whole number from 1 to 4194304/);
+    rejects({ audioChannel: -1 }, /audioChannel must be a whole number from 0 to 1024/);
+    rejects({ history: 'loop' }, /history must be one of scroll, sweep/);
+    rejects({ lineWidth: -1 }, /lineWidth must be a non-negative finite number/);
+    rejects({ min: Number.NaN }, /min must be a finite number/);
+    rejects({ lineColor: 'red' }, /lineColor must be a hex color/);
+    // The native renderer holds ranges as floats: these match its refusals.
+    rejects({ min: 1, max: 1.00000001 }, /value range must not be empty once rounded to float/);
+    rejects({ max: 1e100 }, /max must be within float range/);
+    rejects({ max: 3.4028235e38 }, /max must be within float range/);
+    rejects({ source: null }, /source must be one of/);
+    assert.doesNotThrow(() => mount(() => jsx(Plot, { id: 'wide', plot: 'line', channel: 'c',
+        slots: 4, lineWidth: 4096.0000001 })).renderJSON());
+    rejects({ children: jsx(View, {}) }, /Plot does not accept children/);
+
+    // Each style reads only the channel shapes native materialization accepts.
+    rejects({ source: 'meter' }, /source must be scalar or vector for a line plot/);
+    rejects({ plot: 'area', source: 'meter' }, /source must be scalar or vector for a area plot/);
+    rejects({ plot: 'bar', source: 'scalar' }, /source must be vector for a bar plot/);
+    rejects({ plot: 'bar', source: 'meter' }, /source must be vector for a bar plot/);
+    rejects({ plot: 'meter', source: 'vector' }, /source must be meter for a meter plot/);
+    rejects({ plot: 'meter', source: 'scalar' }, /source must be meter for a meter plot/);
+    // Widths and gaps stop at native kMaxPlotStroke (4096), inclusive.
+    rejects({ lineWidth: 4097 }, /lineWidth must be at most 4096/);
+    rejects({ plot: 'bar', barGap: 4096.5 }, /barGap must be at most 4096/);
+    rejects({ plot: 'meter', peakWidth: 1e30 }, /peakWidth must be at most 4096/);
+    // The effective value range (min defaults to 0, max to 1) must not be empty.
+    rejects({ min: 1, max: 1 }, /value range must not be empty/);
+    rejects({ min: 1 }, /value range must not be empty/);
+    rejects({ max: 0 }, /value range must not be empty/);
+    const accepts = (properties) => mount(() => jsx(Plot, {
+        id: 'ok', plot: 'line', channel: 'c', slots: 4, ...properties })).renderJSON();
+    for (const properties of [
+        { source: 'scalar' }, { source: 'vector' }, { plot: 'area', source: 'scalar' },
+        { plot: 'area', source: 'vector' }, { plot: 'bar', source: 'vector' },
+        { plot: 'meter', source: 'meter' }, { plot: 'bar' }, { plot: 'meter' },
+        { lineWidth: 4096, barGap: 4096, peakWidth: 4096 }, { lineWidth: 0 },
+        { min: 1, max: 0 }, { min: -1 }, { max: 2 }, { min: 0.5, max: 0.25 },
+    ]) {
+        assert.doesNotThrow(() => accepts(properties), JSON.stringify(properties));
+    }
 });
 
 test('serializes an image node with fit, sampling and a source rectangle', () => {
@@ -634,7 +756,7 @@ test('TextInput v1 rejects unversioned, uncontrolled, and oversized payloads', (
         () => mount(() => jsx(TextInput, {
             id: 'too-long', value: 'x'.repeat(65537), onChange() {},
         })).renderJSON(),
-        /at most 65536 code units/,
+        /at most 65536 UTF-8 bytes/,
     );
     assert.throws(
         () => mount(() => jsx(TextInput, {
@@ -1408,4 +1530,35 @@ test('a no-op command is not credited with a state update that was pending befor
     // The pending update is visible in the tree, but the command caused none of it.
     assert.equal(result.tree.children[0].text, 'updated elsewhere');
     assert.equal(result.changed, false);
+});
+
+// Each value below is under its limit by .length and over it by UTF-8 bytes.
+const renderTree = (element) => JSON.parse(mount(() => element).renderJSON()).tree;
+
+test('TextInput value limit is counted in UTF-8 bytes', () => {
+    const input = (value) => renderTree(jsx(TextInput, { id: 't', value, onChange() {} }));
+    const twoByte = '\u00e9'.repeat(32769);    // 65538 bytes, 32769 code units
+    const fourByte = '\u{1F600}'.repeat(16385); // 65540 bytes, 32770 code units
+    assert.ok(twoByte.length <= 65536 && fourByte.length <= 65536);
+    assert.throws(() => input(twoByte), /at most 65536 UTF-8 bytes/);
+    assert.throws(() => input(fourByte), /at most 65536 UTF-8 bytes/);
+    assert.doesNotThrow(() => input('\u00e9'.repeat(32768)));
+});
+
+test('Path data limit is counted in UTF-8 bytes', () => {
+    const path = (d) => renderTree(jsx(Path, { id: 'p', d }));
+    const threeByte = '\u4e2d'.repeat(21846); // 65538 bytes, 21846 code units
+    assert.ok(threeByte.length <= 65536);
+    assert.throws(() => path(threeByte), /at most 65536 UTF-8 bytes/);
+    assert.doesNotThrow(() => path('\u4e2d'.repeat(21845) + 'M')); // exactly 65536 bytes
+});
+
+test('anchor and source file limits are counted in UTF-8 bytes', () => {
+    const view = (props) => renderTree(jsx('view', { id: 'a', ...props }));
+    const atLimit = '\u00e9'.repeat(512);
+    assert.equal(view({ anchor: atLimit }).anchor, atLimit);
+    assert.equal(view({ anchor: '\u00e9'.repeat(513) }).anchor, undefined);
+    const fileAtLimit = '\u00e9'.repeat(2048);
+    assert.equal(view({ sourceLocation: { file: fileAtLimit } }).sourceLocation?.file, fileAtLimit);
+    assert.equal(view({ sourceLocation: { file: '\u00e9'.repeat(2049) } }).sourceLocation, undefined);
 });

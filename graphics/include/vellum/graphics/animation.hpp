@@ -1,18 +1,20 @@
 #pragma once
 
+#include <vellum/graphics/limits.hpp>
 #include <vellum/graphics/scene.hpp>
 
+#include <optional>
 #include <string>
 
 namespace vellum::graphics {
 
-/// The displacement and speed, in progress and progress per second, below
-/// which a spring counts as settled. From `spring_settle_time` on it is
-/// exactly at its target.
-inline constexpr double kSpringRestThreshold = 1.0e-4;
-
 /// Whether any node of `scene` has a track.
 [[nodiscard]] bool scene_has_tracks(const Scene& scene) noexcept;
+
+/// The time of the last keyframe of any track in `scene`: from that clock on
+/// every track holds its final value, so the scene no longer changes with the
+/// clock. Empty when no track has a keyframe.
+[[nodiscard]] std::optional<double> tracks_end_time(const Scene& scene) noexcept;
 
 /// The progress `easing` gives a fraction `elapsed` in [0, 1] of its segment,
 /// for the linear, cubic-bezier and steps kinds. A cubic bezier can return

@@ -21,6 +21,17 @@ Their exact npm tarball integrities are locked by
 packages into the payload, and inventories the resulting installed bytes by
 SHA-256 in `metadata.json`.
 
+The same payload also redistributes TypeScript 7.0.2 and its matching
+`@typescript/typescript-darwin-arm64` 7.0.2 binary (Apache-2.0; npm
+`typescript`, locked in `packages/vellum-ui/package-lock.json`) under
+`ui/node_modules/`, and a Node.js 20.20.2 runtime executable under `node/`
+(MIT with bundled third-party notices; `node/provenance.json` records the
+source archive and digests). Each ships its own upstream license file
+(`ui/node_modules/typescript/LICENSE` and `NOTICE.txt`,
+`ui/node_modules/@typescript/typescript-darwin-arm64/LICENSE` and
+`NOTICE.txt`, and `node/LICENSE`) beside the code, and `NOTICE.md` points to
+them.
+
 ## Active renderer dependency
 
 The macOS arm64 GPU proof uses one byte-locked prebuilt renderer artifact:
@@ -177,10 +188,46 @@ archives, and FreeType's archive), with the same notices.
 
 | Dependency | Pinned identity | License | Used by | Notes |
 |---|---|---|---|---|
-| FreeType | `2.13.3`, `freetype-2.13.3.tar.gz` SHA-256 `5c3a8e78f7b24c20b25b54ee575d6daa40007a5f4eea2845861c3409b3021747` | FTL (FreeType License; the GPLv2 alternative is not used) | RmlUi font engine, only with `VELLUM_RMLUI_FONTS=ON` | PNG, zlib, bzip2, Brotli and HarfBuzz integrations disabled; FTL credit in `NOTICE.md` and, for the redistributed Native archive, `rmlui/NOTICE-Native.md` with `FTL.TXT` |
+| FreeType | `2.13.3`, tag `VER-2-13-3` archive of FreeType's GitHub mirror (same tag object as upstream), SHA-256 `bc5c898e4756d373e0d991bab053036c5eb2aa7c0d5c67e8662ddc6da40c4103` | FTL (FreeType License; the GPLv2 alternative is not used) | RmlUi font engine, only with `VELLUM_RMLUI_FONTS=ON` | PNG, zlib, bzip2, Brotli and HarfBuzz integrations disabled; FTL credit in `NOTICE.md` and, for the redistributed Native archive, `rmlui/NOTICE-Native.md` with `FTL.TXT` |
 | Lua | `5.4.7`, `lua-5.4.7.tar.gz` SHA-256 `9fbf5e28ef86c69858f6d3d34eccc32e911c1a28b4120ff3e84aaa70cfbf1e30` | MIT | The sandboxed `VellumRmlUi::Lua` host, only with `VELLUM_RMLUI_LUA=ON` | Library only; the `lua` and `luac` front ends are not built. RmlUi's own Lua plugin is not built, since it keeps one process-wide `lua_State` |
 | RmlUi | `6.3`, commit `ba95ffe8bfb6370efb2cdcca927eaad4710c5413` | MIT | `VellumRmlUi::Core`; `VellumRmlUi::Native` (redistributed headers and archives) | Samples, third-party containers, SVG, Lottie and Tracy disabled; notice in `rmlui/NOTICE-Native.md` with RmlUi's `LICENSE.txt`; one Vellum patch, `rmlui/cmake/patches/rmlui-fractional-glyph-advances.patch` (the default font engine accumulates glyph advances and kerning in 26.6 and rounds only the pen, so text is not up to 5 % wider at small sizes; an upstream candidate, not filed) |
 | stb_image_write | `v1.16`, `nothings/stb` commit `d14d46f6b44456eb88beac58cba833a4135d4c89`, `stb_image_write.h` SHA-256 `cbd5f0ad7a9cf4468affb36354a1d2338034f2c12473cf1a8e32053cb6914a05` | MIT (chosen of MIT or public domain) | `VellumRmlUi::SoftRenderer` PNG encoder | Single header, compiled into one translation unit |
+
+## Optional V8 provider
+
+With `VELLUM_ENABLE_V8=ON` (default OFF; it needs `VELLUM_ENABLE_MIRROR=ON`)
+the mirror's `view-script` unit compiles its V8 backend, and the installed SDK
+carries the sealed V8 shared library that backend runs on. The pin is the
+`V8` row of `provenance/third-party-lock.json`; the configure step
+(`framework/tools/cmake/VellumV8Provider.cmake`) downloads the archive or
+takes `VELLUM_V8_ARCHIVE`, refuses any other SHA-256, and refuses a manifest
+that is not sealed or that does not pair with the Skia and Dawn commits
+`gpu-runtime/renderer-lock.json` pins. Every source file that includes V8
+headers compiles with the archive's own `consumer_defines`, which are part of
+V8's ABI.
+
+| Dependency | Pinned identity | License | Used by | Notes |
+|---|---|---|---|---|
+| V8 | `v8-m158-15.8.62.6-38351a002e2c` (V8 `15.8.62.6`, revision `38351a002e2c2890eca99d3abb6622728bfd7798`), `danielraffel/v8-builder` asset `v8-mac-arm64-m158-15.8.62.6-38351a002e2c.zip` SHA-256 `828ec374aad252afd284da044743c2099ce3c9401d5e914df79aec4713517eff`; `release-metadata.json` SHA-256 `5393fe41d2b16e39bed2e5e526dab8e08bc1d4b865eb13ea5b3056c05b67e6b1` | BSD-3-Clause; bundles ICU (Unicode-3.0), zlib and Abseil (Apache-2.0) | `Vellum::SkiaDawnProvider` links `libv8.dylib`; the SDK installs it in `lib/` beside the provider and its manifest in `share/vellum/v8/` | Milestone-matched to `chrome/m158`: built against Skia `be7d7c3e996e567eda7dc9774274f7a0103cdb8c` and Dawn `1716e88cc9e58398fab5d4473f7f2e858667b677`. The library exports only the `v8::` and `cppgc::` API; its ICU, zlib and Abseil stay internal, so they cannot bind to the provider's copies (`tools/mirror/v8_symbol_census.py`). The archive ships no ICU locale data file, so `Intl` formatting and collation fail (and `Date.prototype.toLocaleString` aborts the process); Unicode property escapes, case mapping and normalization work. Notice in `NOTICE.md` |
+
+## Optional native tracing
+
+With `VELLUM_ENABLE_TRACING=ON` (default OFF; it needs `VELLUM_ENABLE_MIRROR=ON`)
+the mirrored framework units compile with their trace macros on and the
+foundation unit's library carries one Perfetto, so the framework's slices and
+the renderer's frame trace share one trace session. It is development tooling:
+the default build and every shippable SDK or release artifact are built with
+it OFF, fetch nothing for it, and link nothing from it. Installing a tracing-ON
+build is not blocked: its foundation library carries Perfetto, so a development
+SDK installed by hand from such a build contains it and must not be shipped. The configure step
+(`cmake/VellumTracing.cmake`) downloads the release artifact and refuses any
+other SHA-256. `FETCHCONTENT_SOURCE_DIR_VELLUM_PERFETTO` builds an unpacked
+copy instead, unchecked. `tools/tracing/check_tracing.py` keeps the module,
+this row and `provenance/third-party-lock.json` on one pin.
+
+| Dependency | Pinned identity | License | Used by | Notes |
+|---|---|---|---|---|
+| Perfetto | `v57.2`, `google/perfetto` release asset `perfetto-cpp-sdk-src.zip` (`perfetto.h` and `perfetto.cc`) SHA-256 `c6fa3d89aee30f7da39402c9cd178c9f2e344544fda5c2109fd8457e319c3a2f` | Apache-2.0; the amalgamation also carries BSD-2-Clause code from OpenBSD's `tree.h` | `vellum-perfetto`, compiled as one position-independent static library and whole-archive linked into `vellum-mirror-foundation`, only with `VELLUM_ENABLE_TRACING=ON` | Never linked into a default build or a release artifact. A development SDK installed by hand from a tracing-ON build does contain it (the foundation library is installed as built); do not ship one. Perfetto's `TRACE_EVENT` takes a mutex when a chunk rolls over, so it is not real-time safe: trace UI, render and process-level code, never a live audio thread. Notice in `NOTICE.md` |
 
 ## Developer prerequisites
 
@@ -230,7 +277,7 @@ Vellum dependencies. Versions and licenses were cross-checked against Pulp's
 | ICU | `d578f2e8b7bd5938e21cfb6bf15c079e0aa5b738` | Unicode-3.0 plus bundled notices | `canvas` unit external input through the Skia build (text shaping); bytes not mirrored | Permissive; notice exists |
 | Inter | `4.001; git-9221beed3` | SIL OFL 1.1 | `framework/external/fonts/` (`canvas` unit) | Allowed font license |
 | JavaScriptCore | Apple system framework | LGPL-2.1+ components and Apple terms | Never mirrored; system framework only | **Not MIT-compatible**; system-only, never mirrored |
-| JetBrains Mono | `2.304` | SIL OFL 1.1 | `framework/external/fonts/` (`canvas` unit) | Allowed font license |
+| JetBrains Mono | `2.304` | SIL OFL 1.1 | `assets/fonts/` and `framework/external/fonts/` | Allowed font license |
 | Jost | `3.710` | SIL OFL 1.1 | `framework/external/fonts/` (`canvas` unit) | Allowed font license |
 | Mbed TLS | `v3.6.2` | Apache-2.0 | `foundation` unit external input (`framework/core/runtime/`); bytes not mirrored | MIT-compatible |
 | miniz | `3.0.2` | MIT | `framework/external/miniz/` (`foundation` unit) | MIT-compatible |
@@ -245,13 +292,13 @@ Vellum dependencies. Versions and licenses were cross-checked against Pulp's
 | SDL3 | `release-3.4.18` (`829a65d7`) | zlib | `render-2d` and `view-core` unit external input, built from source as the `SDL3-static` link target the link policy allows; bytes not mirrored; license ships under `sdk/mirror/share/licenses/sdl3/` | MIT-compatible |
 | SheenBidi | `v3.0.0` | Apache-2.0 | `canvas` unit external input (`framework/core/canvas/`); bytes not mirrored | MIT-compatible |
 | Skia and skcms | `be7d7c3e996e567eda7dc9774274f7a0103cdb8c` | BSD-3-Clause | `canvas` unit external input (`framework/core/canvas/`); bytes not mirrored | MIT-compatible; renderer notice exists |
-| V8 | `v8-m153-15.3.76.5-26cef0256b0e` | BSD-3-Clause | not mirrored; no landed unit consumes it yet (planned scripted-view unit, when selected) | MIT-compatible; sealed provider |
+| V8 | `v8-m158-15.8.62.6-38351a002e2c` | BSD-3-Clause | `view-script` unit external input with `VELLUM_ENABLE_V8=ON` (see "Optional V8 provider"); bytes not mirrored | MIT-compatible; sealed provider |
 | yaml-cpp | `0.9.0` (`56e3bb55`) | MIT | `design-import` unit external input, built from source as the `yaml-cpp` link target the link policy allows; bytes not mirrored; license ships under `sdk/mirror/share/licenses/yaml-cpp/` | MIT-compatible |
 | Yoga | `v3.2.1` (`042f5013`) | MIT | `view-core` unit external input, built from source as the `yogacore` link target the link policy allows; bytes not mirrored; license ships under `sdk/mirror/share/licenses/yoga/` | MIT-compatible |
 
 ### Units built into the native SDK
 
-The macOS arm64 GPU SDK installs one `sdk/mirror/lib/libvellum-mirror-<unit>.dylib`
+The macOS arm64 GPU SDK installs one `sdk/mirror/lib/libvellum-mirror-<unit>-<identity>.dylib`
 for every unit of the current mirror receipt (`foundation`, `gpu-device-api`,
 `canvas`, `render-2d`, `state-core`, `view-core`, `design-import` and
 `view-script`; `tools/mirror/VellumMirror.cmake`). The units' external inputs

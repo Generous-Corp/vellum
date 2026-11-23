@@ -1,0 +1,42 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "design-schema-compiler"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-18T13:23:47Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-b88d929b9b13d5193125fd2350ecf464f56dcfe0",
+  "include_dependency_deltas": [],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "design-schema-compiler"
+  ],
+  "mapped_paths": [
+    "packages/vellum-design-ir/test/limits-drift.test.js"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "7c021b9c279aa484c70d7b7e452ef719f81579e5",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "2d3ea7f9851153c9c6636f3cf372b4d37a62c966",
+    "to_commit": "b88d929b9b13d5193125fd2350ecf464f56dcfe0"
+  },
+  "schema_api_deltas": [
+    "packages/vellum-design-ir/test/limits-drift.test.js"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "b88d929b9b13d5193125fd2350ecf464f56dcfe0",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

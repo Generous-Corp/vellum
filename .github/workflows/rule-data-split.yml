@@ -1,0 +1,54 @@
+# Fails a pull request that adds a rule together with the data it enforces
+# (tools/ci/rule_data_split_check.py), when it opens rather than in review.
+# Pull requests only: a merge-queue batch may hold a rule's pull request and
+# its data's pull request together, which is the order the rule asks for.
+#
+# The base branch's copy of the check judges the change when the base has
+# one, so editing the check does not change what judges that edit; before the
+# check lands, the pull request's own copy runs. This is an accident guard,
+# not a security boundary: a pull request can still edit this workflow, and
+# that edit is a release-path change that needs two reviews.
+name: Rule and data split
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rule-data-split-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rule-data-split:
+    name: rule-data-split
+    runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["ubuntu-latest"]') }}
+    timeout-minutes: 5
+    steps:
+      - name: Check out the change
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Judge the change with the base's check
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ && "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git cat-file -e "$BASE_SHA^{commit}"
+          git cat-file -e "$HEAD_SHA^{commit}"
+          check="$RUNNER_TEMP/rule_data_split_check.py"
+          if git cat-file -e "$BASE_SHA:tools/ci/rule_data_split_check.py" 2>/dev/null; then
+            git show "$BASE_SHA:tools/ci/rule_data_split_check.py" > "$check"
+          elif git cat-file -e "$HEAD_SHA:tools/ci/rule_data_split_check.py" 2>/dev/null; then
+            echo "::notice::the base has no rule_data_split_check.py; running the pull request head's copy"
+            git show "$HEAD_SHA:tools/ci/rule_data_split_check.py" > "$check"
+          else
+            echo "::notice::rule-data-split is skipped: neither the base nor this branch has rule_data_split_check.py, so the branch predates it (merge main to enable it)"
+            exit 0
+          fi
+          python3 -I "$check" --repo "$GITHUB_WORKSPACE" --base "$BASE_SHA" --head "$HEAD_SHA"
