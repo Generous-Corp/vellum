@@ -187,6 +187,21 @@ class ImportBackendTests(unittest.TestCase):
             completed = invoke("import", "jsx", str(jsx), "--mode", "live", "--emit", "js", "--out", str(dangling), cwd=root)
             self.assertNotEqual(completed.returncode, 0)
             self.assertIn("symlink", completed.stdout)
+            (root / "real").mkdir()
+            (root / "link").symlink_to(root / "real")
+            completed = invoke("import", "jsx", str(jsx), "--mode", "live", "--emit", "js", "--out", "link/result.js", cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertFalse((root / "real/result.js").exists())
+            nan_manifest = root / "nan.json"
+            nan = json.loads(manifest.read_text())
+            nan["elements"][0] = {"selector": "#mix", "kind": "rect", "geometry": {"x": True, "y": 0, "w": 1, "h": 1}}
+            nan_manifest.write_text(json.dumps(nan), encoding="utf-8")
+            completed = invoke("import", "preconverted-svg", str(svg), "--manifest", str(nan_manifest), "--validate-only", cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            nan["elements"][0]["geometry"] = {"x": float("nan"), "y": 0, "w": 1, "h": 1}
+            nan_manifest.write_text(json.dumps(nan), encoding="utf-8")
+            completed = invoke("import", "preconverted-svg", str(svg), "--manifest", str(nan_manifest), "--validate-only", cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
             bad_side = root / "badside.json"
             bad_side.write_bytes(b"\xff\xfe")
             completed = invoke("import", "preconverted-svg", str(svg), "--manifest", str(bad_side), "--validate-only", cwd=root)

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import os
 from pathlib import Path
 import re
 import xml.etree.ElementTree as ET
@@ -11,6 +13,10 @@ import xml.etree.ElementTree as ET
 
 class AssetImportError(ValueError):
     pass
+
+
+def _number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def _regular(path: Path, label: str) -> bytes:
@@ -32,6 +38,7 @@ def _decode(data: bytes, label: str) -> str:
 def _write(path: Path, data: bytes) -> None:
     # lstat-based checks so dangling symlinks and symlinked ancestors are refused.
     # Top-level OS aliases (/var, /tmp on macOS) are exempt.
+    path = Path(os.path.abspath(path))
     for candidate in (path, *path.parents):
         if len(candidate.parts) > 2 and candidate.is_symlink():
             raise AssetImportError(f"output must not be or sit under a symlink: {candidate}")
@@ -116,7 +123,7 @@ def validate_preconverted_svg(svg_path: Path, manifest_path: Path) -> dict:
     if digest.lower() != hashlib.sha256(svg).hexdigest():
         raise AssetImportError("svg_sha256 does not match SVG bytes")
     canvas = manifest.get("canvas")
-    if not isinstance(canvas, dict) or not all(isinstance(canvas.get(key), (int, float)) and canvas[key] > 0 for key in ("width", "height")):
+    if not isinstance(canvas, dict) or not all(_number(canvas.get(key)) and canvas[key] > 0 for key in ("width", "height")):
         raise AssetImportError("canvas width and height must be positive")
     try:
         root = ET.fromstring(svg)
@@ -153,7 +160,7 @@ def validate_preconverted_svg(svg_path: Path, manifest_path: Path) -> dict:
             raise AssetImportError(f"element {index} requires a geometry object")
         kind = element.get("kind", "")
         required = ("cx", "cy", "hit_radius") if kind == "knob" else ("x", "y", "w", "h")
-        if any(not isinstance(geometry.get(key), (int, float)) for key in required):
+        if any(not _number(geometry.get(key)) for key in required):
             raise AssetImportError(f"element {index} geometry is incomplete")
         if kind == "knob":
             if geometry["hit_radius"] <= 0 or geometry["cx"] - geometry["hit_radius"] < 0 or geometry["cy"] - geometry["hit_radius"] < 0 or geometry["cx"] + geometry["hit_radius"] > width or geometry["cy"] + geometry["hit_radius"] > height:
