@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import os
 from pathlib import Path, PurePosixPath
 import subprocess
 import sys
@@ -97,6 +98,10 @@ class CiLaneTests(unittest.TestCase):
                 text = runner_path.read_text(encoding="utf-8")
                 self.assertTrue(path in text or PurePosixPath(path).name in text, where)
 
+    def test_android_gpu_surface_is_run_by_android_workflow(self) -> None:
+        text = (ROOT / ".github/workflows/android.yml").read_text(encoding="utf-8")
+        self.assertIn("tools/android/test_android_gpu_surface.cmake", text)
+
     def test_each_lane_workflow_calls_the_runner_and_lists_no_tests(self) -> None:
         self.assertEqual(set(LANE_WORKFLOWS), set(self.manifest["lanes"]))
         for lane, workflow in LANE_WORKFLOWS.items():
@@ -126,6 +131,50 @@ class CiLaneTests(unittest.TestCase):
             self.assertEqual(result.returncode, 3, result.stderr)
             self.assertIn("ran ok", result.stdout)
             self.assertNotIn("reached", result.stderr)
+
+    def test_runner_annotates_the_first_failing_item_in_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "bad.py").write_text(
+                "print('missing field: release.sha256')\nraise SystemExit(7)\n",
+                encoding="utf-8",
+            )
+            manifest = {"schema": lanes.SCHEMA, "elsewhere": {}, "lanes": {"release-source": [
+                {"script": str(root / "bad.py")}
+            ]}}
+            path = root / "lanes.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            environment = dict(os.environ, GITHUB_ACTIONS="true")
+            result = subprocess.run(
+                [sys.executable, "-I", str(ROOT / "scripts/run_ci_lane.py"),
+                 "--lane", "release-source", "--manifest", str(path)],
+                capture_output=True, text=True, encoding="utf-8", check=False,
+                env=environment,
+            )
+            self.assertEqual(result.returncode, 7, result.stderr)
+            self.assertIn(
+                "::error title=release-source::missing field: release.sha256",
+                result.stdout,
+            )
+
+    def test_runner_survives_non_utf8_child_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "bytes.py").write_text(
+                "import sys\nsys.stdout.buffer.write(b'bad \\xff byte\\n')\nsys.stdout.flush()\n",
+                encoding="utf-8",
+            )
+            manifest = {"schema": lanes.SCHEMA, "elsewhere": {}, "lanes": {"x": [
+                {"script": str(root / "bytes.py")}
+            ]}}
+            path = root / "lanes.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, "-I", str(ROOT / "scripts/run_ci_lane.py"), "--lane", "x", "--manifest", str(path)],
+                capture_output=True, text=True, encoding="utf-8", check=False,
+                env=dict(os.environ, PYTHONUTF8="0", LC_ALL="C"))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
 
     def test_unknown_entries_and_lanes_fail_closed(self) -> None:
         with self.assertRaises(lanes.LaneError):

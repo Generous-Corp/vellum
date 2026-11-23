@@ -118,6 +118,7 @@
       "vellum.sdk-artifact",
       "vellum.sdk-artifact-builder-unit",
       "vellum.service-bridge",
+      "vellum.skia-dawn-platform-selection",
       "vellum.swift-host-proof-prefix",
       "vellum.swift-host-proof-unit",
       "vellum.text-layout",
