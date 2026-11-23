@@ -101,6 +101,10 @@ jobs:
           set -euo pipefail
           cmake --build "$RUNNER_TEMP/android" --parallel "$(nproc)"
 
+      - name: Check the Android GPU surface contract
+        shell: bash
+        run: cmake -DSOURCE_ROOT="$GITHUB_WORKSPACE" -P tools/android/test_android_gpu_surface.cmake
+
       - name: Check the framework objects are AArch64
         shell: bash
         run: |

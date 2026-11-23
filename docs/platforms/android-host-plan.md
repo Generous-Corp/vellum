@@ -210,7 +210,8 @@ release owner and protected credentials.
 
 ## Current slice boundary
 
-This branch implements only the platform identity helper and its CMake-script
-check around the existing NDK canary. It does not claim a closure manifest,
-Dawn/Vulkan pixels, an Android editor window, or an APK. Those require the
-ordered slices above and the lead's device or GPU runs.
+This branch adds the Vellum-owned Android GPU surface and JNI lifecycle
+boundary, the AChoreographer render loop, and the NDK canary target that
+compiles those units for arm64-v8a. It proves source compilation and Dawn
+Vulkan selection only. A locked Android Dawn/Skia asset, a linked RmlUi
+renderer test, and device pixels remain lead-run checks.

@@ -441,6 +441,7 @@
     "graphics/tests/test_dawn_provider_topology.py": "cmake:CMakeLists.txt",
     "packages/vellum-swift/scripts/test_run_sterile_proof.py": "cmake:packages/vellum-swift/CMakeLists.txt",
     "tools/android/test_check_android_objects.py": "workflow:android.yml",
+    "tools/android/test_android_gpu_surface.cmake": "workflow:android.yml",
     "tools/mirror/consumer/threejs-demo/asset_cleanup_test.cmake": "cmake:tools/mirror/consumer/threejs-demo/CMakeLists.txt",
     "tools/mirror/consumer/threejs-demo/asset_cleanup_negative_test.cmake": "cmake:tools/mirror/consumer/threejs-demo/CMakeLists.txt",
     "tools/mirror/consumer/threejs-demo/asset_failure_test.cmake": "cmake:tools/mirror/consumer/threejs-demo/CMakeLists.txt",
