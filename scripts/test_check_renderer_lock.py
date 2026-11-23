@@ -133,6 +133,34 @@ class RendererLockDriftTest(unittest.TestCase):
                                .update(release=release))
                 self.assert_drift(f"{drift.PLATFORM} release is {release!r}")
 
+    def test_a_null_macos_release_is_drift(self) -> None:
+        self.edit_json(drift.LOCK, lambda lock: lock["platforms"][drift.PLATFORM]
+                       .update(release=None))
+        self.assert_drift(f"{drift.PLATFORM} release is None")
+
+    def test_a_non_release_configuration_is_drift(self) -> None:
+        for key in (drift.PLATFORM, "linux-x64"):
+            with self.subTest(key=key):
+                self.setUp()
+                self.with_rows(lambda lock: lock["platforms"][key].update(configuration="Debug"))
+                self.assert_drift(f"{key} configuration is 'Debug', expected 'Release'")
+
+    def test_a_missing_configuration_is_drift(self) -> None:
+        self.with_rows(lambda lock: lock["platforms"]["linux-x64"].pop("configuration"))
+        self.assert_drift("linux-x64 configuration is None")
+
+    def test_cmake_reading_an_unlocked_windows_archive_is_drift(self) -> None:
+        self.with_rows()
+        self.edit_text("cmake/VellumSkiaDawn.cmake", 'set(_vellum_svg_name "svg${_vellum_archive_suffix}")',
+                       'set(_vellum_svg_name "svg2${_vellum_archive_suffix}")')
+        self.assert_drift("reads svg2.lib, which the lock does not lock")
+
+    def test_cmake_reading_a_literal_unlocked_lib_is_drift(self) -> None:
+        self.with_rows()
+        self.edit_text("cmake/VellumSkiaDawn.cmake", 'set(_vellum_svg_name "libsvg.a")',
+                       'set(_vellum_svg_name "svg2.lib")')
+        self.assert_drift("reads svg2.lib, which the lock does not lock")
+
     def test_a_macos_release_equal_to_the_milestone_agrees(self) -> None:
         self.edit_json(drift.LOCK, lambda lock: lock["platforms"][drift.PLATFORM]
                        .update(release=lock["milestone"]))

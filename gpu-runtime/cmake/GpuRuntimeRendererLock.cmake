@@ -186,6 +186,14 @@ function(gpu_runtime_read_renderer_lock)
         endif()
         set(_release "${_row_release}")
     endif()
+    # The lock records release artifacts only; a Debug row is never consumed.
+    _gpu_runtime_lock_get(_configuration "${_json}"
+        platforms "${ARG_PLATFORM}" configuration)
+    if(NOT _configuration STREQUAL "Release")
+        message(FATAL_ERROR
+            "gpu-runtime: renderer lock ${ARG_PLATFORM} configuration is "
+            "${_configuration}, expected Release")
+    endif()
     _gpu_runtime_lock_get(_archive_root "${_json}"
         platforms "${ARG_PLATFORM}" archive_root)
 

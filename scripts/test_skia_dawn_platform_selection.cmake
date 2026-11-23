@@ -47,13 +47,16 @@ file(MAKE_DIRECTORY "${_work}")
 # _lock(<out-path> KEY k [RELEASE r|NONE] [MILESTONE m] [SUFFIX .a|.lib]
 #       [SHA hex] [ASSET name] [ROOT path] [DAWN hex])
 function(_lock path)
-    cmake_parse_arguments(L "" "KEY;RELEASE;MILESTONE;SUFFIX;SHA;ASSET;ROOT;DAWN;REPOSITORY"
+    cmake_parse_arguments(L "" "KEY;CONFIG;RELEASE;MILESTONE;SUFFIX;SHA;ASSET;ROOT;DAWN;REPOSITORY"
         "" ${ARGN})
     if(NOT DEFINED L_RELEASE)
         set(L_RELEASE "chrome/m158-attested.2")
     endif()
     if(NOT L_MILESTONE)
         set(L_MILESTONE "chrome/m158")
+    endif()
+    if(NOT L_CONFIG)
+        set(L_CONFIG "Release")
     endif()
     if(NOT L_SUFFIX)
         set(L_SUFFIX ".a")
@@ -88,13 +91,15 @@ function(_lock path)
     endforeach()
     string(REGEX REPLACE ",$" "" _archives "${_archives}")
     set(_release_json "")
-    if(NOT L_RELEASE STREQUAL "NONE")
+    if(L_RELEASE STREQUAL "NULL")
+        set(_release_json "\"release\": null,")
+    elseif(NOT L_RELEASE STREQUAL "NONE")
         set(_release_json "\"release\": \"${L_RELEASE}\",")
     endif()
     file(WRITE "${path}" "{\"schema\": \"gpu-runtime.renderer-lock.v1\", \"milestone\": \"${L_MILESTONE}\",
         \"builder\": {\"repository\": \"${L_REPOSITORY}\"},
         \"platforms\": {\"${L_KEY}\": {\"asset\": \"${L_ASSET}\", \"sha256\": \"${L_SHA}\",
-        \"configuration\": \"Release\", \"archive_root\": \"${L_ROOT}\", ${_release_json}
+        \"configuration\": \"${L_CONFIG}\", \"archive_root\": \"${L_ROOT}\", ${_release_json}
         \"builder_commit\": \"${L_KEY}\", \"archives\": {${_archives}}}}}")
 endfunction()
 
@@ -157,6 +162,13 @@ _lock_case(mac-other-milestone macos-arm64 "macos-arm64 release chrome/m999-atte
     RELEASE chrome/m999-attested.7)
 _lock_case(mac-attested macos-arm64 "macos-arm64 release is chrome/m158-attested.2, expected chrome/m158")
 _lock_case(mac-malformed macos-arm64 "release is malformed" RELEASE latest)
+_lock_case(mac-null macos-arm64 "macos-arm64 release is malformed" RELEASE NULL)
+# Only Release rows are consumed.
+_lock_case(mac-debug macos-arm64 "macos-arm64 configuration is Debug, expected Release" RELEASE NONE CONFIG Debug)
+_lock_case(row-debug android-x86_64 "android-x86_64 configuration is Debug, expected Release"
+    CONFIG Debug)
+_lock_case(row-lowercase-release android-x86_64 "configuration is release, expected Release"
+    CONFIG release)
 
 # Non-macOS rows: attested, of the lock's milestone, and present.
 _lock_case(row-other-milestone android-x86_64 "release chrome/m999-attested.7 is not of milestone chrome/m158"
