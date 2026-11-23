@@ -5,9 +5,9 @@
 // hit draws the same pixels as a miss.
 
 #include "render_cache.hpp"
+#include "sha256.hpp"
 
 #include <vellum/graphics/render_telemetry.hpp>
-#include <vellum/runtime/crypto.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
 
@@ -39,7 +39,7 @@ struct CachedParagraph final {
 
 /// The SHA-256 of `bytes`.
 [[nodiscard]] inline TextureDigest sha256(std::span<const std::uint8_t> bytes) noexcept {
-    const auto portable = vellum::runtime::sha256(bytes.data(), bytes.size());
+    const auto portable = sha256_digest(bytes);
     TextureDigest digest{};
     std::copy(portable.begin(), portable.end(), digest.begin());
     return digest;

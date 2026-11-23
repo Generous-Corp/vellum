@@ -1,6 +1,7 @@
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
-#include <vellum/runtime/crypto.hpp>
+
+#include "sha256.hpp"
 
 
 #include "include/codec/SkCodec.h"
@@ -21,7 +22,7 @@ void set_error(std::string* error, std::string message) {
 }
 
 std::string content_hash_of(std::span<const std::uint8_t> bytes) {
-    const auto digest = vellum::runtime::sha256(bytes.data(), bytes.size());
+    const auto digest = detail::sha256_digest(bytes);
     std::string hash = "sha256:";
     char hex[3];
     for (const auto byte : digest) {
