@@ -339,7 +339,7 @@ declaration is the supported boundary and does not require `VELLUM_MIRROR_BUILD`
 
 Put device creation and GPU work in a separate translation unit. That unit may
 include `<gpu_runtime/gpu_surface.hpp>` and must link the `Device` target from
-the separately published `vellum-gpu-runtime-0.2.2-darwin-arm64.tar.gz`
+the separately published `vellum-gpu-runtime-0.2.3-darwin-arm64.tar.gz`
 artifact. The runtime package provides the `DeviceApi`, `Device`, `Bootstrap`,
 and `SkiaLogBridge` targets. Add both installed prefixes to
 `CMAKE_PREFIX_PATH` when the SDK and runtime artifact are installed separately.
@@ -350,8 +350,8 @@ project(NativeEditor LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Vellum 0.2.2 EXACT CONFIG REQUIRED)
-find_package(VellumGpuRuntime 0.2.2 EXACT CONFIG REQUIRED COMPONENTS Device)
+find_package(Vellum 0.2.3 EXACT CONFIG REQUIRED)
+find_package(VellumGpuRuntime 0.2.3 EXACT CONFIG REQUIRED COMPONENTS Device)
 
 add_library(editor_host editor.cpp) # only vellum/platform/gpu_fwd.hpp and view headers
 target_link_libraries(editor_host PRIVATE Vellum::MirrorView_core)
