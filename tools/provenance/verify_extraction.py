@@ -63,7 +63,6 @@ MIRROR_ROOT = "mirror/"
 # own content regime (verify_framework below).
 FRAMEWORK_ROOT = "framework/"
 FRAMEWORK_TRANSFER_RECORD = "provenance/framework/transfer.json"
-FRAMEWORK_TRANSFER_SUCCESSOR = "provenance/framework/transfer-successor.json"
 # framework/external/ is third-party source: the census and the name-debt
 # ratchet skip it, so its bytes are pinned instead. A file there must hold its
 # transfer-record blob, or the to_blob of the last entry for it in this
@@ -950,6 +949,10 @@ def mirror_edge_findings(root: Path, table: dict | None = None, prefix: str = MI
 
 PULP_DEPENDENCY_MANIFEST = "tools/deps/manifest.json"
 RENDERER_ASSET_KEY = "mac-universal"
+RENDERER_LOCK = "gpu-runtime/renderer-lock.json"
+# The one record that binds Vellum's renderer lock to Pulp's own statement of
+# the mirror renderer: {"pulp_commit": <40 hex>} under this key of the lock.
+RENDERER_BINDING_KEY = "pulp_binding"
 
 
 def current_mirror_receipts(
@@ -977,35 +980,10 @@ def current_mirror_receipts(
             transfer = json.loads((root / FRAMEWORK_TRANSFER_RECORD).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return [], [], ["HEAD has no mirror/ tree to name the current export receipt"]
-        successor_path = root / FRAMEWORK_TRANSFER_SUCCESSOR
-        successor = None
-        if successor_path.is_file():
-            try:
-                successor = json.loads(successor_path.read_text(encoding="utf-8"))
-            except (OSError, ValueError) as exc:
-                return [], receipts, [f"{FRAMEWORK_TRANSFER_SUCCESSOR} is malformed: {exc}"]
-            if not isinstance(successor, dict) or set(successor) != {"export_receipt", "mirror_tree"}:
-                return [], receipts, [f"{FRAMEWORK_TRANSFER_SUCCESSOR} is malformed"]
-            transfer_receipt = transfer.get("export_receipt") if isinstance(transfer, dict) else None
-            named = successor.get("export_receipt")
-            if transfer_receipt not in receipts:
-                return [], receipts, [f"{FRAMEWORK_TRANSFER_RECORD} names {transfer_receipt!r}, which is not a landed receipt"]
-            if named not in receipts:
-                return [], receipts, [f"{FRAMEWORK_TRANSFER_SUCCESSOR} names {named!r}, which is not a landed receipt"]
-            if receipts.index(named) <= receipts.index(transfer_receipt):
-                return [], receipts, [f"{FRAMEWORK_TRANSFER_SUCCESSOR} must name a receipt after {transfer_receipt}"]
-            try:
-                named_receipt = json.loads((root / named).read_text(encoding="utf-8"))
-            except (OSError, ValueError) as exc:
-                return [], receipts, [f"{FRAMEWORK_TRANSFER_SUCCESSOR} receipt is unreadable: {exc}"]
-            if not isinstance(named_receipt, dict) or named_receipt.get("mirror_tree") != successor.get("mirror_tree"):
-                return [], receipts, [f"{FRAMEWORK_TRANSFER_SUCCESSOR} mirror_tree does not match its receipt"]
-            head_tree = successor.get("mirror_tree")
-        else:
-            named = transfer.get("export_receipt") if isinstance(transfer, dict) else None
-            if named not in receipts:
-                return [], receipts, [f"{FRAMEWORK_TRANSFER_RECORD} names {named!r}, which is not a landed receipt"]
-            head_tree = transfer.get("mirror_tree") if isinstance(transfer, dict) else None
+        named = transfer.get("export_receipt") if isinstance(transfer, dict) else None
+        if named not in receipts:
+            return [], receipts, [f"{FRAMEWORK_TRANSFER_RECORD} names {named!r}, which is not a landed receipt"]
+        head_tree = transfer.get("mirror_tree")
     current: list[str] = []
     older: list[str] = []
     for receipt_path in receipts:
@@ -1035,12 +1013,16 @@ def renderer_pin_errors(
     exported under; it keeps its identity, origin and blob checks.
     """
     lock = json.loads((root / "provenance/third-party-lock.json").read_text(encoding="utf-8"))
-    renderer_lock = json.loads((root / "gpu-runtime/renderer-lock.json").read_text(encoding="utf-8"))
+    try:
+        renderer_lock = json.loads((root / RENDERER_LOCK).read_text(encoding="utf-8"))
+        milestone = renderer_lock["milestone"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return [f"cannot read the milestone from {RENDERER_LOCK}: {exc}"], []
     renderer = lock["runtime_toolchain_dependencies"]["renderer"]
     artifact = renderer["artifact"]
     identities = renderer["source_identities"]
     expected = {
-        "skia_branch": renderer_lock["milestone"],
+        "skia_branch": milestone,
         "skia_commit": identities["skia"]["commit"],
         "built_dawn": identities["dawn"]["commit"],
         "skia_builder_ref": identities["builder"]["commit"],
@@ -1049,6 +1031,16 @@ def renderer_pin_errors(
     }
     errors: list[str] = []
     rows: list[dict[str, object]] = []
+    # With a binding record, the builder and archive of the lock are proved
+    # against Pulp's vellum_mirror_renderer block at the bound commit instead
+    # of against the exported commit's own pin, which predates them.
+    binding = renderer_lock.get(RENDERER_BINDING_KEY)
+    bound_keys: tuple[str, ...] = ()
+    if binding is not None:
+        binding_errors = renderer_binding_errors(pulp_root, binding, renderer)
+        if binding_errors:
+            return binding_errors, []
+        bound_keys = ("skia_builder_ref", "archive_url", "archive_sha256")
     for receipt_path in receipts:
         receipt = json.loads((root / receipt_path).read_text(encoding="utf-8"))
         pulp_sha = receipt.get("pulp_sha")
@@ -1068,39 +1060,59 @@ def renderer_pin_errors(
         asset = (pin.get("release_assets") or {}).get(RENDERER_ASSET_KEY) or {}
         actual = {key: pin.get(key) for key in ("skia_branch", "skia_commit", "built_dawn", "skia_builder_ref")}
         actual.update(archive_url=asset.get("url"), archive_sha256=asset.get("sha256"))
-        mismatched = sorted(key for key in expected if actual[key] != expected[key])
-        historical_assets = renderer_lock.get("historical_skia_assets", [])
-        historical_valid = (isinstance(historical_assets, list)
-                            and all(isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{64}", value)
-                                    for value in historical_assets))
-        if not historical_valid:
-            errors.append(f"{label}: renderer-lock.json historical_skia_assets must be a list of 64-hex strings")
-            historical_assets = []
-        actual_sha = actual["archive_sha256"]
-        if not isinstance(actual_sha, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", actual_sha):
-            if "archive_sha256" not in mismatched:
-                mismatched.append("archive_sha256")
-        historical_url = actual["archive_url"]
-        url_valid = (isinstance(historical_url, str)
-                     and historical_url.startswith("https://github.com/danielraffel/skia-builder/releases/download/chrome/")
-                     and historical_url.endswith("/skia-build-mac-universal-gpu-release.zip"))
-        if ("archive_sha256" in mismatched and actual_sha in historical_assets and url_valid):
-            mismatched.remove("archive_sha256")
-            if "archive_url" in mismatched:
-                mismatched.remove("archive_url")
-        exception = renderer_lock.get("builder_change_exception")
-        if "skia_builder_ref" in mismatched and isinstance(exception, dict):
-            if (actual["skia_builder_ref"] == exception.get("from")
-                    and expected["skia_builder_ref"] == exception.get("to")
-                    and expected["skia_commit"] == exception.get("skia")
-                    and expected["built_dawn"] == exception.get("dawn")):
-                mismatched.remove("skia_builder_ref")
+        mismatched = sorted(key for key in expected if key not in bound_keys and actual[key] != expected[key])
         rows.append({"receipt": receipt_path, "pulp_sha": pulp_sha, "matches_lock": not mismatched})
         if mismatched:
             errors.append(
                 f"{label}: Pulp's renderer pin differs from third-party-lock.json in "
                 + ", ".join(f"{key} ({actual[key]} != {expected[key]})" for key in mismatched))
     return errors, rows
+
+
+def renderer_binding_errors(
+    pulp_root: Path, binding: object, renderer: dict
+) -> list[str]:
+    """Prove Vellum's renderer lock against Pulp's vellum_mirror_renderer block.
+
+    The binding names one Pulp commit. It must be on the checked-out Pulp main,
+    and the block Pulp records there must equal what Vellum's lock names: the
+    archive URL and digest, libdawn's digest, the builder and Dawn commits.
+    The block is read from the Pulp checkout, never from text in Vellum.
+    """
+    where = f"{RENDERER_LOCK} {RENDERER_BINDING_KEY}"
+    commit = binding.get("pulp_commit") if isinstance(binding, dict) else None
+    if (not isinstance(binding, dict) or set(binding) != {"pulp_commit"}
+            or not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit)):
+        return [f"{where} must be exactly {{\"pulp_commit\": <40 lowercase hex>}}"]
+    try:
+        main = git(pulp_root, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main")
+    except subprocess.CalledProcessError:
+        return [f"{where}: Pulp checkout {pulp_root} has no refs/remotes/origin/main"]
+    if subprocess.run(["git", "merge-base", "--is-ancestor", commit, main], cwd=pulp_root,
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+        return [f"{where}: Pulp commit {commit} is not on the checked-out Pulp main"]
+    try:
+        manifest = json.loads(git(pulp_root, "show", f"{commit}:{PULP_DEPENDENCY_MANIFEST}"))
+        blocks = [d["vellum_mirror_renderer"] for d in manifest.get("dependencies", [])
+                  if isinstance(d, dict) and isinstance(d.get("vellum_mirror_renderer"), dict)]
+    except (subprocess.CalledProcessError, ValueError, AttributeError) as exc:
+        return [f"{where}: cannot read Pulp's {PULP_DEPENDENCY_MANIFEST} at {commit}: {exc}"]
+    if len(blocks) != 1:
+        return [f"{where}: expected one vellum_mirror_renderer block at {commit}, found {len(blocks)}"]
+    block = blocks[0]
+    artifact, identities = renderer["artifact"], renderer["source_identities"]
+    libdawn = next((a.get("sha256") for a in renderer.get("archives", [])
+                    if isinstance(a, dict) and a.get("name") == "libdawn_combined.a"), None)
+    wanted = {
+        "url": artifact["url"],
+        "sha256": artifact["sha256"],
+        "libdawn_combined_sha256": libdawn,
+        "skia_builder_ref": identities["builder"]["commit"],
+        "built_dawn": identities["dawn"]["commit"],
+    }
+    differing = sorted(key for key in wanted if block.get(key) != wanted[key])
+    return [f"{where}: Pulp's vellum_mirror_renderer at {commit} differs from the lock in "
+            + ", ".join(f"{key} ({block.get(key)} != {wanted[key]})" for key in differing)] if differing else []
 
 
 def mirror_renderer_pin_check(
@@ -1639,8 +1651,8 @@ FRAMEWORK_PORTS = load_framework_ports().LEDGER
 FRAMEWORK_UNITS = load_framework_ports().UNITS
 # The files that only exist together with framework/.
 FRAMEWORK_RESPELL = load_port_respell().TABLE
-FRAMEWORK_DATA_FILES = (FRAMEWORK_TRANSFER_RECORD, FRAMEWORK_TRANSFER_SUCCESSOR, FRAMEWORK_NAME_DEBT,
-                        FRAMEWORK_EXTERNAL_UPDATES, FRAMEWORK_PORTS, FRAMEWORK_UNITS, FRAMEWORK_RESPELL)
+FRAMEWORK_DATA_FILES = (FRAMEWORK_TRANSFER_RECORD, FRAMEWORK_NAME_DEBT, FRAMEWORK_EXTERNAL_UPDATES, FRAMEWORK_PORTS,
+                        FRAMEWORK_UNITS, FRAMEWORK_RESPELL)
 
 
 def framework_ports_history_errors(root: Path, ports) -> list[str]:
@@ -2473,18 +2485,6 @@ def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
     proof = source_errors + identity.verify(raw, identity.git_tree(root, tree), transfer.get("rename", {}))
     checks["framework_transfer_proved"] = not proof
     errors.extend(f"framework transfer: {e}" for e in proof)
-    successor_path = root / FRAMEWORK_TRANSFER_SUCCESSOR
-    if successor_path.is_file():
-        try:
-            successor = json.loads(successor_path.read_text(encoding="utf-8"))
-            successor_receipt = json.loads((root / successor["export_receipt"]).read_text(encoding="utf-8"))
-            successor_raw = identity.git_tree(root, successor_receipt["mirror_tree"])
-            successor_framework = identity.git_tree(root, "HEAD:framework")
-            successor_proof = identity.verify(successor_raw, successor_framework, transfer.get("rename", {}))
-        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
-            successor_proof = [f"{FRAMEWORK_TRANSFER_SUCCESSOR}: cannot prove framework derivation: {exc}"]
-        checks["framework_successor_proved"] = not successor_proof
-        errors.extend(f"framework successor: {e}" for e in successor_proof)
     return errors, checks
 
 

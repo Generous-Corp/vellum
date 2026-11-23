@@ -276,8 +276,7 @@ class FrameworkTrustedVerifyTests(unittest.TestCase):
         self.repo.introduce_transfer()
         landed = commit_all(self.repo.root, "land the transfer")
         self.repo.base = landed
-        git(self.repo.root, "rm", "-q", "-r", "framework",
-            verifier.FRAMEWORK_TRANSFER_RECORD, verifier.FRAMEWORK_NAME_DEBT)
+        git(self.repo.root, "rm", "-q", "-r", "framework", *verifier.FRAMEWORK_DATA_FILES[:2])
         code, verdict = self.repo.judge()
         self.assertEqual(code, 1)
         self.assertTrue(any("cannot be removed" in e for e in verdict["errors"]), verdict)
