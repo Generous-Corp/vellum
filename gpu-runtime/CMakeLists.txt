@@ -102,8 +102,6 @@ target_link_libraries(gpu-runtime-bootstrap PUBLIC VellumGpuRuntime::DeviceApi)
 
 if(APPLE)
     set(_gpu_runtime_platform macos-arm64)
-elseif(ANDROID AND CMAKE_ANDROID_ARCH_ABI STREQUAL "arm64-v8a")
-    set(_gpu_runtime_platform android-arm64-v8a)
 else()
     set(_gpu_runtime_platform "")
 endif()

@@ -75,10 +75,10 @@
     }
   },
   "android_arm64_v8a": {
-    "state": "compile-only-path",
+    "state": "deferred-no-verified-asset",
     "backend": "dawn-vulkan",
     "api_floor": 26,
-    "device_run": "needs a GPU run by the lead",
-    "artifact": "pending Android skia-builder asset"
+    "device_run": "blocked until skia-builder publishes a verified Android asset",
+    "artifact": null
   }
 }

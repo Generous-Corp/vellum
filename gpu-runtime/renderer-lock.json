@@ -28,15 +28,6 @@
         "libskunicode_icu.a": "ea7352e2ebab5734852924be28ffba61e99db578f4b065a302cbff9dcae484cb",
         "libsvg.a": "651c113ade708034b19461016b219a216ef8b2f451e83e60931c9eae1aed594b"
       }
-    },
-    "android-arm64-v8a": {
-      "asset": "skia-build-android-arm64-gpu-release.zip",
-      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-      "configuration": "Release",
-      "archive_root": "build/android-gpu/lib/Release",
-      "archives": {
-        "libdawn_combined.a": "0000000000000000000000000000000000000000000000000000000000000000"
-      }
     }
   }
 }

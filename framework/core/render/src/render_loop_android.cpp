@@ -4,7 +4,10 @@
 #include "render_loop_state.hpp"
 
 #include <android/choreographer.h>
+#include <atomic>
 #include <memory>
+#include <mutex>
+#include <utility>
 
 namespace vellum::render {
 
@@ -13,41 +16,88 @@ class AndroidRenderLoop final : public RenderLoop {
     ~AndroidRenderLoop() override { stop(); }
 
     void start(FrameCallback callback) override {
-        if (!state_.start())
+        if (callback_state_ && callback_state_->render_state.is_running())
             return;
-        callback_ = std::move(callback);
-        choreographer_ = AChoreographer_getInstance();
-        request_vsync();
+        auto state = std::make_shared<CallbackState>(std::move(callback));
+        if (!state->render_state.start())
+            return;
+        state->choreographer = AChoreographer_getInstance();
+        callback_state_ = std::move(state);
+        request_vsync(callback_state_);
     }
 
-    void stop() override { state_.stop(); }
+    void stop() override {
+        auto state = callback_state_;
+        if (!state)
+            return;
+        state->render_state.stop();
+        state->alive.store(false, std::memory_order_release);
+        std::lock_guard lock(state->callback_mutex);
+        state->callback = {};
+    }
 
     void request_frame() override {
-        state_.request_frame();
-        request_vsync();
+        auto state = callback_state_;
+        if (!state)
+            return;
+        state->render_state.request_frame();
+        request_vsync(std::move(state));
     }
 
-    bool is_running() const override { return state_.is_running(); }
+    bool is_running() const override {
+        return callback_state_ && callback_state_->render_state.is_running();
+    }
     RenderLoopBackend backend() const override { return RenderLoopBackend::choreographer; }
 
   private:
+    struct CallbackState {
+        explicit CallbackState(FrameCallback frame_callback)
+            : callback(std::move(frame_callback)) {}
+
+        AChoreographer* choreographer = nullptr;
+        RenderLoopState render_state;
+        std::atomic<bool> alive{true};
+        std::atomic<bool> callback_scheduled{false};
+        std::mutex callback_mutex;
+        FrameCallback callback;
+    };
+
     static void on_vsync(long, void* context) {
-        auto* self = static_cast<AndroidRenderLoop*>(context);
-        if (!self->state_.is_running())
+        // The heap holder owns one shared reference until this callback runs.
+        // AChoreographer has no cancellation API, so this keeps the state
+        // alive when stop() or destruction races a queued callback.
+        auto* holder = static_cast<std::shared_ptr<CallbackState>*>(context);
+        std::shared_ptr<CallbackState> state = std::move(*holder);
+        delete holder;
+        state->callback_scheduled.store(false, std::memory_order_release);
+
+        if (!state->alive.load(std::memory_order_acquire) ||
+            !state->render_state.is_running())
             return;
-        if (self->state_.consume_frame_request() && self->callback_)
-            self->callback_();
-        self->request_vsync();
+
+        FrameCallback callback;
+        {
+            std::lock_guard lock(state->callback_mutex);
+            callback = state->callback;
+        }
+        if (state->render_state.consume_frame_request() && callback)
+            callback();
+        request_vsync(std::move(state));
     }
 
-    void request_vsync() {
-        if (choreographer_ && state_.is_running())
-            AChoreographer_postFrameCallback(choreographer_, &on_vsync, this);
+    static void request_vsync(std::shared_ptr<CallbackState> state) {
+        if (!state->choreographer || !state->alive.load(std::memory_order_acquire) ||
+            !state->render_state.is_running())
+            return;
+        bool expected = false;
+        if (!state->callback_scheduled.compare_exchange_strong(
+                expected, true, std::memory_order_acq_rel))
+            return;
+        auto* holder = new std::shared_ptr<CallbackState>(std::move(state));
+        AChoreographer_postFrameCallback(holder->get()->choreographer, &on_vsync, holder);
     }
 
-    AChoreographer* choreographer_ = nullptr;
-    FrameCallback callback_;
-    RenderLoopState state_;
+    std::shared_ptr<CallbackState> callback_state_;
 };
 
 std::unique_ptr<RenderLoop> make_android_render_loop() {

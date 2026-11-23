@@ -1067,7 +1067,8 @@
       "pulp_path": null,
       "pulp_commits": [],
       "framework_blob": null,
-      "reason": "Vellum-owned Android GPU surface lifecycle boundary over Pulp's Dawn Vulkan path."
+      "reason": "Vellum-owned Android GPU surface lifecycle boundary over Pulp's Dawn Vulkan path.",
+      "platforms": ["android-arm64-v8a"]
     },
     {
       "framework_path": "framework/core/render/platform/android/android_gpu_surface.cpp",
@@ -1077,7 +1078,8 @@
       "pulp_path": null,
       "pulp_commits": [],
       "framework_blob": null,
-      "reason": "Vellum-owned Android GPU surface lifecycle boundary over Pulp's Dawn Vulkan path."
+      "reason": "Vellum-owned Android GPU surface lifecycle boundary over Pulp's Dawn Vulkan path.",
+      "platforms": ["android-arm64-v8a"]
     },
     {
       "framework_path": "framework/core/render/platform/android/android_gpu_surface_jni.cpp",
@@ -1087,7 +1089,8 @@
       "pulp_path": null,
       "pulp_commits": [],
       "framework_blob": null,
-      "reason": "Vellum-owned JNI bridge for Android SurfaceView lifecycle callbacks."
+      "reason": "Vellum-owned JNI bridge for Android SurfaceView lifecycle callbacks.",
+      "platforms": ["android-arm64-v8a"]
     },
     {
       "framework_path": "framework/core/render/src/render_loop_android.cpp",
@@ -1097,7 +1100,8 @@
       "pulp_path": null,
       "pulp_commits": [],
       "framework_blob": null,
-      "reason": "AChoreographer frame pacing for Vellum's Android render loop."
+      "reason": "AChoreographer frame pacing for Vellum's Android render loop.",
+      "platforms": ["android-arm64-v8a"]
     }
   ]
 }

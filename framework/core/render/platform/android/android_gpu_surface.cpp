@@ -4,9 +4,27 @@
 
 #include <gpu_runtime/gpu_surface.hpp>
 #include <android/native_window.h>
+#include <algorithm>
+#include <cmath>
+#include <limits>
 #include <string>
 
 namespace vellum::render {
+
+namespace {
+
+std::uint32_t scaled_extent(std::uint32_t extent, float scale) {
+    if (extent == 0)
+        return 0;
+    if (!std::isfinite(scale) || scale <= 0.0f)
+        scale = 1.0f;
+    const double scaled = std::round(static_cast<double>(extent) * scale);
+    if (scaled >= static_cast<double>(std::numeric_limits<std::uint32_t>::max()))
+        return std::numeric_limits<std::uint32_t>::max();
+    return std::max<std::uint32_t>(1, static_cast<std::uint32_t>(scaled));
+}
+
+}  // namespace
 
 class AndroidGpuSurface::Impl {
   public:
@@ -38,8 +56,8 @@ bool AndroidGpuSurface::create(ANativeWindow* window, std::uint32_t width,
         impl_->error = "AndroidGpuSurface: Dawn surface is unavailable";
     } else {
         gpu_runtime::GpuSurface::Config config;
-        config.width = width;
-        config.height = height;
+        config.width = scaled_extent(width, impl_->scale);
+        config.height = scaled_extent(height, impl_->scale);
         config.native_surface_handle = window;
         config.backend_preference =
             gpu_runtime::GpuSurface::AdapterBackendPreference::vulkan;
@@ -63,7 +81,8 @@ bool AndroidGpuSurface::create(ANativeWindow* window, std::uint32_t width,
 
 void AndroidGpuSurface::resize(std::uint32_t width, std::uint32_t height) {
     if (impl_->surface)
-        impl_->surface->resize(width, height);
+        impl_->surface->resize(scaled_extent(width, impl_->scale),
+                               scaled_extent(height, impl_->scale));
 }
 
 bool AndroidGpuSurface::begin_frame() {

@@ -19,6 +19,8 @@ class AndroidGpuSurface final {
     AndroidGpuSurface(const AndroidGpuSurface&) = delete;
     AndroidGpuSurface& operator=(const AndroidGpuSurface&) = delete;
 
+    // width and height are logical pixels; scale converts them to the
+    // physical swapchain extent used by Dawn.
     bool create(ANativeWindow* window, std::uint32_t width, std::uint32_t height,
                 float scale, const char** error = nullptr);
     void resize(std::uint32_t width, std::uint32_t height);
