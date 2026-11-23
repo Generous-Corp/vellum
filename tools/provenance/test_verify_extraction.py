@@ -612,6 +612,9 @@ class VerifyExtractionTests(unittest.TestCase):
             "authoring/design_pipeline/design_pipeline.cpp",
             "authoring/design_pipeline/include/vellum/authoring/design_pipeline.hpp",
             "authoring/design_pipeline/tests/deep/nested/golden_test.cpp",
+            "rmlui/plugin_view/plugin_view.cpp",
+            "rmlui/plugin_view/include/vellum/rmlui/plugin_view.hpp",
+            "rmlui/plugin_view/tests/plugin_view_test.cpp",
         }
         refused = {
             "authoring/x.hpp",
@@ -621,6 +624,11 @@ class VerifyExtractionTests(unittest.TestCase):
             "authoring/design_pipeline_evil/foo.hpp",
             "authoring/design_pipelines/foo.hpp",
             "authoring/src/design_pipeline/foo.hpp",
+            "rmlui/plugin_view.hpp",
+            "rmlui/plugin_view_evil/foo.hpp",
+            "rmlui/other/plugin_view/foo.hpp",
+            "rmlui/plugin_views/foo.hpp",
+            "rmlui/src/plugin_view/foo.hpp",
         }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -634,7 +642,7 @@ class VerifyExtractionTests(unittest.TestCase):
 
     def test_renamed_mirror_exemptions_are_pinned(self) -> None:
         # Any change to what the rule skips must show up as an edit here.
-        self.assertEqual(verify_extraction.RENAMED_MIRROR_EXEMPT_PREFIXES, ("authoring/design_pipeline/",))
+        self.assertEqual(verify_extraction.RENAMED_MIRROR_EXEMPT_PREFIXES, ("authoring/design_pipeline/", "rmlui/plugin_view/"))
         self.assertEqual(verify_extraction.FRAMEWORK_TEST_ROOT, "tools/framework-tests/")
         self.assertEqual(verify_extraction.RENAMED_MIRROR_EXEMPT_PATHS, {
             "tools/mirror/consumer/cross_image_main.cpp",
