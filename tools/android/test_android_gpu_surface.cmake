@@ -53,6 +53,11 @@ if(NOT _render_loop MATCHES "CallbackState" OR
         "android-gpu-surface: Choreographer callbacks must use a lifetime-pinned state token")
 endif()
 
+if(_render_loop MATCHES "callback\\(\\);[ \n\t]*request_vsync")
+    message(FATAL_ERROR
+        "android-gpu-surface: on_vsync must not re-post a vsync callback while idle")
+endif()
+
 if(NOT _render_loop MATCHES "if \\(!state->choreographer\\)")
     message(FATAL_ERROR
         "android-gpu-surface: start() must stop the loop when AChoreographer is unavailable")

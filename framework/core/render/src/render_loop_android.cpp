@@ -88,7 +88,9 @@ class AndroidRenderLoop final : public RenderLoop {
         }
         if (state->render_state.consume_frame_request() && callback)
             callback();
-        request_vsync(std::move(state));
+        // No re-post here: the loop is demand-driven. request_frame() is the
+        // only path that schedules the next vsync (callback_scheduled was
+        // cleared above), so an idle loop receives no Choreographer wakeups.
     }
 
     static void request_vsync(std::shared_ptr<CallbackState> state) {
