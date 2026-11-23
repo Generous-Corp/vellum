@@ -14,9 +14,12 @@ set(VELLUM_RMLUI_IOS_METAL_BUILD_DIR "${CMAKE_BINARY_DIR}/rmlui" CACHE PATH
     "Build directory for the iOS Metal compile consumer")
 set(VELLUM_RMLUI_NATIVE ON CACHE BOOL "" FORCE)
 set(VELLUM_RMLUI_METAL ON CACHE BOOL "" FORCE)
-set(VELLUM_RMLUI_FONTS OFF CACHE BOOL "" FORCE)
+set(VELLUM_RMLUI_CPU ON CACHE BOOL "" FORCE)
+set(VELLUM_RMLUI_FONTS ON CACHE BOOL "" FORCE)
 set(VELLUM_RMLUI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(VELLUM_RMLUI_INSTALL OFF CACHE BOOL "" FORCE)
+option(VELLUM_RMLUI_IOS_METAL_RUNTIME_TEST
+    "Build the linked headless iOS Metal renderer test" ON)
 add_subdirectory("${vellum_root}/rmlui" "${VELLUM_RMLUI_IOS_METAL_BUILD_DIR}")
 
 set(VELLUM_RMLUI_SOURCE_DIR "${vellum_root}/rmlui" CACHE PATH
@@ -25,10 +28,6 @@ set(VELLUM_RMLUI_SOURCE_DIR "${vellum_root}/rmlui" CACHE PATH
 add_test(NAME vellum.rmlui.metal-ios-compile
     COMMAND "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}"
         --target vellum-rmlui-metal-ios-compile)
-
-add_test(NAME vellum.rmlui.metal-ios-runtime
-    COMMAND "${CMAKE_BINARY_DIR}/vellum-rmlui-metal-ios-runtime"
-        "${vellum_root}/rmlui" "${vellum_root}/rmlui/tests/fixtures")
 
 set(_metal_ios_test_sources
     "${vellum_root}/rmlui/tests/metal/metal_effects_test.cpp"
@@ -54,6 +53,51 @@ target_link_libraries(vellum-rmlui-metal-ios-tests PRIVATE
 
 add_custom_target(vellum-rmlui-metal-ios-compile
     DEPENDS vellum-rmlui-metal vellum-rmlui-metal-ios-tests)
+
+if(VELLUM_RMLUI_IOS_METAL_RUNTIME_TEST)
+    add_executable(vellum-rmlui-metal-ios-runtime
+        "${vellum_root}/rmlui/tests/metal/cpu_vs_metal_test.mm")
+    set_target_properties(vellum-rmlui-metal-ios-runtime PROPERTIES
+        OSX_ARCHITECTURES arm64)
+    target_compile_features(vellum-rmlui-metal-ios-runtime PRIVATE cxx_std_20)
+    target_compile_options(vellum-rmlui-metal-ios-runtime PRIVATE -fobjc-arc)
+    target_include_directories(vellum-rmlui-metal-ios-runtime PRIVATE
+        "${vellum_root}/rmlui/include" "${vellum_root}/rmlui/tests" "${vellum_root}/rmlui/src")
+    target_link_libraries(vellum-rmlui-metal-ios-runtime PRIVATE
+        VellumRmlUi::Native VellumRmlUi::Metal VellumRmlUi::Cpu
+        "-framework Metal" "-framework QuartzCore" "-framework Foundation"
+        "-framework CoreGraphics" "-framework ImageIO")
+    add_test(NAME vellum.rmlui.metal-ios-runtime
+        COMMAND "$<TARGET_FILE:vellum-rmlui-metal-ios-runtime>"
+            "${vellum_root}/rmlui" "${vellum_root}/rmlui/tests/fixtures")
+    set_tests_properties(vellum.rmlui.metal-ios-runtime PROPERTIES SKIP_RETURN_CODE 77)
+    add_dependencies(vellum-rmlui-metal-ios-compile vellum-rmlui-metal-ios-runtime)
+endif()
+
+option(VELLUM_RMLUI_IOS_METAL_NEGATIVE_CONTROL
+    "Build the deliberately failing iOS Metal pixel expectation control" OFF)
+if(VELLUM_RMLUI_IOS_METAL_NEGATIVE_CONTROL)
+    add_executable(vellum-rmlui-metal-ios-runtime-control
+        "${vellum_root}/rmlui/tests/metal/cpu_vs_metal_test.mm")
+    set_target_properties(vellum-rmlui-metal-ios-runtime-control PROPERTIES
+        OSX_ARCHITECTURES arm64)
+    target_compile_features(vellum-rmlui-metal-ios-runtime-control PRIVATE cxx_std_20)
+    target_compile_options(vellum-rmlui-metal-ios-runtime-control PRIVATE -fobjc-arc)
+    target_compile_definitions(vellum-rmlui-metal-ios-runtime-control PRIVATE
+        VELLUM_RMLUI_IOS_METAL_WRONG_EXPECTED_PIXEL)
+    target_include_directories(vellum-rmlui-metal-ios-runtime-control PRIVATE
+        "${vellum_root}/rmlui/include" "${vellum_root}/rmlui/tests" "${vellum_root}/rmlui/src")
+    target_link_libraries(vellum-rmlui-metal-ios-runtime-control PRIVATE
+        VellumRmlUi::Native VellumRmlUi::Metal VellumRmlUi::Cpu
+        "-framework Metal" "-framework QuartzCore" "-framework Foundation"
+        "-framework CoreGraphics" "-framework ImageIO")
+    add_test(NAME vellum.rmlui.metal-ios-runtime-control
+        COMMAND "$<TARGET_FILE:vellum-rmlui-metal-ios-runtime-control>"
+            "${vellum_root}/rmlui" "${vellum_root}/rmlui/tests/fixtures")
+    set_tests_properties(vellum.rmlui.metal-ios-runtime-control PROPERTIES
+        WILL_FAIL TRUE SKIP_RETURN_CODE 77)
+    add_dependencies(vellum-rmlui-metal-ios-compile vellum-rmlui-metal-ios-runtime-control)
+endif()
 
 add_test(NAME vellum.rmlui.metal-ios-cocoa-negative
     COMMAND "${CMAKE_COMMAND}"

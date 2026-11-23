@@ -232,6 +232,13 @@ int main(int argc, char** argv) {
             const bool ok = within_renderer_tolerance(d);
             std::printf("%-60s mean=%.3f within=%.4f %s\n", document, d.mean, d.within,
                         ok ? "ok" : "OUTSIDE TOLERANCE");
+#if defined(VELLUM_RMLUI_IOS_METAL_WRONG_EXPECTED_PIXEL)
+            if (frames[0][0] != 255u) {
+                std::fprintf(stderr, "negative control: expected pixel 255, got %u\n",
+                             static_cast<unsigned>(frames[0][0]));
+                return 1;
+            }
+#endif
             if (kControl) {
                 if (translucent(document) && !ok)
                     control_tripped = true;

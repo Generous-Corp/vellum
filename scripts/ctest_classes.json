@@ -233,6 +233,7 @@
       "vellum.rmlui.metal-ios-cocoa-negative",
       "vellum.rmlui.metal-ios-compile",
       "vellum.rmlui.metal-ios-runtime",
+      "vellum.rmlui.metal-ios-runtime-control",
       "vellum.rmlui.metal-layers",
       "vellum.rmlui.metal-reference",
       "vellum.rmlui.metal-trim",
