@@ -2,9 +2,9 @@
 """Draw the canvas shell's compiled vector plans in Chrome and check pixels.
 
 The plans come from the shared C++ core (the vector asset GPU test binary
-prints them for the compiled vector fixtures); the page draws each with the
+prints them for the compiled SVG fixtures); the page draws each with the
 shell's `drawVector`, and the expected pixels below are computed here from
-the fixtures' geometry, independently of either renderer.
+the SVG fixtures' geometry, independently of either renderer.
 """
 
 from __future__ import annotations

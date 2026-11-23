@@ -1,0 +1,42 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "design-schema-compiler"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-23T16:07:27Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-faea2f57d15a834383f7b7c649a9709716f85d7e",
+  "include_dependency_deltas": [],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "design-schema-compiler"
+  ],
+  "mapped_paths": [
+    "packages/vellum-design-ir/src/index.d.ts"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "c14f80a93dc9949923e3e5687a901fda6eadeae9",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "fef5dd779747e466b08d276c501a47bf7bdee7ec",
+    "to_commit": "f74ef37a8ca83162e916a78f833b67b2d7a47809"
+  },
+  "schema_api_deltas": [
+    "packages/vellum-design-ir/src/index.d.ts"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "faea2f57d15a834383f7b7c649a9709716f85d7e",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}
