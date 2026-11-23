@@ -1,11 +1,15 @@
 # Installs this build, then builds and runs the mirror consumer against the
 # installed package alone, proves the Phase-6 debts inert there, and proves
 # that one image cannot take two Skia/Dawn providers.
-foreach(_required VELLUM_SOURCE_DIR VELLUM_BUILD_DIR VELLUM_MIRROR_DEPS_DIR VELLUM_MIRROR_ORIGIN VELLUM_INSTALL_LIBDIR Python3_EXECUTABLE)
+foreach(_required VELLUM_SOURCE_DIR VELLUM_BUILD_DIR VELLUM_MIRROR_DEPS_DIR VELLUM_MIRROR_ORIGIN VELLUM_INSTALL_LIBDIR Python3_EXECUTABLE VELLUM_GPU_RUNTIME_PREFIX)
     if(NOT DEFINED ${_required})
         message(FATAL_ERROR "mirror consumer test: ${_required} was not supplied")
     endif()
 endforeach()
+if(NOT IS_DIRECTORY "${VELLUM_GPU_RUNTIME_PREFIX}" OR
+   NOT EXISTS "${VELLUM_GPU_RUNTIME_PREFIX}/lib/cmake/VellumGpuRuntime/VellumGpuRuntimeConfig.cmake")
+    message(FATAL_ERROR "mirror consumer test: VELLUM_GPU_RUNTIME_PREFIX must name an installed VellumGpuRuntime package")
+endif()
 
 # A view unit makes the archive-backed symbol-floor proof mandatory.  Keep the
 # value explicit at the test boundary so CI can supply the provenance-pinned
@@ -301,7 +305,7 @@ file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/native-gpu-editor/"
 _run("native GPU editor consumer configure" "${CMAKE_COMMAND}"
     -S "${_native_gpu_editor_dir}" -B "${_native_gpu_editor_dir}/build" ${_generator}
     -DCMAKE_BUILD_TYPE=Release
-    "-DCMAKE_PREFIX_PATH=${_prefix}"
+    "-DCMAKE_PREFIX_PATH=${_prefix};${VELLUM_GPU_RUNTIME_PREFIX}"
     -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
     -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE)
 _run("native GPU editor consumer build"

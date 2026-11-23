@@ -690,6 +690,9 @@ if(VELLUM_BUILD_TESTS)
             -s tools/mirror -p "test_*.py"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     if(VELLUM_PACKAGE_HAS_MIRROR)
+        set(VELLUM_GPU_RUNTIME_PREFIX
+            "${CMAKE_CURRENT_BINARY_DIR}/gpu-runtime-prefix" CACHE PATH
+            "Installed VellumGpuRuntime artifact prefix for mirror consumers")
         set(_vellum_view_audio_archive_arg)
         if(DEFINED VELLUM_VIEW_AUDIO_ARCHIVE AND
            NOT VELLUM_VIEW_AUDIO_ARCHIVE STREQUAL "")
@@ -708,6 +711,7 @@ if(VELLUM_BUILD_TESTS)
                 "-DVELLUM_V8_VERSION=${VELLUM_V8_VERSION}"
                 "-DVELLUM_INSTALL_THREEJS=${VELLUM_INSTALL_THREEJS}"
                 "-DVELLUM_PULP_CENSUS_LIBRARIES=${VELLUM_PULP_CENSUS_LIBRARIES}"
+                "-DVELLUM_GPU_RUNTIME_PREFIX=${VELLUM_GPU_RUNTIME_PREFIX}"
                 ${_vellum_view_audio_archive_arg}
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/mirror/RunMirrorConsumer.cmake")
         # An installed consumer reaches Vellum's value model through the view
