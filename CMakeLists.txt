@@ -586,6 +586,10 @@ if(VELLUM_BUILD_TESTS)
     add_test(NAME vellum.renderer-lock-drift-unit
         COMMAND "${Python3_EXECUTABLE}" -I scripts/test_check_renderer_lock.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.skia-dawn-platform-selection
+        COMMAND "${CMAKE_COMMAND}" -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_skia_dawn_platform_selection.cmake"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.threejs-payload
         COMMAND "${Python3_EXECUTABLE}" -I scripts/check_threejs_payload.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
