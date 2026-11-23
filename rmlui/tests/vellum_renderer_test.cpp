@@ -154,8 +154,9 @@ void check_command_mapping(vellum::graphics::SkiaDawnSurface& surface) {
     command.transform_enabled = true;
     command.transform = {2.0f, 0.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f, 0.0f,
                          0.0f, 0.0f, 1.0f, 0.0f,  0.0f, 0.0f, 0.0f, 1.0f};
+    const auto before_raw = renderer.triangles_submitted();
     renderer.submit(command);
-    VELLUM_RMLUI_CHECK(renderer.triangles_submitted() == 2);
+    VELLUM_RMLUI_CHECK(renderer.triangles_submitted() - before_raw == 2);
 
     // A loaded PNG is decoded by the Vellum GPU provider when the caller has
     // not installed a custom decoder. This is the normal Backend path for
@@ -166,7 +167,9 @@ void check_command_mapping(vellum::graphics::SkiaDawnSurface& surface) {
         test::read_binary(fixtures / "checker.png"));
     loaded_image.texture_width = 16;
     loaded_image.texture_height = 16;
+    const auto before_loaded = renderer.triangles_submitted();
     renderer.submit(loaded_image);
+    VELLUM_RMLUI_CHECK(renderer.triangles_submitted() - before_loaded == 2);
     VELLUM_RMLUI_CHECK(renderer.skipped_draws() == 0);
     VELLUM_RMLUI_CHECK(renderer.scene().root.children.back().mesh->texture);
     VELLUM_RMLUI_CHECK(renderer.scene().root.children.back().mesh->texture->width == 16);
@@ -182,8 +185,9 @@ void check_command_mapping(vellum::graphics::SkiaDawnSurface& surface) {
         {-10.0f, 1.0f, 0.0f, 0.0f, 0xffffffffu},
         {1.0f, 0.0f, 0.0f, 0.0f, 0xffffffffu},
     });
+    const auto before_projective = renderer.triangles_submitted();
     renderer.submit(projective);
-    VELLUM_RMLUI_CHECK(renderer.triangles_submitted() == 3);
+    VELLUM_RMLUI_CHECK(renderer.triangles_submitted() - before_projective == 1);
 
     auto image = command;
     image.texture_path = "missing.png";
