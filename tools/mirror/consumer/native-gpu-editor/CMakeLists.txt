@@ -16,8 +16,3 @@ if(_editor_defs MATCHES "VELLUM_MIRROR_BUILD")
     message(FATAL_ERROR "the native editor consumer must not define VELLUM_MIRROR_BUILD")
 endif()
 
-option(NATIVE_GPU_EDITOR_NEGATIVE "Build the guarded-header negative control" OFF)
-if(NATIVE_GPU_EDITOR_NEGATIVE)
-    add_library(vellum-native-gpu-editor-negative OBJECT negative_editor.cpp)
-    target_link_libraries(vellum-native-gpu-editor-negative PRIVATE Vellum::MirrorView_core)
-endif()

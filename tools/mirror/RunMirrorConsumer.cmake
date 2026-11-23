@@ -309,11 +309,14 @@ _run("native GPU editor consumer build"
 
 # The editor-side choke header remains a deliberate compile-time failure.
 set(_native_gpu_negative_dir "${_work}/native-gpu-editor-negative")
-file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/native-gpu-editor/"
+file(MAKE_DIRECTORY "${_native_gpu_negative_dir}")
+file(COPY
+    "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/native-gpu-editor/negative/CMakeLists.txt"
+    "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/native-gpu-editor/negative_editor.cpp"
     DESTINATION "${_native_gpu_negative_dir}")
 _run("native GPU editor negative configure" "${CMAKE_COMMAND}"
     -S "${_native_gpu_negative_dir}" -B "${_native_gpu_negative_dir}/build" ${_generator}
-    -DCMAKE_BUILD_TYPE=Release -DNATIVE_GPU_EDITOR_NEGATIVE=ON
+    -DCMAKE_BUILD_TYPE=Release
     "-DCMAKE_PREFIX_PATH=${_prefix}"
     -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
     -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE)
