@@ -22,6 +22,12 @@ class AndroidRenderLoop final : public RenderLoop {
         if (!state->render_state.start())
             return;
         state->choreographer = AChoreographer_getInstance();
+        if (!state->choreographer) {
+            // No Looper on this thread: no frame callback could ever be posted,
+            // so do not report a running loop.
+            state->render_state.stop();
+            return;
+        }
         callback_state_ = std::move(state);
         request_vsync(callback_state_);
     }

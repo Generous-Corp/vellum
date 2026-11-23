@@ -21,6 +21,8 @@ Java_com_vellum_render_VellumGpuSurface_nativeCreate(JNIEnv* env, jclass,
                                                      jobject java_surface,
                                                      jint width, jint height,
                                                      jfloat scale) {
+    if (width <= 0 || height <= 0)
+        return JNI_FALSE;
     ANativeWindow* window = ANativeWindow_fromSurface(env, java_surface);
     if (!window)
         return JNI_FALSE;
@@ -33,6 +35,8 @@ Java_com_vellum_render_VellumGpuSurface_nativeCreate(JNIEnv* env, jclass,
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_vellum_render_VellumGpuSurface_nativeResize(JNIEnv*, jclass, jint width, jint height) {
+    if (width <= 0 || height <= 0)
+        return;
     surface().resize(static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height));
 }
 

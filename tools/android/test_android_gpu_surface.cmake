@@ -53,6 +53,17 @@ if(NOT _render_loop MATCHES "CallbackState" OR
         "android-gpu-surface: Choreographer callbacks must use a lifetime-pinned state token")
 endif()
 
+if(NOT _render_loop MATCHES "if \\(!state->choreographer\\)")
+    message(FATAL_ERROR
+        "android-gpu-surface: start() must stop the loop when AChoreographer is unavailable")
+endif()
+
+file(READ "${SOURCE_ROOT}/framework/core/render/platform/android/android_gpu_surface_jni.cpp" _jni)
+if(NOT _jni MATCHES "width <= 0 \\|\\| height <= 0")
+    message(FATAL_ERROR
+        "android-gpu-surface: JNI must reject non-positive dimensions before unsigned conversion")
+endif()
+
 file(READ "${SOURCE_ROOT}/framework/core/render/platform/android/android_gpu_surface.cpp" _surface)
 if(NOT _surface MATCHES "scaled_extent" OR
    NOT _surface MATCHES "config.width = scaled_extent" OR
