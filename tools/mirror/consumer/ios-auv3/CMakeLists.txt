@@ -63,7 +63,8 @@ if(VELLUM_RMLUI_IOS_METAL_RUNTIME_TEST)
     add_executable(vellum-rmlui-metal-ios-runtime
         "${vellum_root}/rmlui/tests/metal/cpu_vs_metal_test.mm")
     set_target_properties(vellum-rmlui-metal-ios-runtime PROPERTIES
-        OSX_ARCHITECTURES arm64)
+        OSX_ARCHITECTURES arm64
+        MACOSX_BUNDLE TRUE)
     target_compile_features(vellum-rmlui-metal-ios-runtime PRIVATE cxx_std_20)
     target_compile_options(vellum-rmlui-metal-ios-runtime PRIVATE -fobjc-arc)
     target_include_directories(vellum-rmlui-metal-ios-runtime PRIVATE
@@ -76,6 +77,32 @@ if(VELLUM_RMLUI_IOS_METAL_RUNTIME_TEST)
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${CMAKE_BINARY_DIR}/rmlui/metal/vellum-rmlui-metal.metallib"
             "$<TARGET_FILE_DIR:vellum-rmlui-metal-ios-runtime>/vellum-rmlui-metal.metallib")
+    add_custom_command(TARGET vellum-rmlui-metal-ios-runtime POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E make_directory
+            "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime>/Resources/rmlui/Samples/assets"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory
+            "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime>/Resources/rmlui/Tests/Data"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${_vellum_rmlui_rmlui_src}/Samples/assets/LatoLatin-Regular.ttf"
+            "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime>/Resources/rmlui/Samples/assets/LatoLatin-Regular.ttf"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${_vellum_rmlui_rmlui_src}/Samples/assets/LatoLatin-Bold.ttf"
+            "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime>/Resources/rmlui/Samples/assets/LatoLatin-Bold.ttf"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${_vellum_rmlui_rmlui_src}/Samples/assets/LatoLatin-Italic.ttf"
+            "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime>/Resources/rmlui/Samples/assets/LatoLatin-Italic.ttf"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${_vellum_rmlui_rmlui_src}/Samples/assets/LatoLatin-BoldItalic.ttf"
+            "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime>/Resources/rmlui/Samples/assets/LatoLatin-BoldItalic.ttf"
+        COMMAND "${CMAKE_COMMAND}" -E copy_directory
+            "${_vellum_rmlui_rmlui_src}/Tests/Data/VisualTests"
+            "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime>/Resources/rmlui/Tests/Data/VisualTests"
+        COMMAND "${CMAKE_COMMAND}" -E copy_directory
+            "${vellum_root}/rmlui/tests/fixtures"
+            "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime>/Resources/fixtures"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_BINARY_DIR}/rmlui/metal/vellum-rmlui-metal.metallib"
+            "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime>/Resources/vellum-rmlui-metal.metallib")
     add_test(NAME vellum.rmlui.metal-ios-runtime
         COMMAND "$<TARGET_FILE:vellum-rmlui-metal-ios-runtime>"
             "${_vellum_rmlui_rmlui_src}" "${vellum_root}/rmlui/tests/fixtures")
@@ -89,7 +116,8 @@ if(VELLUM_RMLUI_IOS_METAL_NEGATIVE_CONTROL)
     add_executable(vellum-rmlui-metal-ios-runtime-control
         "${vellum_root}/rmlui/tests/metal/cpu_vs_metal_test.mm")
     set_target_properties(vellum-rmlui-metal-ios-runtime-control PROPERTIES
-        OSX_ARCHITECTURES arm64)
+        OSX_ARCHITECTURES arm64
+        MACOSX_BUNDLE TRUE)
     target_compile_features(vellum-rmlui-metal-ios-runtime-control PRIVATE cxx_std_20)
     target_compile_options(vellum-rmlui-metal-ios-runtime-control PRIVATE -fobjc-arc)
     target_compile_definitions(vellum-rmlui-metal-ios-runtime-control PRIVATE
@@ -104,6 +132,32 @@ if(VELLUM_RMLUI_IOS_METAL_NEGATIVE_CONTROL)
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${CMAKE_BINARY_DIR}/rmlui/metal/vellum-rmlui-metal.metallib"
             "$<TARGET_FILE_DIR:vellum-rmlui-metal-ios-runtime-control>/vellum-rmlui-metal.metallib")
+    add_custom_command(TARGET vellum-rmlui-metal-ios-runtime-control POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E make_directory
+            "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime-control>/Resources/rmlui/Samples/assets"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory
+            "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime-control>/Resources/rmlui/Tests/Data"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${_vellum_rmlui_rmlui_src}/Samples/assets/LatoLatin-Regular.ttf"
+            "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime-control>/Resources/rmlui/Samples/assets/LatoLatin-Regular.ttf"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${_vellum_rmlui_rmlui_src}/Samples/assets/LatoLatin-Bold.ttf"
+            "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime-control>/Resources/rmlui/Samples/assets/LatoLatin-Bold.ttf"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${_vellum_rmlui_rmlui_src}/Samples/assets/LatoLatin-Italic.ttf"
+            "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime-control>/Resources/rmlui/Samples/assets/LatoLatin-Italic.ttf"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${_vellum_rmlui_rmlui_src}/Samples/assets/LatoLatin-BoldItalic.ttf"
+            "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime-control>/Resources/rmlui/Samples/assets/LatoLatin-BoldItalic.ttf"
+        COMMAND "${CMAKE_COMMAND}" -E copy_directory
+            "${_vellum_rmlui_rmlui_src}/Tests/Data/VisualTests"
+            "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime-control>/Resources/rmlui/Tests/Data/VisualTests"
+        COMMAND "${CMAKE_COMMAND}" -E copy_directory
+            "${vellum_root}/rmlui/tests/fixtures"
+            "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime-control>/Resources/fixtures"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_BINARY_DIR}/rmlui/metal/vellum-rmlui-metal.metallib"
+            "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime-control>/Resources/vellum-rmlui-metal.metallib")
     add_test(NAME vellum.rmlui.metal-ios-runtime-control
         COMMAND "$<TARGET_FILE:vellum-rmlui-metal-ios-runtime-control>"
             "${_vellum_rmlui_rmlui_src}" "${vellum_root}/rmlui/tests/fixtures")

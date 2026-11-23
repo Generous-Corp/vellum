@@ -25,7 +25,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <system_error>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
 using namespace vellum::rmlui;
@@ -78,6 +80,20 @@ bool load_fonts(DirectoryAssets& assets, std::vector<std::string>& storage) {
             return false;
     }
     return true;
+}
+
+bool readable_directory(const char* path) {
+    std::error_code error;
+    return std::filesystem::is_directory(std::filesystem::path(path), error) && !error;
+}
+
+std::pair<std::filesystem::path, std::filesystem::path> asset_roots(int argc, char** argv) {
+    if (argc == 3 && readable_directory(argv[1]) && readable_directory(argv[2]))
+        return {argv[1], argv[2]};
+    NSString* resource_path = [[NSBundle mainBundle] resourcePath];
+    if (resource_path)
+        return {resource_path.UTF8String, resource_path.UTF8String};
+    return {};
 }
 
 // Premultiplied RGBA8 through ImageIO, top row first.
@@ -187,8 +203,8 @@ bool has_ink(const std::vector<std::uint8_t>& pixels) {
 int main(int argc, char** argv) {
     @autoreleasepool {
         Watchdog watchdog;
-        if (argc != 3) {
-            std::fprintf(stderr, "usage: %s <rmlui-source> <fixtures>\n", argv[0]);
+        if (argc != 1 && argc != 3) {
+            std::fprintf(stderr, "usage: %s [<rmlui-source> <fixtures>]\n", argv[0]);
             return 2;
         }
         if (!NativeContext::fonts_enabled()) {
@@ -220,7 +236,12 @@ int main(int argc, char** argv) {
         std::fflush(stderr);
         cpu.set_image_decoder(decode);
 
-        DirectoryAssets assets(argv[1], argv[2]);
+        const auto [rmlui_source, fixtures] = asset_roots(argc, argv);
+        if (rmlui_source.empty() || fixtures.empty()) {
+            std::fprintf(stderr, "asset roots unavailable\n");
+            return 1;
+        }
+        DirectoryAssets assets(rmlui_source, fixtures);
         watchdog.stage("Native context construction");
         NativeContext keepalive(assets, cpu);
         std::fprintf(stderr, "progress: Native context constructed\n");
@@ -236,6 +257,8 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "fonts failed\n");
                 return 1;
             }
+            std::fprintf(stderr, "progress: fonts loaded\n");
+            std::fflush(stderr);
         }
 
         std::vector<const char*> documents(std::begin(kDocuments), std::end(kDocuments));
