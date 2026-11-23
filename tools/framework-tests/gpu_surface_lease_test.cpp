@@ -101,3 +101,5 @@ FRAMEWORK_TEST(gpu_surface_lease_generation_changes_on_replacement) {
 }
 
 }  // namespace
+
+int main() { return framework_test::run_all(); }
