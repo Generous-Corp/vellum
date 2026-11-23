@@ -334,5 +334,6 @@ jobs:
 
       - name: Run the Vellum RmlUi GPU renderer on the software adapter
         shell: bash
-        run: ctest --test-dir build-rmlui-gpu -C Release --output-on-failure \
-          -R '^vellum\\.rmlui\\.vellum-renderer$' --no-tests=error
+        run: |
+          ctest --test-dir build-rmlui-gpu -C Release --output-on-failure \
+            -R '^vellum\\.rmlui\\.vellum-renderer$' --no-tests=error
