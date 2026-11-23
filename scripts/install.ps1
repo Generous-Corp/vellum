@@ -30,6 +30,7 @@ function Install-Payload([string]$Payload) {
     New-Item -ItemType Directory -Force -Path $library, $bin | Out-Null
     Copy-Item (Join-Path $Payload "vellum_cli.py") (Join-Path $library "vellum_cli.py") -Force
     Copy-Item (Join-Path $Payload "vellum_illustrator.py") (Join-Path $library "vellum_illustrator.py") -Force
+    Copy-Item (Join-Path $Payload "vellum_import_assets.py") (Join-Path $library "vellum_import_assets.py") -Force
     Copy-Item (Join-Path $Payload "vellum_backend.py") (Join-Path $library "vellum_backend.py") -Force
     Copy-Item (Join-Path $Payload "vellum_manifest.py") (Join-Path $library "vellum_manifest.py") -Force
     Copy-Item (Join-Path $Payload "vellum_png.py") (Join-Path $library "vellum_png.py") -Force
@@ -148,6 +149,7 @@ if ($LocalRoot) {
     if ($Archive -or $Checksums -or $Version) { throw "-LocalRoot cannot be combined with artifact or release options." }
     $cli = Join-Path $LocalRoot "cli\vellum_cli.py"
     $illustrator = Join-Path $LocalRoot "cli\vellum_illustrator.py"
+    $importAssets = Join-Path $LocalRoot "cli\vellum_import_assets.py"
     $dispatcher = Join-Path $LocalRoot "cli\vellum_backend.py"
     $manifestReader = Join-Path $LocalRoot "cli\vellum_manifest.py"
     $pngTools = Join-Path $LocalRoot "cli\vellum_png.py"
@@ -161,7 +163,7 @@ if ($LocalRoot) {
     $agentManifest = Join-Path $LocalRoot ".agents\skills\vellum-app-authoring\manifest.v1.json"
     $templates = Join-Path $LocalRoot "templates\basic"
     $designIrPackage = Join-Path $LocalRoot "packages\vellum-design-ir"
-    if (!(Test-Path $cli) -or !(Test-Path $illustrator) -or !(Test-Path $dispatcher) -or !(Test-Path $manifestReader) -or !(Test-Path $pngTools) -or !(Test-Path $imageCompare) -or !(Test-Path $cdpAdmission) -or !(Test-Path $cdpClient) -or !(Test-Path $browserModule) -or !(Test-Path $interactionModule) -or !(Test-Path $agentSkill) -or
+    if (!(Test-Path $cli) -or !(Test-Path $illustrator) -or !(Test-Path $importAssets) -or !(Test-Path $dispatcher) -or !(Test-Path $manifestReader) -or !(Test-Path $pngTools) -or !(Test-Path $imageCompare) -or !(Test-Path $cdpAdmission) -or !(Test-Path $cdpClient) -or !(Test-Path $browserModule) -or !(Test-Path $interactionModule) -or !(Test-Path $agentSkill) -or
         !(Test-Path $agentManifest) -or !(Test-Path $htmlSourceModule) -or !(Test-Path $templates) -or !(Test-Path $designIrPackage)) {
         throw "Local root lacks the CLI, dispatcher, agent instructions, templates, or DesignIR package."
     }
@@ -170,6 +172,7 @@ if ($LocalRoot) {
     try {
         Copy-Item $cli (Join-Path $temporary "vellum_cli.py")
         Copy-Item $illustrator (Join-Path $temporary "vellum_illustrator.py")
+        Copy-Item $importAssets (Join-Path $temporary "vellum_import_assets.py")
         Copy-Item (Join-Path $LocalRoot "cli\vellum_backend.py") (Join-Path $temporary "vellum_backend.py")
         Copy-Item (Join-Path $LocalRoot "cli\vellum_scenario.py") (Join-Path $temporary "vellum_scenario.py")
         Copy-Item (Join-Path $LocalRoot "cli\vellum_web_backend.py") (Join-Path $temporary "vellum_web_backend.py")

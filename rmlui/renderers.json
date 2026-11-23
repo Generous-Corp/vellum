@@ -15,7 +15,7 @@
       "graphics_api": "Metal",
       "platforms": ["macos", "ios"],
       "cmake": {"option": "VELLUM_RMLUI_METAL", "target": "VellumRmlUi::Metal"},
-      "status": {"macos": "tested", "ios": "planned"}
+      "status": {"macos": "tested", "ios": "tested"}
     },
     {
       "id": "cpu",

@@ -41,7 +41,8 @@ def digests_in(text: str) -> set[str]:
     return {match.lower() for match in ANY_HEX_64.findall(text)}
 HEX_40 = re.compile(r"^[0-9a-f]{40}$")
 MILESTONE = re.compile(r"\bchrome/m[0-9]+\b")
-RELEASE = re.compile(r"chrome/m[0-9]+(-attested\.[0-9]+)?")
+# A platform row's release: the lock's milestone, or an attested release of it.
+RELEASE = re.compile(r"chrome/m([0-9]+)(-attested\.[0-9]+)?")
 # The libraries cmake/VellumSkiaDawn.cmake links, by stem.
 REQUIRED_LIBRARIES = ("skia", "dawn_combined", "svg", "skresources", "skshaper",
                       "skparagraph", "skunicode_core", "skunicode_icu")
@@ -89,11 +90,30 @@ def load_lock(root: Path, problems: list[str]) -> dict | None:
         if not isinstance(platform, dict):
             problems.append(f"{LOCK}: platform {key} is not an object")
             continue
-        check_platform_row(key, platform, seen, seen_assets, problems)
+        check_platform_row(key, platform, lock.get("milestone"), seen, seen_assets, problems)
     return None if problems else lock
 
 
-def check_platform_row(key: str, platform: dict, seen: dict[str, str],
+def check_release(key: str, platform: dict, milestone: object, problems: list[str]) -> None:
+    """The release rules gpu-runtime/cmake/GpuRuntimeRendererLock.cmake enforces too.
+
+    A row's release is of the lock's milestone. macos-arm64 may omit it or repeat
+    the milestone (the tag the macOS records are checked against); every other
+    platform must name an attested release, never a mutable chrome/mNNN tag.
+    """
+    release = platform.get("release")
+    if key == PLATFORM:
+        if release is not None and release != milestone:
+            problems.append(f"{LOCK}: {key} release is {release!r}, expected {milestone!r}")
+        return
+    found = RELEASE.fullmatch(release) if isinstance(release, str) else None
+    if not found or not found.group(2):
+        problems.append(f"{LOCK}: {key} release is not chrome/mNNN-attested.N")
+    elif isinstance(milestone, str) and f"chrome/m{found.group(1)}" != milestone:
+        problems.append(f"{LOCK}: {key} release {release} is not of milestone {milestone}")
+
+
+def check_platform_row(key: str, platform: dict, milestone: object, seen: dict[str, str],
                        seen_assets: dict[str, str], problems: list[str]) -> None:
     archives = platform.get("archives")
     if not isinstance(archives, dict) or not archives:
@@ -110,10 +130,8 @@ def check_platform_row(key: str, platform: dict, seen: dict[str, str],
             problems.append(f"{LOCK}: {label} digest repeats {seen[value]}")
         else:
             seen[value] = label
+    check_release(key, platform, milestone, problems)
     if key != PLATFORM:
-        release = platform.get("release")
-        if not isinstance(release, str) or not RELEASE.fullmatch(release):
-            problems.append(f"{LOCK}: {key} release is not chrome/mNNN[-attested.N]")
         if not isinstance(platform.get("builder_commit"), str) or \
                 not HEX_40.fullmatch(platform["builder_commit"]):
             problems.append(f"{LOCK}: {key} builder_commit is not a 40-character commit")
