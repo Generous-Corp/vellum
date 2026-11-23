@@ -418,6 +418,7 @@ class ConsumerProviderPathTest(unittest.TestCase):
         text = (HERE / "RunMirrorConsumer.cmake").read_text()
         self.assertIn("VELLUM_GPU_RUNTIME_PREFIX", text)
         self.assertIn(r'string(REPLACE ";" "\\;" _native_gpu_prefix', text)
+        self.assertIn('execute_process(COMMAND "${CMAKE_COMMAND}"', text)
         self.assertIn('"-DCMAKE_PREFIX_PATH=${_native_gpu_prefix}"', text)
 
 
