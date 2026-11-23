@@ -27,3 +27,12 @@ ctest --test-dir build-rmlui --output-on-failure -R '^vellum\\.rmlui\\.install-c
 ```
 
 The lead should also run the animation-specific host fixture covering zero idle presents, one present after a DOM/data change, and presents on each animation tick until completion. This lane contains no GPU result.
+
+## Android GPU surface slice baseline
+
+The required contract test was added before the implementation and failed on the lane baseline (origin/lane/w-android-host, commit e512185ab):
+
+```text
+CMake Error at tools/android/test_android_gpu_surface.cmake:14 (message):
+  android-gpu-surface: missing framework/core/render/platform/android/android_gpu_surface.hpp
+```
