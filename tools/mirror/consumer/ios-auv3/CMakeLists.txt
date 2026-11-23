@@ -106,11 +106,14 @@ if(VELLUM_RMLUI_IOS_METAL_RUNTIME_TEST)
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${CMAKE_BINARY_DIR}/rmlui/metal/vellum-rmlui-metal.metallib"
             "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime>/Resources/vellum-rmlui-metal.metallib")
+    # Device (iphoneos) bundles cannot run in a simulator: build-only there.
+    if(_vellum_ios_sdk MATCHES "simulator")
     add_test(NAME vellum.rmlui.metal-ios-runtime
         COMMAND /bin/sh "${CMAKE_CURRENT_LIST_DIR}/run_ios_sim.sh"
             "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime>"
             "${_vellum_rmlui_rmlui_src}" "${vellum_root}/rmlui/tests/fixtures")
     set_tests_properties(vellum.rmlui.metal-ios-runtime PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
     add_dependencies(vellum-rmlui-metal-ios-compile vellum-rmlui-metal-ios-runtime)
 endif()
 
@@ -165,11 +168,14 @@ if(VELLUM_RMLUI_IOS_METAL_NEGATIVE_CONTROL)
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${CMAKE_BINARY_DIR}/rmlui/metal/vellum-rmlui-metal.metallib"
             "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime-control>/Resources/vellum-rmlui-metal.metallib")
+    if(_vellum_ios_sdk MATCHES "simulator")
     add_test(NAME vellum.rmlui.metal-ios-runtime-control
-        COMMAND "$<TARGET_FILE:vellum-rmlui-metal-ios-runtime-control>"
+        COMMAND /bin/sh "${CMAKE_CURRENT_LIST_DIR}/run_ios_sim.sh"
+            "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime-control>"
             "${_vellum_rmlui_rmlui_src}" "${vellum_root}/rmlui/tests/fixtures")
     set_tests_properties(vellum.rmlui.metal-ios-runtime-control PROPERTIES
         WILL_FAIL TRUE SKIP_RETURN_CODE 77)
+    endif()
     add_dependencies(vellum-rmlui-metal-ios-compile vellum-rmlui-metal-ios-runtime-control)
 endif()
 

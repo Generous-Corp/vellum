@@ -17,6 +17,8 @@ def main() -> None:
     assert '"${vellum_root}/rmlui" "${vellum_root}/rmlui/tests/fixtures"' not in runtime_block
     # The runtime test must go through the simulator wrapper, never a bare iOS binary.
     assert "run_ios_sim.sh" in runtime_block
+    assert '"$<TARGET_FILE:vellum-rmlui-metal-ios-runtime' not in runtime_block
+    assert runtime_block.count('MATCHES "simulator"') >= 2
     assert (CMAKE.parent / "run_ios_sim.sh").is_file()
     wrapper = (CMAKE.parent / "run_ios_sim.sh").read_text()
     assert "simctl launch" in wrapper and "exit 77" in wrapper
