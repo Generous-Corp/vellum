@@ -307,7 +307,7 @@ std::vector<Fixture> fixtures() {
          c::form_controls_08::conformance_build, c::form_controls_08::conformance_bind},
         {"keyed-list-18", dir / "keyed-list-18.ir.json", false, c::keyed_list_18::conformance_build,
          c::keyed_list_18::conformance_bind},
-        {"fidelity-scene", root / "fixtures/import-fidelity/scene.pulp.json", true,
+        {"fidelity-scene", root / "fixtures/emitter-conformance/fidelity-scene-no-display.pulp.json", true,
          c::fidelity_scene::conformance_build, c::fidelity_scene::conformance_bind},
     };
 }
@@ -418,39 +418,69 @@ Projection cpp_lane(const Fixture& fixture, const DesignIR& ir, const fs::path& 
     return out;
 }
 
-/// Records the bridge's binding calls before forwarding them, so the JS lane's
-/// bindings are observed exactly as the program issued them. A binding the
-/// bridge rejects (an undeclared parameter) must not stop the program.
+/// Records the bridge's binding calls as the program issues them, split by what
+/// the bridge answered: `params` and `meters` hold the bindings it accepted and
+/// `rejected` the ones it refused or that threw. The JS lane projects only the
+/// accepted bindings, and a rejected one fails the gate, so a binding the
+/// bridge cannot install never reads as one the program made.
 constexpr const char* kBindingProbe = R"js(
-var __pulpConformance = {params: [], meters: []};
+var __pulpConformance = {params: [], meters: [], rejected: []};
 (function () {
+    function record(list, bindNative, self, args) {
+        var accepted = false;
+        try { accepted = bindNative.apply(self, args) === true; } catch (e) { accepted = false; }
+        (accepted ? __pulpConformance[list] : __pulpConformance.rejected)
+            .push([String(args[0]), String(args[1]), list]);
+        return accepted;
+    }
     var bindParam = bindWidgetToParam;
     bindWidgetToParam = function (id, paramKey) {
-        __pulpConformance.params.push([String(id), String(paramKey)]);
-        try { return bindParam.apply(this, arguments); } catch (e) { return undefined; }
+        return record('params', bindParam, this, arguments);
     };
     if (typeof bindMeter === 'function') {
         var bindMeterNative = bindMeter;
         bindMeter = function (id, source) {
-            __pulpConformance.meters.push([String(id), String(source)]);
-            try { return bindMeterNative.apply(this, arguments); } catch (e) { return undefined; }
+            return record('meters', bindMeterNative, this, arguments);
         };
     }
 })();
 )js";
 
-Projection js_lane(const DesignIR& ir, const fs::path& assets) {
+/// What one run of the JS lane produced. `rejected` lists "list:id:key" for
+/// every binding the bridge did not accept.
+struct JsRun {
+    Projection projection;
+    std::vector<std::string> rejected;
+    std::set<std::string> attempted_params;
+};
+
+/// Runs the generated ui.js on the bridge. Every parameter in `declared` is
+/// declared in the store except those in `skip`, so a binding is
+/// accepted exactly when its parameter exists.
+JsRun run_js_lane(const DesignIR& ir, const fs::path& assets,
+                  const std::set<std::string>& declared, const std::set<std::string>& skip) {
     View host;
     host.set_bounds(root_rect(ir));
     ScriptEngine engine;
     vellum::state::StateStore store;
+    vellum::state::ParamID next_id = 1;
+    for (const auto& name : declared) {
+        if (skip.count(name) != 0)
+            continue;
+        vellum::state::ParamInfo info;
+        info.id = next_id++;
+        info.name = name;
+        info.range = {0.0f, 1.0f, 0.0f};
+        store.add_parameter(info);
+    }
     WidgetBridge bridge(engine, host, store);
     bridge.set_script_base_dir(assets);
     bridge.load_script(std::string(kBindingProbe) + generate_pulp_js(ir, CodeGenOptions{}));
     host.layout_children();
     REQUIRE(host.child_count() > 0);
-    auto out = project_tree(*host.child_at(0));
 
+    JsRun run;
+    run.projection = project_tree(*host.child_at(0));
     const auto recorded =
         choc::json::parse(engine.evaluate("JSON.stringify(__pulpConformance)").toString());
     for (const char* list : {"params", "meters"}) {
@@ -458,11 +488,39 @@ Projection js_lane(const DesignIR& ir, const fs::path& assets) {
         for (uint32_t i = 0; i < rows.size(); ++i) {
             const std::string id(rows[i][0].toString());
             const std::string target(rows[i][1].toString());
-            add_binding(out, bridge.widget(id),
+            add_binding(run.projection, bridge.widget(id),
                         std::string(list[0] == 'p' ? "param:" : "meter:") + target);
+            if (list[0] == 'p')
+                run.attempted_params.insert(target);
         }
     }
-    return out;
+    const auto rejected = recorded["rejected"];
+    for (uint32_t i = 0; i < rejected.size(); ++i) {
+        const std::string list(rejected[i][2].toString());
+        const std::string target(rejected[i][1].toString());
+        run.rejected.push_back(list + ":" + std::string(rejected[i][0].toString()) + ":" + target);
+        if (list == "params")
+            run.attempted_params.insert(target);
+    }
+    return run;
+}
+
+/// The JS lane with every bound parameter declared except `skip`. A first pass
+/// with an empty store finds which parameters the program binds.
+JsRun js_run(const DesignIR& ir, const fs::path& assets,
+             const std::set<std::string>& skip = {}) {
+    const auto discovery = run_js_lane(ir, assets, {}, {});
+    return run_js_lane(ir, assets, discovery.attempted_params, skip);
+}
+
+/// The projection of a run in which the bridge accepted every binding.
+Projection js_lane(const DesignIR& ir, const fs::path& assets) {
+    auto run = js_run(ir, assets);
+    INFO("a binding the bridge rejected is not one the program made");
+    for (const auto& entry : run.rejected)
+        INFO("rejected " << entry);
+    REQUIRE(run.rejected.empty());
+    return std::move(run.projection);
 }
 
 Projection swift_lane(const DesignIR& ir) {
@@ -604,11 +662,25 @@ std::string describe(const Divergence& d) {
            "', " + d.lane + " '" + d.actual + "'";
 }
 
+/// Audio display widgets need Pulp's view-audio provider, which this audio-free
+/// gate never links, so no fixture it loads may carry one.
+bool has_display_widget(const IRNode& node) {
+    if (node.audio_widget == AudioWidgetType::meter ||
+        node.audio_widget == AudioWidgetType::waveform ||
+        node.audio_widget == AudioWidgetType::spectrum)
+        return true;
+    for (const auto& child : node.children)
+        if (has_display_widget(child))
+            return true;
+    return false;
+}
+
 std::vector<Divergence> all_divergences() {
     std::vector<Divergence> out;
     for (const auto& fixture : fixtures()) {
         INFO("fixture " << fixture.name);
         const auto ir = load(fixture);
+        REQUIRE_FALSE(has_display_widget(ir.root));
         const StagedAssets assets(ir);
         const auto native = native_lane(ir, assets.dir());
         REQUIRE_FALSE(native.empty());
@@ -832,6 +904,35 @@ TEST_CASE("staged assets never write outside the staging directory",
         CHECK_FALSE(fs::exists(escaped));
     }
     CHECK_FALSE(fs::exists(escaped));
+}
+
+TEST_CASE("the JS lane records only bindings the bridge accepted, and a rejected one is reported",
+          "[emitter-conformance]") {
+    const auto fixture = fixtures().back();
+    REQUIRE(fixture.name == "fidelity-scene");
+    const auto ir = load(fixture);
+    REQUIRE_FALSE(has_display_widget(ir.root));
+    const StagedAssets assets(ir);
+
+    const auto run = js_run(ir, assets.dir());
+    CHECK(run.rejected.empty());
+    CHECK(run.attempted_params == std::set<std::string>{"filter.cutoff_hz", "param.master_level"});
+    std::size_t bound = 0;
+    for (const auto& [anchor, fields] : run.projection)
+        if (fields.count("binding"))
+            ++bound;
+    CHECK(bound == 2);
+
+    // Dropping one declared parameter makes the bridge reject its binding: the
+    // run reports it and the projection no longer claims it.
+    const auto missing = js_run(ir, assets.dir(), {"param.master_level"});
+    REQUIRE(missing.rejected.size() == 1);
+    CHECK(missing.rejected.front().find("param.master_level") != std::string::npos);
+    std::size_t still_bound = 0;
+    for (const auto& [anchor, fields] : missing.projection)
+        if (fields.count("binding") && fields.at("binding").find("master_level") != std::string::npos)
+            ++still_bound;
+    CHECK(still_bound == 0);
 }
 
 TEST_CASE("the conformance comparison reports planted divergences",
