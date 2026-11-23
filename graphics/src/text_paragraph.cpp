@@ -2,6 +2,7 @@
 
 #include "utf8_text.hpp"
 
+#include "include/core/SkData.h"
 #include "include/core/SkFontMgr.h"
 #include "include/core/SkFontStyle.h"
 #include "include/core/SkPaint.h"
@@ -159,7 +160,14 @@ PackagedFontSet* packaged_fonts(const std::filesystem::path& directory,
         };
         for (const auto filename : packaged_fonts) {
             const auto path = directory / filename;
+#if defined(__APPLE__)
             auto typeface = manager->makeFromFile(path.string().c_str());
+#else
+            // The empty custom manager has no platform file loader, so hand it
+            // the bytes and let its FreeType scanner build the typeface.
+            auto font_data = SkData::MakeFromFileName(path.string().c_str());
+            auto typeface = font_data ? manager->makeFromData(std::move(font_data)) : nullptr;
+#endif
             if (!typeface) {
                 set_error(error, "Vellum packaged font is unavailable: " + path.string());
                 return nullptr;
