@@ -60,9 +60,17 @@ foreach(_skip IN LISTS _excluded)
     list(REMOVE_ITEM _sources "${_core}/${_skip}")
 endforeach()
 
-# One source per line, the framework units, so a lane can hold
+set(_gpu_surface_sources
+    ${_root}/framework/core/render/src/render_loop_android.cpp
+    ${_root}/framework/core/render/platform/android/android_gpu_surface.cpp
+    ${_root}/framework/core/render/platform/android/android_gpu_surface_jni.cpp)
+
+# One source per line, every unit this file compiles, so a lane can hold
 # the number of compiled objects to what this file selected.
 set(_selected ${_sources})
+if(VELLUM_ANDROID_GPU_SURFACE)
+    list(APPEND _selected ${_gpu_surface_sources})
+endif()
 list(JOIN _selected "\n" _selected_text)
 file(WRITE "${CMAKE_BINARY_DIR}/android-sources.txt" "${_selected_text}\n")
 
@@ -81,10 +89,7 @@ set_target_properties(vellum-android-framework PROPERTIES POSITION_INDEPENDENT_C
 target_link_libraries(vellum-android-framework PUBLIC log android)
 
 if(VELLUM_ANDROID_GPU_SURFACE)
-    add_library(vellum-android-gpu-surface STATIC
-        ${_root}/framework/core/render/src/render_loop_android.cpp
-        ${_root}/framework/core/render/platform/android/android_gpu_surface.cpp
-        ${_root}/framework/core/render/platform/android/android_gpu_surface_jni.cpp)
+    add_library(vellum-android-gpu-surface STATIC ${_gpu_surface_sources})
     target_compile_features(vellum-android-gpu-surface PUBLIC cxx_std_20)
     target_compile_definitions(vellum-android-gpu-surface PRIVATE __ANDROID__)
     target_include_directories(vellum-android-gpu-surface PUBLIC
