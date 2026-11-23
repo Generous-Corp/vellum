@@ -195,7 +195,7 @@ void check_command_mapping(vellum::graphics::SkiaDawnSurface& surface) {
     VELLUM_RMLUI_CHECK(renderer.skipped_draws() == 1);
 
     const auto& nodes = renderer.scene().root.children;
-    VELLUM_RMLUI_CHECK(nodes.size() == 2);
+    VELLUM_RMLUI_CHECK(nodes.size() == 3);
     const auto& mesh = *nodes[0].mesh;
     VELLUM_RMLUI_CHECK(nodes[0].kind == vellum::graphics::SceneNode::Kind::mesh);
     VELLUM_RMLUI_CHECK(mesh.vertices.size() == 6 && mesh.indices.size() == 6);
@@ -209,9 +209,9 @@ void check_command_mapping(vellum::graphics::SkiaDawnSurface& surface) {
                            std::vector<std::uint8_t>(8, std::uint8_t{0x7f}));
     // The projective command keeps only its first triangle; the second uses
     // the vertex at x = 11, where w is negative.
-    VELLUM_RMLUI_CHECK(nodes[1].mesh->vertices.size() == 3);
+    VELLUM_RMLUI_CHECK(nodes[2].mesh->vertices.size() == 3);
     // A shared generated texture is converted once.
-    VELLUM_RMLUI_CHECK(nodes[1].mesh->texture == mesh.texture);
+    VELLUM_RMLUI_CHECK(nodes[2].mesh->texture == mesh.texture);
 
     // Detaching retains decoded textures for a short, clock-controlled grace
     // period so a quick reattach does not decode them again.
