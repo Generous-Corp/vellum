@@ -23,6 +23,11 @@ if(NOT _gpu_runtime_cmake MATCHES "android-arm64-v8a")
     message(FATAL_ERROR "android-gpu-surface: gpu-runtime does not select the arm64 Vulkan path")
 endif()
 
+file(READ "${SOURCE_ROOT}/tools/android/CMakeLists.txt" _android_cmake)
+if(NOT _android_cmake MATCHES "vellum-android-gpu-surface")
+    message(FATAL_ERROR "android-gpu-surface: NDK canary does not compile the surface target")
+endif()
+
 file(READ "${SOURCE_ROOT}/gpu-runtime/renderer-lock.json" _renderer_lock)
 if(NOT _renderer_lock MATCHES "android-arm64-v8a")
     message(FATAL_ERROR "android-gpu-surface: renderer lock has no Android entry")

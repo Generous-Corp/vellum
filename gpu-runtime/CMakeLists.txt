@@ -102,6 +102,10 @@ target_link_libraries(gpu-runtime-bootstrap PUBLIC VellumGpuRuntime::DeviceApi)
 
 if(APPLE)
     set(_gpu_runtime_platform macos-arm64)
+elseif(ANDROID AND CMAKE_ANDROID_ARCH_ABI STREQUAL "arm64-v8a")
+    set(_gpu_runtime_platform android-arm64-v8a)
+elseif(ANDROID AND CMAKE_ANDROID_ARCH_ABI STREQUAL "x86_64")
+    set(_gpu_runtime_platform android-x86_64)
 else()
     set(_gpu_runtime_platform "")
 endif()
@@ -116,7 +120,7 @@ if(_gpu_runtime_platform)
     gpu_runtime_find_dawn(${_gpu_runtime_dawn_args})
     set(GPU_RUNTIME_HAS_DEVICE ${GPU_RUNTIME_HAS_DAWN})
 elseif(GPU_RUNTIME_REQUIRE_DEVICE)
-    message(FATAL_ERROR "gpu-runtime: the device library is macOS-only for now")
+    message(FATAL_ERROR "gpu-runtime: no locked Dawn platform for this target")
 endif()
 
 if(GPU_RUNTIME_HAS_DEVICE)
@@ -160,6 +164,8 @@ if(GPU_RUNTIME_HAS_DEVICE)
     if(APPLE)
         target_link_libraries(gpu-runtime-device PRIVATE
             "-framework Cocoa" "-framework Metal" "-framework QuartzCore")
+    elseif(ANDROID)
+        target_link_libraries(gpu-runtime-device PRIVATE android log)
     endif()
 
     # The installed provider is the one image that intentionally exposes the
@@ -196,6 +202,8 @@ if(GPU_RUNTIME_HAS_DEVICE)
         if(APPLE)
             target_link_libraries(gpu-runtime-device-provider PRIVATE
                 "-framework Cocoa" "-framework Metal" "-framework QuartzCore")
+        elseif(ANDROID)
+            target_link_libraries(gpu-runtime-device-provider PRIVATE android log)
         endif()
     endif()
 

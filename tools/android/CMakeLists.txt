@@ -25,6 +25,8 @@ endif()
 
 vellum_android_platform_configure()
 
+option(VELLUM_ANDROID_GPU_SURFACE "Compile the Android Dawn/Vulkan surface boundary" ON)
+
 set(VELLUM_CHOC_ROOT "" CACHE PATH
     "Root of the pinned CHOC checkout (the header-only utility library)")
 if(NOT EXISTS "${VELLUM_CHOC_ROOT}/choc/text/choc_JSON.h")
@@ -77,3 +79,18 @@ target_include_directories(vellum-android-framework PUBLIC
     "${VELLUM_CHOC_ROOT}")
 set_target_properties(vellum-android-framework PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(vellum-android-framework PUBLIC log android)
+
+if(VELLUM_ANDROID_GPU_SURFACE)
+    add_library(vellum-android-gpu-surface STATIC
+        ${_root}/framework/core/render/src/render_loop_android.cpp
+        ${_root}/framework/core/render/platform/android/android_gpu_surface.cpp
+        ${_root}/framework/core/render/platform/android/android_gpu_surface_jni.cpp)
+    target_compile_features(vellum-android-gpu-surface PUBLIC cxx_std_20)
+    target_compile_definitions(vellum-android-gpu-surface PRIVATE __ANDROID__)
+    target_include_directories(vellum-android-gpu-surface PUBLIC
+        "${_root}/framework/core/render/include"
+        "${_root}/framework/core/render/platform/android"
+        "${_root}/gpu-runtime/include")
+    target_link_libraries(vellum-android-gpu-surface PUBLIC log android)
+    set_target_properties(vellum-android-gpu-surface PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()

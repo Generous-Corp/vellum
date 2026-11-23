@@ -73,5 +73,12 @@
       "sha256": "b781f48d57c6157850db0efe072a872eb555fb352c669950ed2e186625967884",
       "url": "https://github.com/danielraffel/skia-builder/releases/download/chrome/m158/skia-build-mac-universal-gpu-release.provenance-attestation.sha256-b781f48d57c6157850db0efe072a872eb555fb352c669950ed2e186625967884.sigstore.json"
     }
+  },
+  "android_arm64_v8a": {
+    "state": "compile-only-path",
+    "backend": "dawn-vulkan",
+    "api_floor": 26,
+    "device_run": "needs a GPU run by the lead",
+    "artifact": "pending Android skia-builder asset"
   }
 }
