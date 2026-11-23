@@ -144,6 +144,137 @@ components:
             raise ValidationError(f"Changed {lane} input did not advance the import lock")
 
 
+
+def validate_installed_frame_import(prefix: Path, root: Path, env: dict[str, str], lane: str) -> None:
+    def command(project: Path, *args: str, status: str) -> None:
+        result = subprocess.run(
+            [str(prefix / "bin/vellum"), *args, "--json"], cwd=project, env=env,
+            text=True, capture_output=True, check=False,
+        )
+        payload = json.loads(result.stdout)
+        if payload.get("status") != status or (result.returncode == 0) != payload.get("ok"):
+            raise ValidationError(f"Expected {status}, got {result.stdout}{result.stderr}")
+
+    def node(kind: str, name: str, node_id: str, **fields: object) -> dict:
+        return {"type": kind, "name": name, "figma_node_id": node_id, **fields}
+
+    def envelope(frame: dict, **fields: object) -> str:
+        return json.dumps({
+            "$schema": "https://pulp.dev/schemas/figma-plugin-export-v1.json",
+            "format_version": "2026.05-figma-plugin-v1",
+            "parser_version": "0.1.0",
+            "compat_schema_version": "0.3",
+            "provenance": {
+                "adapter": "figma-plugin", "version": "0.2.0", "source_uri": "figma://sample/1:1",
+            },
+            "root": frame,
+            **fields,
+        })
+
+    project = root / f"{lane}-project"
+    command(root, "create", f"{lane} sample", "--directory", str(project), status="created")
+    lock = project / "design/import.lock.json"
+    materialized = project / "ui/generated/main.materialized.json"
+
+    if lane == "v0":
+        source = root / "sample.tsx"
+        tsx = ('export default function Sample() { return ('
+               '<div className="flex-row overflow-hidden" '
+               'style={{ width: 160, backgroundColor: "#123456" }}>'
+               '<span>Sample Label</span></div>); }')
+        source.write_text(tsx, encoding="utf-8")
+        command(project, "import", "v0", str(source), status="imported")
+        frame = json.loads(materialized.read_text(encoding="utf-8"))["root"]
+        if (frame["properties"]["layout"]["direction"] != "row"
+                or frame["properties"]["layout"]["width"] != 160
+                or frame["extensions"]["native"]["attributes"]["className"] != "flex-row overflow-hidden"
+                or frame["properties"]["paint"]["backgroundColor"] != "#123456"
+                or frame["children"][0]["text"] != "Sample Label"):
+            raise ValidationError("v0 import did not retain Tailwind layout, paint and JSX text")
+        reimport = ("reimport", "--source", str(source))
+        broken = "export default function Sample() { return null; }"
+        changed = tsx.replace("#123456", "#654321")
+        invalid = "invalid_v0"
+    elif lane == "figma-plugin":
+        source = root / "selection.pulp.json"
+        selected = node("frame", "Selected", "1:3", children=[
+            node("text", "Caption", "1:4", content="Selected label"),
+        ])
+        wrapper = node("frame", "Container", "1:1", children=[
+            node("frame", "Other", "1:2"), selected,
+        ])
+        source.write_text(envelope(wrapper), encoding="utf-8")
+        args = ("import", "--source-type", "figma-plugin", str(source))
+        command(project, *args, "--frame", "Missing", status="invalid_fig_frame")
+        if lock.exists():
+            raise ValidationError("Missing Figma frame created an import lock")
+        command(project, *args, "--frame", "Selected", status="imported")
+        frame = json.loads(materialized.read_text(encoding="utf-8"))["root"]
+        if frame["name"] != "Selected" or frame["children"][0]["text"] != "Selected label":
+            raise ValidationError("Figma frame selector did not replace the exported root")
+        reimport = ("reimport", "--source", str(source))
+        broken = envelope({**wrapper, "children": []})
+        changed = envelope({**wrapper, "children": [{**selected, "name": "Renamed"}]})
+        invalid = "invalid_fig_frame"
+    else:
+        primary = root / "primary.pulp.json"
+        intermediate = root / "intermediate.pulp.json"
+        last = root / "last"
+        last.mkdir()
+        source = last / "state.pulp.json"
+        asset = b"sample asset"
+        (last / "assets").mkdir()
+        (last / "assets/sample.txt").write_bytes(asset)
+        manifest = {"version": 1, "assets": [{
+            "asset_id": "sample-asset", "local_path": "assets/sample.txt", "mime": "text/plain",
+            "content_hash": hashlib.sha256(asset).hexdigest(),
+        }]}
+        primary.write_text(envelope(node("frame", "First", "1:1")), encoding="utf-8")
+        intermediate.write_text(envelope(node("frame", "Second", "1:1")), encoding="utf-8")
+        third = envelope(node("frame", "Third", "1:1", children=[
+            node("text", "Caption", "1:2", content="Third label"),
+        ]), asset_manifest=manifest)
+        source.write_text(third, encoding="utf-8")
+        files = ("--file", str(intermediate), "--file", str(source))
+        command(project, "import", "--source-type", "figma-plugin", "--file", str(primary),
+                *files, status="imported")
+        frame = json.loads(materialized.read_text(encoding="utf-8"))["root"]
+        alternates = frame["extensions"]["dev.vellum.figma-plugin.states.v1"]["alternateFrames"]
+        if (frame["name"] != "First" or [item["name"] for item in alternates] != ["Second", "Third"]
+                or alternates[-1]["children"][0]["text"] != "Third label"):
+            raise ValidationError("Figma state import did not preserve the ordered frame trees")
+        reimport = ("reimport", "--source", str(primary), *files)
+        if (project / "assets/generated/main/files/assets/sample.txt").read_bytes() != asset:
+            raise ValidationError("Figma state import did not copy the asset beside the alternate envelope")
+        before = lock.read_bytes()
+        collision = {"version": 1, "assets": [{
+            **manifest["assets"][0], "content_hash": hashlib.sha256(b"different").hexdigest(),
+        }]}
+        intermediate.write_text(
+            envelope(node("frame", "Second", "1:1"), asset_manifest=collision), encoding="utf-8",
+        )
+        command(project, *reimport, status="invalid_figma_plugin")
+        if lock.read_bytes() != before:
+            raise ValidationError("Colliding Figma assets advanced the import lock")
+        intermediate.write_text(envelope(node("frame", "Second", "1:1")), encoding="utf-8")
+        broken = envelope(node("knob", "Invalid", "1:1"))
+        changed = third.replace("Third label", "Changed label")
+        invalid = "invalid_figma_plugin"
+
+    command(project, "design", "check", status="design_clean")
+    command(project, *reimport, status="reimport_unchanged")
+    before = lock.read_bytes()
+    source.write_text(broken, encoding="utf-8")
+    command(project, *reimport, status=invalid)
+    if lock.read_bytes() != before:
+        raise ValidationError(f"Invalid {lane} input advanced the import lock")
+    source.write_text(changed, encoding="utf-8")
+    command(project, *reimport, status="reimported")
+    command(project, "design", "check", status="design_clean")
+    if lock.read_bytes() == before:
+        raise ValidationError(f"Changed {lane} input did not advance the import lock")
+
+
 def installed_payload_name(relative: str) -> str:
     """The archive-payload name of an installed file.
 
@@ -831,6 +962,9 @@ def validate(
         if not zip_snapshot_verified:
             raise ValidationError("installed CLI create --from figma ZIP journey did not complete")
 
+        for lane in ("figma-plugin", "figma-states"):
+            validate_installed_frame_import(prefix, root, journey_env, lane)
+
         native_enabled = all(
             verification["claims"]["targets"]["macos"]["commands"][name]
             for name in ("build", "run", "test", "capture", "package")
@@ -847,6 +981,7 @@ def validate(
         custom_component_produced = False
         if native_enabled:
             validate_installed_source_imports(prefix, root, journey_env)
+            validate_installed_frame_import(prefix, root, journey_env, "v0")
             for name, arguments in {
                 "build": ["build"],
                 "run": ["run", "--self-test", "--no-build"],

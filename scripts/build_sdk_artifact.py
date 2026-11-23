@@ -39,7 +39,7 @@ from install_core import (  # noqa: E402
 
 
 REPO = SCRIPT_DIR.parent
-FRAMEWORK_VERSION = "0.2.2"
+FRAMEWORK_VERSION = "0.2.3"
 CLI_VERSION = FRAMEWORK_VERSION
 CLI_API = 1
 METADATA_SCHEMA = "vellum.sdk-artifact.v1"
