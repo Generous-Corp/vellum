@@ -1,11 +1,63 @@
 cmake_minimum_required(VERSION 3.24)
 project(VellumIOSAUv3Proof LANGUAGES CXX OBJCXX)
 
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" OR NOT CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator")
-    message(FATAL_ERROR "Configure with the iOS simulator SDK")
+string(TOLOWER "${CMAKE_OSX_SYSROOT}" _vellum_ios_sdk)
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" OR
+   NOT _vellum_ios_sdk MATCHES "(simulator|iphoneos)")
+    message(FATAL_ERROR "Configure with the iOS simulator or device SDK")
 endif()
 
+include(CTest)
+
 get_filename_component(vellum_root "${CMAKE_CURRENT_SOURCE_DIR}/../../../.." ABSOLUTE)
+set(VELLUM_RMLUI_IOS_METAL_BUILD_DIR "${CMAKE_BINARY_DIR}/rmlui" CACHE PATH
+    "Build directory for the iOS Metal compile consumer")
+set(VELLUM_RMLUI_NATIVE ON CACHE BOOL "" FORCE)
+set(VELLUM_RMLUI_METAL ON CACHE BOOL "" FORCE)
+set(VELLUM_RMLUI_FONTS OFF CACHE BOOL "" FORCE)
+set(VELLUM_RMLUI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(VELLUM_RMLUI_INSTALL OFF CACHE BOOL "" FORCE)
+add_subdirectory("${vellum_root}/rmlui" "${VELLUM_RMLUI_IOS_METAL_BUILD_DIR}")
+
+set(VELLUM_RMLUI_SOURCE_DIR "${vellum_root}/rmlui" CACHE PATH
+    "RmlUi module source used by the iOS compile consumer")
+
+add_test(NAME vellum.rmlui.metal-ios-compile
+    COMMAND "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}"
+        --target vellum-rmlui-metal-ios-compile)
+
+set(_metal_ios_test_sources
+    "${vellum_root}/rmlui/tests/metal/metal_effects_test.cpp"
+    "${vellum_root}/rmlui/tests/metal/metal_image_decode_test.mm"
+    "${vellum_root}/rmlui/tests/metal/metal_layers_test.mm"
+    "${vellum_root}/rmlui/tests/metal/metal_trim_test.mm"
+    "${vellum_root}/rmlui/tests/metal/metal_filters_test.mm"
+    "${vellum_root}/rmlui/tests/metal/metal_visual_test.mm"
+    "${vellum_root}/rmlui/tests/metal/cpu_vs_metal_test.mm"
+    "${vellum_root}/rmlui/tests/metal/soft_reference.mm")
+add_library(vellum-rmlui-metal-ios-tests STATIC ${_metal_ios_test_sources})
+target_compile_features(vellum-rmlui-metal-ios-tests PRIVATE cxx_std_20)
+target_compile_options(vellum-rmlui-metal-ios-tests PRIVATE
+    $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+target_compile_definitions(vellum-rmlui-metal-ios-tests PRIVATE
+    VELLUM_RMLUI_TEST_FIXTURES="${vellum_root}/rmlui/tests/fixtures")
+target_include_directories(vellum-rmlui-metal-ios-tests PRIVATE
+    "${vellum_root}/rmlui/include" "${vellum_root}/rmlui/tests" "${vellum_root}/rmlui/src")
+target_link_libraries(vellum-rmlui-metal-ios-tests PRIVATE
+    VellumRmlUi::Native VellumRmlUi::Metal
+    "-framework Metal" "-framework QuartzCore" "-framework Foundation"
+    "-framework CoreGraphics" "-framework ImageIO")
+
+add_custom_target(vellum-rmlui-metal-ios-compile
+    DEPENDS vellum-rmlui-metal vellum-rmlui-metal-ios-tests)
+
+add_test(NAME vellum.rmlui.metal-ios-cocoa-negative
+    COMMAND "${CMAKE_COMMAND}"
+        "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+        "-DCMAKE_OSX_SYSROOT=${CMAKE_OSX_SYSROOT}"
+        "-DSOURCE=${vellum_root}/tools/mirror/consumer/ios-auv3/metal_ios_cocoa_negative.mm"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/metal_ios_negative_test.cmake")
+
 set(view_root "${vellum_root}/framework/core/view")
 set(controller_test "${vellum_root}/tools/framework-tests/ios_au_editor_controller_test.mm")
 

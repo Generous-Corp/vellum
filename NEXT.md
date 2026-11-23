@@ -27,3 +27,40 @@ ctest --test-dir build-rmlui --output-on-failure -R '^vellum\\.rmlui\\.install-c
 ```
 
 The lead should also run the animation-specific host fixture covering zero idle presents, one present after a DOM/data change, and presents on each animation tick until completion. This lane contains no GPU result.
+
+# iOS Metal renderer lane
+
+The baseline test commit `dce2f4110` registered
+`vellum.rmlui.metal-ios-compile` before its target existed. On the baseline,
+CTest failed with:
+
+```
+Error: /private/tmp/rmlui-ios-test/rmlui is not a directory
+0% tests passed, 1 tests failed out of 1
+```
+
+The fixed simulator consumer configures with arm64 and compiles
+`vellum-rmlui-metal`, plus the Metal test translation units, as static
+libraries. The Cocoa negative control passes because Cocoa is unavailable in
+the iOS SDK. No simulator runtime or GPU pixel test ran in this lane, so
+`rmlui/renderers.json` remains `planned` for iOS.
+
+Lead runtime commands, after configuring a runtime-capable iOS test build:
+
+```sh
+xcrun simctl list devices available
+xcrun simctl boot "iPhone 16 Pro"
+xcrun simctl bootstatus "iPhone 16 Pro" -b
+ctest --test-dir <ios-runtime-build> -R 'vellum.rmlui.metal-(visual|layers|trim|filters|image-decode)' --output-on-failure
+xcrun simctl shutdown "iPhone 16 Pro"
+```
+
+Device compile check:
+
+```sh
+cmake -S tools/mirror/consumer/ios-auv3 -B <ios-device-build> -G Ninja \
+  -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
+  -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_BUILD_TYPE=Release
+~/bin/leased-build --wait-secs 3600 -- cmake --build <ios-device-build> \
+  --target vellum-rmlui-metal-ios-compile
+```
