@@ -79,6 +79,17 @@ class RendererLockDriftTest(unittest.TestCase):
                        .pop("skia.lib"))
         self.assert_drift("windows-x64 does not lock skia.lib")
 
+    def test_a_repeated_asset_name_is_drift(self) -> None:
+        def repeat(lock):
+            lock["platforms"]["linux-arm64"]["asset"] = lock["platforms"]["linux-x64"]["asset"]
+        self.edit_json(drift.LOCK, repeat)
+        self.assert_drift("asset skia-build-linux-x64-gpu-release.zip repeats linux-x64")
+
+    def test_a_bad_archive_root_is_drift(self) -> None:
+        self.edit_json(drift.LOCK, lambda lock: lock["platforms"]["linux-x64"]
+                       .update(archive_root="/etc"))
+        self.assert_drift("linux-x64 archive_root is not a build/ relative path")
+
     def test_an_unchanged_copy_agrees(self) -> None:
         self.assertEqual(drift.check(self.root), [])
 

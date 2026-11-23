@@ -89,16 +89,17 @@ def load_lock(root: Path, problems: list[str]) -> dict | None:
         if not isinstance(platforms.get(key), dict):
             problems.append(f"{LOCK}: platform {key} is missing")
     seen: dict[str, str] = {}
+    seen_assets: dict[str, str] = {}
     for key, platform in platforms.items():
         if not isinstance(platform, dict):
             problems.append(f"{LOCK}: platform {key} is not an object")
             continue
-        check_platform_row(key, platform, seen, problems)
+        check_platform_row(key, platform, seen, seen_assets, problems)
     return None if problems else lock
 
 
 def check_platform_row(key: str, platform: dict, seen: dict[str, str],
-                       problems: list[str]) -> None:
+                       seen_assets: dict[str, str], problems: list[str]) -> None:
     archives = platform.get("archives")
     if not isinstance(archives, dict) or not archives:
         problems.append(f"{LOCK}: {key} lists no archives")
@@ -121,6 +122,16 @@ def check_platform_row(key: str, platform: dict, seen: dict[str, str],
         if not isinstance(platform.get("builder_commit"), str) or \
                 not HEX_40.fullmatch(platform["builder_commit"]):
             problems.append(f"{LOCK}: {key} builder_commit is not a 40-character commit")
+    asset = platform.get("asset")
+    if not isinstance(asset, str) or not re.fullmatch(r"skia-build-[a-z0-9_.-]+-gpu-release\.zip", asset):
+        problems.append(f"{LOCK}: {key} asset name is not a skia-builder GPU release zip")
+    elif asset in seen_assets:
+        problems.append(f"{LOCK}: {key} asset {asset} repeats {seen_assets[asset]}")
+    else:
+        seen_assets[asset] = key
+    root = platform.get("archive_root")
+    if not isinstance(root, str) or not re.fullmatch(r"build/[A-Za-z0-9_./-]+", root) or ".." in root:
+        problems.append(f"{LOCK}: {key} archive_root is not a build/ relative path")
     suffix = ".lib" if key.startswith("windows-") else ".a"
     for library in REQUIRED_LIBRARIES:
         name = f"{library}.lib" if suffix == ".lib" else f"lib{library}.a"
