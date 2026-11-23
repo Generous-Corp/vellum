@@ -690,30 +690,30 @@ if(VELLUM_BUILD_TESTS)
             -s tools/mirror -p "test_*.py"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     if(VELLUM_PACKAGE_HAS_MIRROR)
-        set(VELLUM_GPU_RUNTIME_PREFIX
-            "${CMAKE_CURRENT_BINARY_DIR}/gpu-runtime-prefix" CACHE PATH
-            "Installed VellumGpuRuntime artifact prefix for mirror consumers")
         set(_vellum_view_audio_archive_arg)
         if(DEFINED VELLUM_VIEW_AUDIO_ARCHIVE AND
            NOT VELLUM_VIEW_AUDIO_ARCHIVE STREQUAL "")
             set(_vellum_view_audio_archive_arg
                 "-DVELLUM_VIEW_AUDIO_ARCHIVE=${VELLUM_VIEW_AUDIO_ARCHIVE}")
         endif()
-        add_test(NAME vellum.mirror-install-consumer
-            COMMAND "${CMAKE_COMMAND}"
-                "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
-                "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
-                "-DVELLUM_MIRROR_ORIGIN=${VELLUM_MIRROR_ORIGIN_SHA}"
-                "-DVELLUM_MIRROR_DEPS_DIR=${VELLUM_MIRROR_DEPS_DIR}"
-                "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
-                "-DPython3_EXECUTABLE=${Python3_EXECUTABLE}"
-                "-DVELLUM_ENABLE_V8=${VELLUM_MIRROR_HAS_V8}"
-                "-DVELLUM_V8_VERSION=${VELLUM_V8_VERSION}"
-                "-DVELLUM_INSTALL_THREEJS=${VELLUM_INSTALL_THREEJS}"
-                "-DVELLUM_PULP_CENSUS_LIBRARIES=${VELLUM_PULP_CENSUS_LIBRARIES}"
-                "-DVELLUM_GPU_RUNTIME_PREFIX=${VELLUM_GPU_RUNTIME_PREFIX}"
-                ${_vellum_view_audio_archive_arg}
-                -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/mirror/RunMirrorConsumer.cmake")
+        if(DEFINED VELLUM_GPU_RUNTIME_PREFIX AND
+           NOT VELLUM_GPU_RUNTIME_PREFIX STREQUAL "")
+            add_test(NAME vellum.mirror-install-consumer
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                    "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                    "-DVELLUM_MIRROR_ORIGIN=${VELLUM_MIRROR_ORIGIN_SHA}"
+                    "-DVELLUM_MIRROR_DEPS_DIR=${VELLUM_MIRROR_DEPS_DIR}"
+                    "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
+                    "-DPython3_EXECUTABLE=${Python3_EXECUTABLE}"
+                    "-DVELLUM_ENABLE_V8=${VELLUM_MIRROR_HAS_V8}"
+                    "-DVELLUM_V8_VERSION=${VELLUM_V8_VERSION}"
+                    "-DVELLUM_INSTALL_THREEJS=${VELLUM_INSTALL_THREEJS}"
+                    "-DVELLUM_PULP_CENSUS_LIBRARIES=${VELLUM_PULP_CENSUS_LIBRARIES}"
+                    "-DVELLUM_GPU_RUNTIME_PREFIX=${VELLUM_GPU_RUNTIME_PREFIX}"
+                    ${_vellum_view_audio_archive_arg}
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/mirror/RunMirrorConsumer.cmake")
+        endif()
         # An installed consumer reaches Vellum's value model through the view
         # unit alone.
         add_test(NAME vellum.mirror-value-consumer

@@ -420,6 +420,8 @@ class ConsumerProviderPathTest(unittest.TestCase):
         self.assertIn(r'string(REPLACE ";" "\\;" _native_gpu_prefix', text)
         self.assertIn('execute_process(COMMAND "${CMAKE_COMMAND}"', text)
         self.assertIn('"-DCMAKE_PREFIX_PATH=${_native_gpu_prefix}"', text)
+        top_level = (HERE.parent.parent / "CMakeLists.txt").read_text()
+        self.assertIn("if(DEFINED VELLUM_GPU_RUNTIME_PREFIX", top_level)
 
 
 if __name__ == "__main__":
