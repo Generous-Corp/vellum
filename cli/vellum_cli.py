@@ -1264,6 +1264,11 @@ def backend_command(args: argparse.Namespace, forwarded: list[str]) -> dict[str,
                 f"Reimport source does not exist: {source_path}",
                 status="source_not_found", exit_code=EXIT_PROJECT,
             )
+        if args.file and source_path.suffix.casefold() in {".html", ".htm"}:
+            raise CliFailure(
+                "--file requires Figma plugin JSON inputs.",
+                status="invalid_arguments", exit_code=EXIT_USAGE,
+            )
         if source_path.suffix.casefold() in {".html", ".htm"}:
             backend_payload, return_code = invoke_import_backend(
                 root, lock, "html", source_path, args.source_key,
@@ -1525,11 +1530,12 @@ def parser() -> argparse.ArgumentParser:
 
     backend_specs = {
         "import": [
-            ("source", {"nargs": "+"}),
-            ("--source-type", {"choices": ["fig", "figma", "design-ir", "html", "claude-design", "pencil", "designmd"], "default": "figma"}),
+            ("source", {"nargs": "*"}),
+            ("--file", {"action": "append", "help": "add an ordered Figma plugin JSON export"}),
+            ("--source-type", {"choices": ["fig", "figma", "figma-plugin", "design-ir", "html", "claude-design", "pencil", "designmd", "v0"], "default": "figma"}),
             ("--as", {"dest": "source_key", "default": "main"}),
             ("--interaction-plan", {}),
-            ("--frame", {"help": "select a local Figma frame by GUID or name"}),
+            ("--frame", {"help": "select a Figma frame by GUID or name"}),
             ("--outline", {"action": "store_true", "help": "list pages and frames in a local .fig file"}),
             ("--out", {"dest": "output", "metavar": "SVG"}),
             ("--provenance", {}),
@@ -1538,6 +1544,7 @@ def parser() -> argparse.ArgumentParser:
         ],
         "reimport": [
             ("--source", {"required": True}),
+            ("--file", {"action": "append", "help": "add an ordered Figma plugin JSON export"}),
             ("--as", {"dest": "source_key", "default": "main"}),
             ("--interaction-plan", {}),
         ],
@@ -1578,6 +1585,9 @@ def forwarded_arguments(args: argparse.Namespace) -> list[str]:
         option = "--" + key.replace("_", "-")
         if isinstance(value, bool):
             forwarded.append(option)
+        elif key == "file":
+            for path in value:
+                forwarded.extend([option, path])
         elif key == "source" and args.command == "import":
             forwarded.append(str(value))
         else:
@@ -1597,25 +1607,33 @@ def main(argv: Iterable[str] | None = None) -> int:
         if args.command == "import" and isinstance(args.source, list):
             if len(args.source) == 2 and args.source[0] == "illustrator":
                 args.source, args.illustrator_input = args.source
-            elif len(args.source) == 2 and args.source[0] in {"pencil", "designmd"}:
+            elif len(args.source) == 2 and args.source[0] in {"pencil", "designmd", "v0"}:
                 args.source_type, args.source = args.source
             elif len(args.source) == 1:
                 args.source = args.source[0]
+            elif not args.source and args.file and args.source_type == "figma-plugin":
+                args.source, *args.file = args.file
             else:
                 raise CliFailure(
-                    "import accepts one source path, or 'illustrator INPUT', 'pencil FILE', or 'designmd FILE'.",
+                    "import accepts a source path or a source name followed by its file.",
                     status="invalid_arguments", exit_code=EXIT_USAGE,
                 )
         if args.command == "import":
             is_illustrator = args.source == "illustrator" and (
-                hasattr(args, "illustrator_input") or args.source_type not in {"pencil", "designmd"}
+                hasattr(args, "illustrator_input") or args.source_type not in {"pencil", "designmd", "v0"}
             )
             is_fig = args.source_type == "fig" or (
                 args.source_type == "figma" and Path(args.source).suffix.lower() == ".fig"
             )
-            if args.frame is not None and (is_illustrator or not is_fig):
+            if args.file and (args.source_type != "figma-plugin" or is_illustrator):
                 raise CliFailure(
-                    "--frame requires a local Figma .fig source.",
+                    "--file requires --source-type figma-plugin.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
+            is_plugin = args.source_type in {"figma", "figma-plugin"}
+            if args.frame is not None and (is_illustrator or not (is_fig or is_plugin)):
+                raise CliFailure(
+                    "--frame requires a local Figma .fig file or plugin envelope.",
                     status="invalid_fig_frame", exit_code=EXIT_USAGE,
                 )
             if args.outline and (not is_fig or is_illustrator or
