@@ -17,7 +17,25 @@ import sys
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gha_annotate import error
+
+
+def _escape_data(value: str) -> str:
+    return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def _escape_property(value: str) -> str:
+    return _escape_data(value).replace(":", "%3A").replace(",", "%2C")
+
+
+def error(title: str, message: str) -> None:
+    """Annotate a failed check with a GitHub Actions workflow command.
+
+    Silent outside Actions. The title is a command property, so it also
+    escapes ':' and ','; the message is command data.
+    """
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    print(f"::error title={_escape_property(title)}::{_escape_data(message)}", flush=True)
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "scripts/ci_lanes.json"
