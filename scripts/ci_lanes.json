@@ -73,6 +73,10 @@
     ],
     "release-source": [
       {
+        "script": "scripts/test_gha_annotate.py",
+        "isolated": true
+      },
+      {
         "discover": "cli/tests",
         "pattern": "test_*.py"
       },
@@ -207,6 +211,10 @@
       }
     ],
     "product-quality": [
+      {
+        "script": "scripts/test_gha_annotate.py",
+        "isolated": true
+      },
       {
         "discover": "cli/tests",
         "pattern": "test_*.py"
