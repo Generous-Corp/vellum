@@ -1402,6 +1402,8 @@ def standalone_asset_import(args: argparse.Namespace) -> dict[str, Any]:
             data = validate_preconverted_svg(source, Path(args.manifest).expanduser())
             return result("import preconverted-svg", ok=True, status="validated",
                           message="validated preconverted SVG + control-map sidecar (no files generated)", data=data)
+        if args.validate_only:
+            raise AssetImportError("--validate-only is not supported for jsx imports; it would generate files")
         data = import_jsx(
             source, emit=args.emit, mode=args.mode,
             output=Path(args.output).expanduser() if args.output else None,

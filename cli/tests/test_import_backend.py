@@ -175,6 +175,9 @@ class ImportBackendTests(unittest.TestCase):
             completed = invoke("import", "jsx", str(bad_utf8), "--mode", "live", "--emit", "js", "--out", str(root / "o.js"), cwd=root)
             self.assertNotEqual(completed.returncode, 0)
             self.assertFalse((root / "o.js").exists())
+            completed = invoke("import", "jsx", str(jsx), "--validate-only", "--emit", "js", "--out", str(root / "v.js"), cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertFalse((root / "v.js").exists())
             directory_out = root / "adir"
             directory_out.mkdir()
             completed = invoke("import", "jsx", str(jsx), "--mode", "live", "--emit", "js", "--out", str(directory_out), cwd=root)
