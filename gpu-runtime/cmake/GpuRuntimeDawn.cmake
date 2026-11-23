@@ -46,6 +46,9 @@ function(_gpu_runtime_define_dawn library include_dirs digest)
         set_property(TARGET VellumGpuRuntime::Dawn APPEND PROPERTY INTERFACE_LINK_LIBRARIES
             "-framework Foundation" "-framework IOKit" "-framework IOSurface"
             "-framework Metal" "-framework QuartzCore")
+    elseif(ANDROID)
+        set_property(TARGET VellumGpuRuntime::Dawn APPEND PROPERTY INTERFACE_LINK_LIBRARIES
+            android log)
     endif()
 endfunction()
 
