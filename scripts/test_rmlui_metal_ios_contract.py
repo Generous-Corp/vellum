@@ -41,6 +41,7 @@ def main() -> None:
     require(ios_branch, "fileExistsAtPath")
     require(cmake, "metallib")
     require(cmake, "xcrun")
+    require(cmake, 'install(FILES "${_vellum_rmlui_metal_library}"')
     require(cpu, "progress: fonts loaded")
     require(cpu, "NSBundle mainBundle")
     require(cpu, "resourcePath")

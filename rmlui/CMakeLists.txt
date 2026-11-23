@@ -502,6 +502,13 @@ if(VELLUM_RMLUI_INSTALL)
                 EXPORT VellumRmlUiMetalTargets
                 COMPONENT VellumRmlUiNative
                 ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+            if(IOS)
+                # The precompiled shader library the iOS renderer prefers; consumers
+                # bundle it into their app (the renderer compiles source without it).
+                install(FILES "${_vellum_rmlui_metal_library}"
+                    DESTINATION ${CMAKE_INSTALL_DATADIR}/vellum/rmlui
+                    COMPONENT VellumRmlUiNative)
+            endif()
             install(EXPORT VellumRmlUiMetalTargets
                 NAMESPACE VellumRmlUi::
                 DESTINATION ${_vellum_rmlui_native_cmake_dir}
