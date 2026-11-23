@@ -149,15 +149,85 @@ class RendererLockDriftTest(unittest.TestCase):
         self.with_rows(lambda lock: lock["platforms"]["windows-x64"].update(release="latest"))
         self.assert_drift("windows-x64 release is not chrome/mNNN-attested.N")
 
-    def test_a_macos_release_other_than_the_milestone_is_drift(self) -> None:
-        for release in ("chrome/m999-attested.7", "chrome/m158-attested.2", "latest"):
+    def retarget_macos(self, release: str | None, commit: str | None) -> None:
+        """Move the macOS row to another release and builder commit, with its records."""
+        def lock_edit(lock):
+            row = lock["platforms"][drift.PLATFORM]
+            if release is not None:
+                row["release"] = release
+            if commit is not None:
+                row["builder_commit"] = commit
+        self.edit_json(drift.LOCK, lock_edit)
+        lock = json.loads((self.root / drift.LOCK).read_text(encoding="utf-8"))
+        old_tag = lock["milestone"]
+        tag = release or old_tag
+        builder = commit or lock["builder"]["commit"]
+
+        def third_party(data):
+            artifact = data["runtime_toolchain_dependencies"]["renderer"]["artifact"]
+            artifact["release_tag"] = tag
+            artifact["url"] = artifact["url"].replace(f"/download/{old_tag}/", f"/download/{tag}/")
+            artifact["builder_commit"] = builder
+            data["runtime_toolchain_dependencies"]["renderer"]["source_identities"][
+                "builder"]["commit"] = builder
+        self.edit_json(drift.RECORDS[0], third_party)
+
+        def attestation(data):
+            data["artifact"]["release_tag"] = tag
+            data["source_identities"]["builder"]["commit"] = builder
+            text = json.dumps(data).replace(f"/download/{old_tag}/", f"/download/{tag}/")
+            data.clear()
+            data.update(json.loads(text))
+        self.edit_json(drift.RECORDS[1], attestation)
+
+    def test_a_macos_row_on_an_attested_release_with_matching_records_agrees(self) -> None:
+        self.retarget_macos("chrome/m158-attested.2", "b" * 40)
+        self.assertEqual(drift.check(self.root), [])
+
+    def test_a_macos_row_with_a_mismatched_builder_commit_is_drift(self) -> None:
+        self.retarget_macos("chrome/m158-attested.2", "b" * 40)
+        self.edit_json(drift.LOCK, lambda lock: lock["platforms"][drift.PLATFORM]
+                       .update(builder_commit="c" * 40))
+        self.assert_drift("third-party-lock.json: renderer artifact builder_commit is")
+        self.assert_drift("renderer-attestation.json: builder source commit differs")
+
+    def test_a_macos_row_with_a_mismatched_release_is_drift(self) -> None:
+        self.retarget_macos("chrome/m158-attested.2", "b" * 40)
+        self.edit_json(drift.LOCK, lambda lock: lock["platforms"][drift.PLATFORM]
+                       .update(release="chrome/m158-attested.3"))
+        self.assert_drift("third-party-lock.json: renderer artifact release_tag")
+        self.assert_drift("renderer-attestation.json: artifact release_tag")
+        self.assert_drift("is not an asset of the locked release")
+
+    def test_a_macos_release_change_without_its_records_is_drift(self) -> None:
+        self.edit_json(drift.LOCK, lambda lock: lock["platforms"][drift.PLATFORM]
+                       .update(release="chrome/m158-attested.2"))
+        self.assert_drift("third-party-lock.json: renderer artifact release_tag")
+        self.assert_drift("third-party-lock.json: renderer artifact url")
+
+    def test_a_macos_builder_commit_change_without_its_records_is_drift(self) -> None:
+        self.edit_json(drift.LOCK, lambda lock: lock["platforms"][drift.PLATFORM]
+                       .update(builder_commit="b" * 40))
+        self.assert_drift("third-party-lock.json: renderer artifact builder_commit")
+
+    def test_a_malformed_macos_builder_commit_is_drift(self) -> None:
+        self.edit_json(drift.LOCK, lambda lock: lock["platforms"][drift.PLATFORM]
+                       .update(builder_commit="zzz"))
+        self.assert_drift(f"{drift.PLATFORM} builder_commit is not a 40-character commit")
+
+    def test_a_macos_release_of_another_milestone_or_malformed_is_drift(self) -> None:
+        cases = (("chrome/m999-attested.7", "release chrome/m999-attested.7 is not of milestone"),
+                 ("latest", "release is not chrome/mNNN[-attested.N]"))
+        for release, fragment in cases:
             with self.subTest(release=release):
                 self.setUp()
                 self.edit_json(drift.LOCK, lambda lock: lock["platforms"][drift.PLATFORM]
                                .update(release=release))
-                self.assert_drift(f"{drift.PLATFORM} release is {release!r}")
+                self.assert_drift(f"{drift.PLATFORM} {fragment}")
 
-    def test_a_macos_release_equal_to_the_milestone_agrees(self) -> None:
+    def test_a_macos_row_without_a_release_resolves_to_the_milestone(self) -> None:
+        self.assertNotIn("release", self.platform)
+        self.assertEqual(drift.check(self.root), [])
         self.edit_json(drift.LOCK, lambda lock: lock["platforms"][drift.PLATFORM]
                        .update(release=lock["milestone"]))
         self.assertEqual(drift.check(self.root), [])

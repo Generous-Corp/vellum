@@ -7,7 +7,10 @@ record that must agree with it:
 
   read      cmake/VellumSkiaDawn.cmake and .github/workflows/gpu-macos.yml load
             the lock; neither may carry a digest or milestone of its own.
-  agree     provenance/third-party-lock.json (the release-eligibility lock),
+  agree     the macOS row's own `release` and `builder_commit`, when it has them
+            (otherwise the lock's milestone and builder.commit), are the release
+            and builder every record below must name.
+            provenance/third-party-lock.json (the release-eligibility lock),
             provenance/renderer-attestation.json (the builder's records) and
             the documents that quote the pin must name exactly the lock's
             milestone, asset, digests and source commits.
@@ -102,21 +105,32 @@ def load_lock(root: Path, problems: list[str]) -> dict | None:
     return None if problems else lock
 
 
+def effective_release(lock: dict, key: str = PLATFORM) -> str:
+    """The release a row's asset is downloaded from: its own, else the milestone."""
+    release = (lock["platforms"][key] or {}).get("release")
+    return release if isinstance(release, str) else lock["milestone"]
+
+
+def effective_builder_commit(lock: dict) -> str:
+    """The builder commit the macOS asset was built at: the row's own, else the lock's."""
+    commit = (lock["platforms"][PLATFORM] or {}).get("builder_commit")
+    return commit if isinstance(commit, str) else lock["builder"]["commit"]
+
+
 def check_release(key: str, platform: dict, milestone: object, problems: list[str]) -> None:
     """The release rules gpu-runtime/cmake/GpuRuntimeRendererLock.cmake enforces too.
 
-    A row's release is of the lock's milestone. macos-arm64 may omit it or repeat
-    the milestone (the tag the macOS records are checked against); every other
+    A row's release is of the lock's milestone. macos-arm64 may omit it (the
+    milestone's own release) or name any release of the milestone; every other
     platform must name an attested release, never a mutable chrome/mNNN tag.
     """
     release = platform.get("release")
-    if key == PLATFORM:
-        if release is not None and release != milestone:
-            problems.append(f"{LOCK}: {key} release is {release!r}, expected {milestone!r}")
+    if key == PLATFORM and release is None:
         return
     found = RELEASE.fullmatch(release) if isinstance(release, str) else None
-    if not found or not found.group(2):
-        problems.append(f"{LOCK}: {key} release is not chrome/mNNN-attested.N")
+    if not found or (key != PLATFORM and not found.group(2)):
+        expected = "chrome/mNNN[-attested.N]" if key == PLATFORM else "chrome/mNNN-attested.N"
+        problems.append(f"{LOCK}: {key} release is not {expected}")
     elif isinstance(milestone, str) and f"chrome/m{found.group(1)}" != milestone:
         problems.append(f"{LOCK}: {key} release {release} is not of milestone {milestone}")
 
@@ -139,7 +153,7 @@ def check_platform_row(key: str, platform: dict, milestone: object, seen: dict[s
         else:
             seen[value] = label
     check_release(key, platform, milestone, problems)
-    if key != PLATFORM:
+    if key != PLATFORM or "builder_commit" in platform:
         if not isinstance(platform.get("builder_commit"), str) or \
                 not HEX_40.fullmatch(platform["builder_commit"]):
             problems.append(f"{LOCK}: {key} builder_commit is not a 40-character commit")
@@ -163,7 +177,7 @@ def check_platform_row(key: str, platform: dict, milestone: object, seen: dict[s
 def asset_url(lock: dict) -> str:
     platform = lock["platforms"][PLATFORM]
     return "/".join((lock["builder"]["repository"], "releases/download",
-                     lock["milestone"], platform["asset"]))
+                     effective_release(lock), platform["asset"]))
 
 
 def locked_digests(lock: dict) -> set[str]:
@@ -202,11 +216,11 @@ def check_third_party_lock(root: Path, lock: dict, problems: list[str]) -> None:
     platform = lock["platforms"][PLATFORM]
     expected = {
         "repository": lock["builder"]["repository"],
-        "release_tag": lock["milestone"],
+        "release_tag": effective_release(lock),
         "name": platform["asset"],
         "url": asset_url(lock),
         "sha256": platform["sha256"],
-        "builder_commit": lock["builder"]["commit"],
+        "builder_commit": effective_builder_commit(lock),
         "target": PLATFORM,
         "configuration": platform["configuration"],
         "archive_root": platform["archive_root"],
@@ -222,7 +236,7 @@ def check_third_party_lock(root: Path, lock: dict, problems: list[str]) -> None:
         problems.append(f"{relative}: renderer archives differ from the lock: {', '.join(names)}")
     identities = renderer["source_identities"]
     for name, commit in (("skia", lock["sources"]["skia"]), ("dawn", lock["sources"]["dawn"]),
-                         ("builder", lock["builder"]["commit"])):
+                         ("builder", effective_builder_commit(lock))):
         if identities.get(name, {}).get("commit") != commit:
             problems.append(f"{relative}: {name} source commit differs from the lock")
     if identities.get("skia", {}).get("ref") != f"refs/heads/{lock['milestone']}":
@@ -240,7 +254,7 @@ def check_attestation(root: Path, lock: dict, problems: list[str]) -> None:
     artifact = record.get("artifact") or {}
     platform = lock["platforms"][PLATFORM]
     for field, value in (("repository", lock["builder"]["repository"]),
-                         ("release_tag", lock["milestone"]),
+                         ("release_tag", effective_release(lock)),
                          ("name", platform["asset"]),
                          ("sha256", platform["sha256"])):
         if artifact.get(field) != value:
@@ -248,12 +262,13 @@ def check_attestation(root: Path, lock: dict, problems: list[str]) -> None:
                             f"the lock says {value!r}")
     identities = record.get("source_identities") or {}
     for name, commit in (("skia", lock["sources"]["skia"]), ("dawn", lock["sources"]["dawn"]),
-                         ("builder", lock["builder"]["commit"])):
+                         ("builder", effective_builder_commit(lock))):
         if (identities.get(name) or {}).get("commit") != commit:
             problems.append(f"{relative}: {name} source commit differs from the lock")
     if record.get("build_identity", {}).get("target") != PLATFORM:
         problems.append(f"{relative}: build target is not {PLATFORM}")
-    release = "/".join((lock["builder"]["repository"], "releases/download", lock["milestone"], ""))
+    release = "/".join((lock["builder"]["repository"], "releases/download",
+                        effective_release(lock), ""))
     for url in re.findall(r'"url":\s*"([^"]+)"', json.dumps(record)):
         if not url.startswith(release):
             problems.append(f"{relative}: record {url} is not an asset of the locked release")
