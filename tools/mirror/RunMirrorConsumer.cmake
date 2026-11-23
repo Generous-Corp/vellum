@@ -305,12 +305,11 @@ if(_native_gpu_runtime_ready)
     set(_native_gpu_editor_dir "${_work}/native-gpu-editor")
     file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/native-gpu-editor/"
         DESTINATION "${_native_gpu_editor_dir}")
-    string(REPLACE ";" "\\;" _native_gpu_prefix
-        "${_prefix};${VELLUM_GPU_RUNTIME_PREFIX}")
     execute_process(COMMAND "${CMAKE_COMMAND}"
         -S "${_native_gpu_editor_dir}" -B "${_native_gpu_editor_dir}/build" ${_generator}
         -DCMAKE_BUILD_TYPE=Release
-        "-DCMAKE_PREFIX_PATH=${_native_gpu_prefix}"
+        "-DCMAKE_PREFIX_PATH=${_prefix}"
+        "-DVellumGpuRuntime_DIR=${VELLUM_GPU_RUNTIME_PREFIX}/lib/cmake/VellumGpuRuntime"
         -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
         -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE
         RESULT_VARIABLE _native_gpu_configure_result
