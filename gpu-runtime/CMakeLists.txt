@@ -104,6 +104,14 @@ include("${CMAKE_CURRENT_LIST_DIR}/../cmake/VellumSkiaDawnPlatform.cmake")
 vellum_skia_dawn_platform_key("${CMAKE_SYSTEM_NAME}" "${CMAKE_SYSTEM_PROCESSOR}"
     "${ANDROID_ABI}" _gpu_runtime_platform QUIET)
 set(GPU_RUNTIME_HAS_DEVICE OFF)
+# The installed package config checks the shipped Dawn library against this
+# platform's row of the lock, under this file name.
+set(GPU_RUNTIME_PLATFORM "${_gpu_runtime_platform}")
+if(_gpu_runtime_platform MATCHES "^windows-")
+    set(GPU_RUNTIME_DAWN_FILE "dawn_combined.lib")
+else()
+    set(GPU_RUNTIME_DAWN_FILE "libdawn_combined.a")
+endif()
 if(_gpu_runtime_platform)
     include("${CMAKE_CURRENT_LIST_DIR}/cmake/GpuRuntimeDawn.cmake")
     set(_gpu_runtime_dawn_args PLATFORM ${_gpu_runtime_platform}
