@@ -72,6 +72,10 @@ if(VELLUM_RMLUI_IOS_METAL_RUNTIME_TEST)
         VellumRmlUi::Native VellumRmlUi::Metal VellumRmlUi::Cpu
         "-framework Metal" "-framework QuartzCore" "-framework Foundation"
         "-framework CoreGraphics" "-framework ImageIO")
+    add_custom_command(TARGET vellum-rmlui-metal-ios-runtime POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_BINARY_DIR}/rmlui/metal/vellum-rmlui-metal.metallib"
+            "$<TARGET_FILE_DIR:vellum-rmlui-metal-ios-runtime>/vellum-rmlui-metal.metallib")
     add_test(NAME vellum.rmlui.metal-ios-runtime
         COMMAND "$<TARGET_FILE:vellum-rmlui-metal-ios-runtime>"
             "${_vellum_rmlui_rmlui_src}" "${vellum_root}/rmlui/tests/fixtures")
@@ -96,6 +100,10 @@ if(VELLUM_RMLUI_IOS_METAL_NEGATIVE_CONTROL)
         VellumRmlUi::Native VellumRmlUi::Metal VellumRmlUi::Cpu
         "-framework Metal" "-framework QuartzCore" "-framework Foundation"
         "-framework CoreGraphics" "-framework ImageIO")
+    add_custom_command(TARGET vellum-rmlui-metal-ios-runtime-control POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_BINARY_DIR}/rmlui/metal/vellum-rmlui-metal.metallib"
+            "$<TARGET_FILE_DIR:vellum-rmlui-metal-ios-runtime-control>/vellum-rmlui-metal.metallib")
     add_test(NAME vellum.rmlui.metal-ios-runtime-control
         COMMAND "$<TARGET_FILE:vellum-rmlui-metal-ios-runtime-control>"
             "${_vellum_rmlui_rmlui_src}" "${vellum_root}/rmlui/tests/fixtures")

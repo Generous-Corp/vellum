@@ -206,19 +206,25 @@ int main(int argc, char** argv) {
             return kSkip;
         }
         id<MTLCommandQueue> queue = [device newCommandQueue];
-        watchdog.stage("context creation");
-        std::fprintf(stderr, "progress: context created\n");
-        std::fflush(stderr);
+        watchdog.stage("Metal renderer construction");
         MetalRenderInterface metal(device);
+        std::fprintf(stderr, "progress: Metal renderer constructed\n");
+        std::fflush(stderr);
         if (!metal.valid()) {
             std::fprintf(stderr, "the Metal renderer could not build its pipelines\n");
             return 1;
         }
+        watchdog.stage("CPU renderer construction");
         CpuRenderInterface cpu;
+        std::fprintf(stderr, "progress: CPU renderer constructed\n");
+        std::fflush(stderr);
         cpu.set_image_decoder(decode);
 
         DirectoryAssets assets(argv[1], argv[2]);
+        watchdog.stage("Native context construction");
         NativeContext keepalive(assets, cpu);
+        std::fprintf(stderr, "progress: Native context constructed\n");
+        std::fflush(stderr);
         std::vector<std::string> font_bytes;
         if (keepalive.open(1, 1) != Status::ok) {
             std::fprintf(stderr, "open failed\n");

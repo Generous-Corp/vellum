@@ -16,6 +16,8 @@
 #import <Foundation/Foundation.h>
 #import <ImageIO/ImageIO.h>
 
+#import <TargetConditionals.h>
+
 #include <RmlUi/Core/Core.h>
 #include <RmlUi/Core/FileInterface.h>
 #include <RmlUi/Core/Math.h>
@@ -605,7 +607,23 @@ MetalRenderInterface::MetalRenderInterface(id<MTLDevice> device)
     if (!device)
         return;
     NSError* error = nil;
+#if TARGET_OS_IPHONE
+    NSURL* library_url = [[NSBundle mainBundle] URLForResource:@"vellum-rmlui-metal"
+                                                     withExtension:@"metallib"];
+    if (!library_url) {
+        NSString* executable_directory = [[[NSBundle mainBundle] executablePath]
+            stringByDeletingLastPathComponent];
+        library_url = [NSURL fileURLWithPath:
+                                   [executable_directory stringByAppendingPathComponent:
+                                                            @"vellum-rmlui-metal.metallib"]];
+    }
+    if (library_url)
+        s.library = [device newLibraryWithURL:library_url error:&error];
+    else
+        Rml::Log::Message(Rml::Log::LT_ERROR, "Metal shader library resource is missing");
+#else
     s.library = [device newLibraryWithSource:@(kShaderSource) options:nil error:&error];
+#endif
     if (!s.library) {
         Rml::Log::Message(Rml::Log::LT_ERROR, "Metal shader library failed: %s",
                           error ? error.localizedDescription.UTF8String : "unknown");
