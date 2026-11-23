@@ -86,3 +86,12 @@ adb exec-out screencap -p > /tmp/vellum-android-gpu.png
 The lead must run pause, resume, resize, and surface-destroy/recreate on a
 Vulkan-capable emulator or arm64 device and retain the Vulkan validation log.
 This lane did not run an emulator or claim GPU pixels.
+
+`scripts/gates.sh origin/main` was run with `npm_config_cache="$PWD/../.npm-cache"`. It was blocked before repository checks because the sandbox rejects the fallback gates worktree location:
+
+```text
+gates: /Volumes/Atelier/Code/agent-worktrees is not writable; falling back to /Users/danielraffel/agent-worktrees
+mktemp: mkdtemp failed on /Users/danielraffel/agent-worktrees/vellum-gates.X78haw: Operation not permitted
+```
+
+No gates result is claimed. The lead must rerun the gates from a host with the documented worktree root available.
