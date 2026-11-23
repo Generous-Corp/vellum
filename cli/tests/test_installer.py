@@ -62,7 +62,7 @@ def _build_verified_fixture(
     *,
     fixture_name: str = "test",
     source_commit: str = "a" * 40,
-    framework_version: str = "0.2.2",
+    framework_version: str = "0.2.3",
     target: str = "test",
 ) -> tuple[Path, Path, str]:
     payload = root / f"{fixture_name}-payload"
@@ -91,7 +91,7 @@ def _build_verified_fixture(
         json.dumps({
             "schema": "vellum.sdk-artifact.v1",
             "framework_version": framework_version,
-            "cli_version": "0.2.2",
+            "cli_version": "0.2.3",
             "cli_api": 1,
             "source_commit": source_commit,
             "source_tree_clean": True,
@@ -252,7 +252,7 @@ class InstallerTests(unittest.TestCase):
             sw_vers.chmod(0o755)
             rejected = _run_installer(
                 root / "rejected-prefix",
-                "--version", "0.2.2",
+                "--version", "0.2.3",
                 env=environment,
             )
             self.assertNotEqual(rejected.returncode, 0)
@@ -268,7 +268,7 @@ class InstallerTests(unittest.TestCase):
             )
             accepted_boundary = _run_installer(
                 root / "accepted-prefix",
-                "--version", "0.2.2",
+                "--version", "0.2.3",
                 env=environment,
             )
             self.assertNotEqual(accepted_boundary.returncode, 0)
@@ -371,7 +371,7 @@ class InstallerTests(unittest.TestCase):
             }
             rejected = _run_installer(
                 root / "prefix",
-                "--version", "0.2.2",
+                "--version", "0.2.3",
                 env=environment,
             )
             self.assertNotEqual(rejected.returncode, 0)
@@ -457,7 +457,7 @@ class InstallerTests(unittest.TestCase):
                 "verified": False,
                 "artifact": None,
                 "artifact_sha256": None,
-                "framework_version": "0.2.2",
+                "framework_version": "0.2.3",
                 "target": "local-development",
                 "source_commit": None,
             })
@@ -745,7 +745,7 @@ class InstallerTests(unittest.TestCase):
             )
             self.assertEqual(verified.returncode, 0, verified.stderr)
             self.assertEqual(
-                json.loads(verified.stdout)["cli_version"], "0.2.2"
+                json.loads(verified.stdout)["cli_version"], "0.2.3"
             )
 
             payload = root / "test-payload"
@@ -935,7 +935,7 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual((prefix / "lib/vellum").resolve(), active_before)
             self.assertEqual(
                 [path.name for path in (prefix / "lib/vellum-installs").iterdir()],
-                [f"0.2.2-test-{digest}"],
+                [f"0.2.3-test-{digest}"],
             )
             self.assertEqual(
                 {
@@ -975,7 +975,7 @@ class InstallerTests(unittest.TestCase):
             )
             self.assertEqual(first.returncode, 0, first.stderr)
             active_before = (prefix / "lib/vellum").resolve()
-            self.assertEqual(active_before.name, f"0.2.2-test-{first_digest}")
+            self.assertEqual(active_before.name, f"0.2.3-test-{first_digest}")
 
             failed = _run_installer(
                 prefix,
@@ -988,7 +988,7 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual((prefix / "lib/vellum").resolve(), active_before)
             self.assertNotEqual(first_digest, second_digest)
             self.assertTrue(
-                (prefix / "lib/vellum-installs" / f"0.2.2-test-{second_digest}").is_dir()
+                (prefix / "lib/vellum-installs" / f"0.2.3-test-{second_digest}").is_dir()
             )
             version = subprocess.run(
                 [str(prefix / "bin/vellum"), "--version"],
@@ -1021,7 +1021,7 @@ class InstallerTests(unittest.TestCase):
             )
             self.assertEqual(first.returncode, 0, first.stderr)
             active_before = (prefix / "lib/vellum").resolve()
-            self.assertEqual(active_before.name, f"0.2.2-test-{first_digest}")
+            self.assertEqual(active_before.name, f"0.2.3-test-{first_digest}")
 
             interrupted = _run_installer(
                 prefix,
@@ -1037,7 +1037,7 @@ class InstallerTests(unittest.TestCase):
             staged_install = (
                 prefix
                 / "lib/vellum-installs"
-                / f"0.2.2-test-{second_digest}"
+                / f"0.2.3-test-{second_digest}"
             )
             self.assertTrue(staged_install.is_dir())
             self.assertFalse(
@@ -1145,7 +1145,7 @@ class InstallerTests(unittest.TestCase):
                     "--archive", str(archive),
                     "--checksums", str(sums),
                     "--prefix", str(prefix),
-                    "--expected-version", "0.2.2",
+                    "--expected-version", "0.2.3",
                     "--expected-target", "wrong-target",
                 ],
                 text=True,
@@ -1162,7 +1162,7 @@ class InstallerTests(unittest.TestCase):
             archive = root / "vellum-sdk-collision.tar.gz"
             metadata = json.dumps({
                 "schema": "vellum.sdk-artifact.v1",
-                "framework_version": "0.2.2",
+                "framework_version": "0.2.3",
                 "cli_api": 1,
                 "source_commit": "a" * 40,
                 "target": "test",

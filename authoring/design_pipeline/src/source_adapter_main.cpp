@@ -13,6 +13,7 @@ int main(int argc, char** argv) {
     const std::string_view source = argv[1];
     if (source == "pencil") input.source = DesignSource::pencil_json;
     else if (source == "designmd") input.source = DesignSource::designmd;
+    else if (source == "v0") input.source = DesignSource::v0_tsx;
     else return 2;
 
     input.payload.assign(std::istreambuf_iterator<char>(std::cin), {});

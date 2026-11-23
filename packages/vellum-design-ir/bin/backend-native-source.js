@@ -15,7 +15,7 @@ const textFields = [
     'textAlign', 'verticalAlign',
 ];
 
-export const nativeSourceTypes = new Set(['pencil', 'designmd']);
+export const nativeSourceTypes = new Set(['pencil', 'designmd', 'v0']);
 
 export function decodeNativeSource(bytes, { sourceKey, sourceHash, sourceType }) {
     const input = sourceType === 'pencil' ? pencilPayload(bytes) : bytes;
@@ -34,7 +34,8 @@ export function decodeNativeSource(bytes, { sourceKey, sourceHash, sourceType })
         .map(({ code, severity, message, ir_path }) => ({ code, severity, message, path: ir_path || '$' }));
     const toBackend = ({ severity, ...diagnostic }) => ({ ...diagnostic, level: severity });
     if (!ir || diagnostics.some(({ severity, code }) =>
-        severity === 'error' || code === 'designmd.broken-ref')) {
+        severity === 'error' || code === 'designmd.broken-ref' ||
+        (sourceType === 'v0' && code === 'ir.fallback-used'))) {
         fail(`invalid_${sourceType}`, `${sourceType} source has invalid content`, {
             diagnostics: diagnostics.map(toBackend),
         });
@@ -48,7 +49,7 @@ export function decodeNativeSource(bytes, { sourceKey, sourceHash, sourceType })
             revision: `${sourceType}-${sourceHash.slice(7)}`,
             snapshotHash: sourceHash,
         },
-        root: irNode(ir.root, '$.root', diagnostics),
+        root: irNode(ir.root, '$.root', diagnostics, sourceType),
         tokens: irTokens(ir.tokens, sourceType),
         diagnostics,
     });
@@ -82,7 +83,7 @@ function fields(source, keys) {
         .map((key) => [key, source[key]]));
 }
 
-function irNode(node, path, diagnostics) {
+function irNode(node, path, diagnostics, sourceType) {
     const style = node.style ?? {};
     const layout = { ...node.layout, ...fields(style, ['width', 'height']) };
     if (style.left !== undefined) layout.x = style.left;
@@ -91,8 +92,8 @@ function irNode(node, path, diagnostics) {
     const supported = ['text', 'button', 'frame', 'rectangle', 'rect', 'group'].includes(kind);
     if (!supported) {
         diagnostics.push({
-            code: 'pencil.unsupported-node', severity: 'warning', path,
-            message: `Pencil node '${kind}' has no retained component mapping`,
+            code: `${sourceType}.unsupported-node`, severity: 'warning', path,
+            message: `${sourceType === 'pencil' ? 'Pencil' : 'v0'} node '${kind}' has no retained component mapping`,
         });
     }
     const paint = fields(style, paintFields);
@@ -103,9 +104,13 @@ function irNode(node, path, diagnostics) {
         sourceId: node.source_node_id,
         text: node.content,
         properties: { layout, paint, text },
-        extensions: { native: { type: node.type, style } },
+        extensions: { native: {
+            type: node.type,
+            style,
+            ...(sourceType === 'v0' && node.attributes ? { attributes: node.attributes } : {}),
+        } },
         children: (node.children ?? []).map((child, index) =>
-            irNode(child, `${path}.children[${index}]`, diagnostics)),
+            irNode(child, `${path}.children[${index}]`, diagnostics, sourceType)),
     };
 }
 

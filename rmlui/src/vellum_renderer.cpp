@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iterator>
+#include <span>
 #include <string>
 #include <utility>
 
@@ -58,6 +59,18 @@ VellumRenderer::VellumRenderer(graphics::SkiaDawnSurface& surface, std::uint32_t
     : surface_(surface), clear_rgba_(clear_rgba), clock_(std::move(clock)) {
     if (!clock_)
         clock_ = [] { return std::chrono::steady_clock::now(); };
+    decoder_ = [](const std::string& encoded, std::uint32_t& width, std::uint32_t& height,
+                  std::vector<std::uint8_t>& pixels) {
+        const auto* bytes = reinterpret_cast<const std::uint8_t*>(encoded.data());
+        const auto image = graphics::SkiaDawnSurface::decode_image_asset(
+            std::span<const std::uint8_t>(bytes, encoded.size()));
+        if (!image)
+            return false;
+        width = image->width;
+        height = image->height;
+        pixels = image->premultiplied_rgba;
+        return true;
+    };
 }
 
 void VellumRenderer::collect_expired_textures() {

@@ -54,9 +54,9 @@ public:
             gpu_ready_ = true;
             publish_gpu_surface(gpu_.get(), GpuSurfaceState::ready);
         } else {
+            invalidate_gpu_surface();
             skia_.reset();
             gpu_.reset();
-            publish_gpu_surface(nullptr, GpuSurfaceState::unavailable);
         }
     }
 
@@ -66,6 +66,7 @@ public:
             XDestroyWindow(display_, window_);
             XSync(display_, False);
         }
+        invalidate_gpu_surface();
         skia_.reset();
         gpu_.reset();
         if (display_) XCloseDisplay(display_);
