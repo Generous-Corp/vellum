@@ -667,7 +667,7 @@ jobs:
           if record.get("state") == "builder-attested":
               artifact = record["artifact"]
               tag = artifact.get("release_tag")
-              if artifact.get("repository") != builder or not re.fullmatch(r"chrome/m[0-9]+", str(tag)):
+              if artifact.get("repository") != builder or not re.fullmatch(r"chrome/m[0-9]+(-attested\.[0-9]+)?", str(tag)):
                   sys.exit("the renderer record does not name a danielraffel/skia-builder chrome/mNNN release")
               names = [("archive", artifact.get("name")),
                        ("legal-manifest", ((record.get("legal_inventory") or {}).get("manifest") or {}).get("name")),

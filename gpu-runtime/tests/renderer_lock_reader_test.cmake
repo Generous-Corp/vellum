@@ -20,10 +20,15 @@ file(READ "${LOCK}" _json)
 string(JSON _milestone GET "${_json}" milestone)
 string(JSON _repository GET "${_json}" builder repository)
 string(JSON _asset GET "${_json}" platforms macos-arm64 asset)
+# The macOS row may name its own release of the milestone; the URL follows it.
+string(JSON _release ERROR_VARIABLE _no_release GET "${_json}" platforms macos-arm64 release)
+if(_no_release)
+    set(_release "${_milestone}")
+endif()
 string(JSON _count LENGTH "${_json}" platforms macos-arm64 archives)
 list(LENGTH R_ARCHIVES _read_count)
 if(NOT R_MILESTONE STREQUAL _milestone OR
-   NOT R_URL STREQUAL "${_repository}/releases/download/${_milestone}/${_asset}" OR
+   NOT R_URL STREQUAL "${_repository}/releases/download/${_release}/${_asset}" OR
    NOT _read_count EQUAL _count OR
    NOT R_SHA256_libskia.a MATCHES "^[0-9a-f]+$" OR
    NOT R_SHA256_libdawn_combined.a MATCHES "^[0-9a-f]+$")
