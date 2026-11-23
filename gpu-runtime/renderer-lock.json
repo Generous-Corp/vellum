@@ -3,7 +3,7 @@
   "milestone": "chrome/m158",
   "builder": {
     "repository": "https://github.com/danielraffel/skia-builder",
-    "commit": "312f05e24a5d5a45d4a3e70ca70ff3ccff1b4d97"
+    "commit": "a9c9f37255121d4b3d0fe8931fdd81c9eca97da2"
   },
   "sources": {
     "skia": "be7d7c3e996e567eda7dc9774274f7a0103cdb8c",
@@ -12,21 +12,23 @@
   "platforms": {
     "macos-arm64": {
       "asset": "skia-build-mac-universal-gpu-release.zip",
-      "sha256": "dca73c0eee5b0f6d129fe357d0754f7165c6b436051e0de947aeedd3e1bde250",
+      "sha256": "598c45fe77d926925c7bc37c1e5e2e3dddfe08fad26f89fb0c3e3be6788f8cba",
       "configuration": "Release",
       "archive_root": "build/mac-gpu/lib/Release",
+      "release": "chrome/m158-attested.2",
+      "builder_commit": "a9c9f37255121d4b3d0fe8931fdd81c9eca97da2",
       "archives": {
-        "libdawn_combined.a": "6c6c5535e3b004ca260f388536c1baa737c11479d0a95865d174888d7d3077f3",
-        "libjsonreader.a": "5ee1e3e660e19dd3f34458aad6a0b3c1f90815d274c40a709e28a6e933be5927",
-        "libskia.a": "4f5e148866dab6f260a80ee6da006539b8f47885daece28489972726295fde1c",
-        "libskottie.a": "b19184f4a82c401be3fb4e37d552bdf9dafc10940f2a8c04a3195702cbbbc5bc",
-        "libskparagraph.a": "4144a0a4d1ce6dadd2c53d379bf21a56f59d16922b2eeac3bff4a0c0768abf53",
-        "libskresources.a": "af723156c3896a5d3a51f09f7bcf464795c5cedb2672cf07e646e2ecdba84024",
-        "libsksg.a": "1e927792c47ee2b6c7e80f0e5b6a33894568f5657fd6f7b69e1bb3ea0e1fe067",
-        "libskshaper.a": "a6a16bedd0bf001f813f03517a919f7c6932128537c60721c1c1be8f151a1e74",
-        "libskunicode_core.a": "e3026eedb11a9af0c245e8f3e227f0ce92e383271e3da8b55e87fdefe89f93cb",
-        "libskunicode_icu.a": "ea7352e2ebab5734852924be28ffba61e99db578f4b065a302cbff9dcae484cb",
-        "libsvg.a": "651c113ade708034b19461016b219a216ef8b2f451e83e60931c9eae1aed594b"
+        "libdawn_combined.a": "9012e32207a540c5eaa8f60afb3377381a3d5de66d3fa57e5ae029ec57b494bc",
+        "libjsonreader.a": "e4e9295daaaf01798b5d68b78ff971b61d75e436955766551be11ac0b1ca189a",
+        "libskia.a": "71fa2cf718d00382af61acf87093c24f32a2a5275cb317b11ebee2cf9a1e192e",
+        "libskottie.a": "d0eace1a35784c62fa895f2196041be55c627136a91bb7878a6f38c546eaa36d",
+        "libskparagraph.a": "95d9c1855737b305fefe6e679cba1f0a7d214e3becd596a6b2192eed9a7453d9",
+        "libskresources.a": "ddff8c6c21b64b7643ba4ab8f2a23015b4312ef282a836e70481e89c3dd3ecb7",
+        "libsksg.a": "8e82e099951c13f14433f1304ce2d236551b6f79d64b5f3ac31e63afcb0169b9",
+        "libskshaper.a": "ab334b26e6ac31a154bc7c8c3bf1ce427bc55ac8baa02c0ced4a675e85d0484f",
+        "libskunicode_core.a": "4ebcb41364802254f371f3c26488e6d3fdf8d7e0b8e887b3616a0618d44ddff2",
+        "libskunicode_icu.a": "9316494ba9deb86dfea0df6e8f35399fddeb4ea012901d21073d92859d63cf21",
+        "libsvg.a": "5048b40f9f27ffe09b04115ee18a00e1d601d6a107cf744d4e6f2265041658bc"
       }
     },
     "linux-x64": {

@@ -155,17 +155,20 @@ class RendererLockDriftTest(unittest.TestCase):
 
     def retarget_macos(self, release: str | None, commit: str | None) -> None:
         """Move the macOS row to another release and builder commit, with its records."""
+        before = json.loads((self.root / drift.LOCK).read_text(encoding="utf-8"))
+        old_tag = drift.effective_release(before)
+
         def lock_edit(lock):
             row = lock["platforms"][drift.PLATFORM]
-            if release is not None:
-                row["release"] = release
-            if commit is not None:
-                row["builder_commit"] = commit
+            for field, value in (("release", release), ("builder_commit", commit)):
+                if value == "NONE":
+                    row.pop(field, None)
+                elif value is not None:
+                    row[field] = value
         self.edit_json(drift.LOCK, lock_edit)
         lock = json.loads((self.root / drift.LOCK).read_text(encoding="utf-8"))
-        old_tag = lock["milestone"]
-        tag = release or old_tag
-        builder = commit or lock["builder"]["commit"]
+        tag = drift.effective_release(lock)
+        builder = drift.effective_builder_commit(lock)
 
         def third_party(data):
             artifact = data["runtime_toolchain_dependencies"]["renderer"]["artifact"]
@@ -205,13 +208,13 @@ class RendererLockDriftTest(unittest.TestCase):
 
     def test_a_macos_release_change_without_its_records_is_drift(self) -> None:
         self.edit_json(drift.LOCK, lambda lock: lock["platforms"][drift.PLATFORM]
-                       .update(release="chrome/m158-attested.2"))
+                       .update(release="chrome/m158-attested.9"))
         self.assert_drift("third-party-lock.json: renderer artifact release_tag")
         self.assert_drift("third-party-lock.json: renderer artifact url")
 
     def test_a_macos_builder_commit_change_without_its_records_is_drift(self) -> None:
         self.edit_json(drift.LOCK, lambda lock: lock["platforms"][drift.PLATFORM]
-                       .update(builder_commit="b" * 40))
+                       .update(builder_commit="d" * 40))
         self.assert_drift("third-party-lock.json: renderer artifact builder_commit")
 
     def test_a_malformed_macos_builder_commit_is_drift(self) -> None:
@@ -230,10 +233,11 @@ class RendererLockDriftTest(unittest.TestCase):
                 self.assert_drift(f"{drift.PLATFORM} {fragment}")
 
     def test_a_macos_row_without_a_release_resolves_to_the_milestone(self) -> None:
-        self.assertNotIn("release", self.platform)
+        self.retarget_macos("NONE", "NONE")
+        self.assertNotIn("release", json.loads(
+            (self.root / drift.LOCK).read_text(encoding="utf-8"))["platforms"][drift.PLATFORM])
         self.assertEqual(drift.check(self.root), [])
-        self.edit_json(drift.LOCK, lambda lock: lock["platforms"][drift.PLATFORM]
-                       .update(release=lock["milestone"]))
+        self.retarget_macos("chrome/m158", None)
         self.assertEqual(drift.check(self.root), [])
 
     def test_an_attested_top_level_milestone_is_drift(self) -> None:
@@ -284,7 +288,7 @@ class RendererLockDriftTest(unittest.TestCase):
         def bump(lock):
             lock.update(milestone="chrome/m159")
             for key, row in lock["platforms"].items():
-                if key != drift.PLATFORM:
+                if key != drift.PLATFORM or "release" in row:
                     row["release"] = "chrome/m159-attested.2"
         self.edit_json(drift.LOCK, bump)
         self.assert_drift("third-party-lock.json: renderer artifact release_tag")
