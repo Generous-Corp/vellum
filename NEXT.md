@@ -11,6 +11,12 @@ Control checks after fix commit:
 - Removed transfer-successor.json from FRAMEWORK_DATA_FILES. The data-file-list test failed.
 Each temporary edit was restored from the fixed file after its run.
 
+# Follow-up platform closure
+
+This lane proves the macOS RmlUi PluginView bridge and its mirror link boundary. Windows and Linux remain gated because the mirror view unit is not yet packaged and consumed through verified platform closures on those targets.
+
+The next PR should package `Vellum::MirrorView_core` and its public headers for Windows and Linux, add installed-consumer coverage for each platform, and run the platform-native RmlUi CTests with the mirror enabled. Keep the platform work separate from this folder-level provenance exemption.
+
 # RmlUi idle follow-up
 
 The origin regression test is committed as `3058e8ee8`. The required native-parent-host test could not be executed in this lane because `~/bin/leased-build --wait-secs 60 -- cmake -S rmlui -B build-rmlui -DVELLUM_RMLUI_NATIVE=ON -DVELLUM_RMLUI_CPU=ON -DVELLUM_RMLUI_NATIVE_HOST=ON -DVELLUM_RMLUI_BUILD_TESTS=ON -DVELLUM_RMLUI_FONTS=OFF -DCMAKE_BUILD_TYPE=Release` returned `leased-build: no lease within 60s (cores=8)` before configuring. On origin, the new assertion is expected to fail because every idle tick replaces the layer contents.

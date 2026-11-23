@@ -298,7 +298,7 @@ Vellum dependencies. Versions and licenses were cross-checked against Pulp's
 
 ### Units built into the native SDK
 
-The macOS arm64 GPU SDK installs one `sdk/mirror/lib/libvellum-mirror-<unit>.dylib`
+The macOS arm64 GPU SDK installs one `sdk/mirror/lib/libvellum-mirror-<unit>-<identity>.dylib`
 for every unit of the current mirror receipt (`foundation`, `gpu-device-api`,
 `canvas`, `render-2d`, `state-core`, `view-core`, `design-import` and
 `view-script`; `tools/mirror/VellumMirror.cmake`). The units' external inputs
