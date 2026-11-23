@@ -231,6 +231,8 @@
       "vellum.rmlui.metal-effects",
       "vellum.rmlui.metal-filters",
       "vellum.rmlui.metal-image-decode",
+      "vellum.rmlui.metal-ios-cocoa-negative",
+      "vellum.rmlui.metal-ios-compile",
       "vellum.rmlui.metal-layers",
       "vellum.rmlui.metal-reference",
       "vellum.rmlui.metal-trim",
