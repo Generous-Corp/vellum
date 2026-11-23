@@ -31,11 +31,24 @@ class RendererAttestationTests(unittest.TestCase):
         self.assertEqual(record["artifact"]["sha256"], self.renderer["artifact"]["sha256"])
 
     def test_android_lane_must_stay_deferred(self) -> None:
-        self.assertIn("android_arm64_v8a", self.attestation)
-        bad = copy.deepcopy(self.attestation)
-        bad["android_arm64_v8a"]["artifact"] = {"sha256": "0" * 64}
+        deferred = copy.deepcopy(self.attestation)
+        deferred["android_arm64_v8a"] = {
+            "state": "deferred-no-verified-asset",
+            "backend": "dawn-vulkan",
+            "api_floor": 26,
+            "artifact": None,
+        }
+        validate_renderer_attestation(self.renderer, deferred)
+
+        named = copy.deepcopy(deferred)
+        named["android_arm64_v8a"]["artifact"] = {"sha256": "0" * 64}
         with self.assertRaisesRegex(VerificationError, "android_arm64_v8a"):
-            validate_renderer_attestation(self.renderer, bad)
+            validate_renderer_attestation(self.renderer, named)
+
+        attested = copy.deepcopy(deferred)
+        attested["android_arm64_v8a"]["state"] = "builder-attested"
+        with self.assertRaisesRegex(VerificationError, "android_arm64_v8a"):
+            validate_renderer_attestation(self.renderer, attested)
 
     def test_artifact_digest_without_provenance_record_fails(self) -> None:
         missing = copy.deepcopy(self.attestation)
