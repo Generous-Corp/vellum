@@ -270,3 +270,10 @@ set_target_properties(vellum-frame-debug-test PROPERTIES
     BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
 add_test(NAME vellum.gpu.frame-debug
     COMMAND vellum-frame-debug-test)
+
+add_executable(vellum-portable-sha256-test portable_sha256_test.cpp)
+target_link_libraries(vellum-portable-sha256-test PRIVATE vellum-scene-capture-harness)
+target_include_directories(vellum-portable-sha256-test PRIVATE
+    ${PROJECT_SOURCE_DIR}/graphics/src)
+add_test(NAME vellum.gpu.portable-sha256
+    COMMAND vellum-portable-sha256-test)
