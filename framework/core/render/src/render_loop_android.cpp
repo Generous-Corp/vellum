@@ -1,4 +1,4 @@
-#if defined(__ANDROID__) && !defined(PULP_RENDER_LOOP_FORCE_TIMER)
+#if defined(__ANDROID__)
 
 #include <vellum/render/render_loop.hpp>
 #include "render_loop_state.hpp"

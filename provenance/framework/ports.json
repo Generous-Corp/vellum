@@ -1062,9 +1062,9 @@
     {
       "framework_path": "framework/core/render/platform/android/android_gpu_surface.hpp",
       "change": "added",
-      "target": "pulp-render",
+      "target": null,
       "origin": "native",
-      "pulp_path": "core/render/platform/android/gpu_surface_android_internal.hpp",
+      "pulp_path": null,
       "pulp_commits": [],
       "framework_blob": null,
       "reason": "Vellum-owned Android GPU surface lifecycle boundary over Pulp's Dawn Vulkan path."
@@ -1074,7 +1074,7 @@
       "change": "added",
       "target": "pulp-render",
       "origin": "native",
-      "pulp_path": "core/render/platform/android/gpu_surface_android.cpp",
+      "pulp_path": null,
       "pulp_commits": [],
       "framework_blob": null,
       "reason": "Vellum-owned Android GPU surface lifecycle boundary over Pulp's Dawn Vulkan path."
@@ -1084,7 +1084,7 @@
       "change": "added",
       "target": "pulp-render",
       "origin": "native",
-      "pulp_path": "core/render/platform/android/gpu_surface_android_jni.cpp",
+      "pulp_path": null,
       "pulp_commits": [],
       "framework_blob": null,
       "reason": "Vellum-owned JNI bridge for Android SurfaceView lifecycle callbacks."
@@ -1093,11 +1093,9 @@
       "framework_path": "framework/core/render/src/render_loop_android.cpp",
       "change": "added",
       "target": "pulp-render",
-      "origin": "pulp",
-      "pulp_path": "core/render/platform/android/choreographer_android.cpp",
-      "pulp_commits": [
-        "android-choreographer-boundary"
-      ],
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
       "framework_blob": null,
       "reason": "AChoreographer frame pacing for Vellum's Android render loop."
     }
