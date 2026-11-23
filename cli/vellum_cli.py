@@ -1657,7 +1657,22 @@ def main(argv: Iterable[str] | None = None) -> int:
                         "preconverted-svg requires --validate-only",
                         status="invalid_arguments", exit_code=EXIT_USAGE,
                     )
-            
+            else:
+                standalone_only = [
+                    flag for flag, used in (
+                        ("--validate-only", args.validate_only),
+                        ("--manifest", args.manifest is not None),
+                        ("--source-out", args.source_out is not None),
+                        ("--emit", args.emit != "js"),
+                        ("--mode", args.mode != "live"),
+                    ) if used
+                ]
+                if standalone_only:
+                    raise CliFailure(
+                        f"{', '.join(standalone_only)} apply only to --source-type jsx or preconverted-svg.",
+                        status="invalid_arguments", exit_code=EXIT_USAGE,
+                    )
+
             is_illustrator = args.source == "illustrator" and (
                 hasattr(args, "illustrator_input") or args.source_type not in {"pencil", "designmd", "v0"}
             )

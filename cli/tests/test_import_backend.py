@@ -141,6 +141,18 @@ class InstalledFigImportTests(unittest.TestCase):
 
 
 class ImportBackendTests(unittest.TestCase):
+    def test_standalone_only_flags_rejected_for_backend_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "design.fig"
+            source.write_bytes(b"not a real fig")
+            for flags in (["--validate-only"], ["--manifest", "m.json"], ["--source-out", "out"],
+                          ["--emit", "ir-json"], ["--mode", "baked"]):
+                completed = invoke("import", str(source), *flags, cwd=root)
+                self.assertNotEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+                self.assertIn("apply only to --source-type jsx or preconverted-svg", completed.stdout + completed.stderr)
+                self.assertEqual(list(root.iterdir()), [source])
+
     def test_standalone_jsx_modes_and_svg_control_map_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
