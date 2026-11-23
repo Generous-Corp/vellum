@@ -30,7 +30,7 @@
     {
       "name": "canvas",
       "closure_manifest": "provenance/framework/platforms/windows-x64/canvas.json",
-      "closure_sha256": "0e692447d603c9b581d1096f71eada7fa402a2048592a3d32e6963e82b7c4e65"
+      "closure_sha256": "818087cf38ad504b5687321e083ad6a889a179899d60ffa8a7c7cd741cd3893a"
     },
     {
       "name": "dataplane",
@@ -76,6 +76,6 @@
   "export": {
     "run_url": "https://github.com/Generous-Corp/pulp/actions/runs/45075548801",
     "artifact_sha256": "d046106a58c3d5fd127fd6cd21ec6f194f1eb2c5f7e77a13e59410e81fadafb5",
-    "manifest_sha256": "3d05a423ff7341215bcadb3ba37c6d271c58312be7599918ee232db5ef6fa486"
+    "manifest_sha256": "f4fa219c1a84b4a463157f2847237d7e1eef468a422d14903dfb79a4f2986fd6"
   }
 }
