@@ -178,6 +178,13 @@ class ImportBackendTests(unittest.TestCase):
             self.assertNotEqual(completed.returncode, 0)
             self.assertIn("not implemented", completed.stdout)
             self.assertFalse(materialized.exists())
+            completed = invoke("import", "jsx", str(jsx), "--manifest", "missing.json", "--out", str(root / "m.js"), cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("--manifest do not apply", completed.stdout)
+            self.assertFalse((root / "m.js").exists())
+            completed = invoke("import", "preconverted-svg", str(svg), "--validate-only", "--manifest", str(manifest), "--out", str(root / "x.svg"), cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("--out do not apply", completed.stdout)
             ignored = root / "ignored.js"
             completed = invoke("import", "jsx", str(jsx), "--out", str(ignored), "--source-out", str(root / "src"), cwd=root)
             self.assertNotEqual(completed.returncode, 0)

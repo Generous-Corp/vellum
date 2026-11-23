@@ -1657,6 +1657,20 @@ def main(argv: Iterable[str] | None = None) -> int:
                         "preconverted-svg requires --validate-only",
                         status="invalid_arguments", exit_code=EXIT_USAGE,
                     )
+                inapplicable = [
+                    flag for flag, used in (
+                        ("--manifest", args.source_type == "jsx" and args.manifest is not None),
+                        ("--out", args.source_type == "preconverted-svg" and args.output is not None),
+                        ("--source-out", args.source_type == "preconverted-svg" and args.source_out is not None),
+                        ("--emit", args.source_type == "preconverted-svg" and args.emit != "js"),
+                        ("--mode", args.source_type == "preconverted-svg" and args.mode != "live"),
+                    ) if used
+                ]
+                if inapplicable:
+                    raise CliFailure(
+                        f"{', '.join(inapplicable)} do not apply to --source-type {args.source_type}.",
+                        status="invalid_arguments", exit_code=EXIT_USAGE,
+                    )
             else:
                 standalone_only = [
                     flag for flag, used in (
