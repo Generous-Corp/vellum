@@ -15,4 +15,3 @@ get_target_property(_editor_defs vellum-native-gpu-editor-consumer COMPILE_DEFIN
 if(_editor_defs MATCHES "VELLUM_MIRROR_BUILD")
     message(FATAL_ERROR "the native editor consumer must not define VELLUM_MIRROR_BUILD")
 endif()
-

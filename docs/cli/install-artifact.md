@@ -410,4 +410,3 @@ every installed mirror header equals its `framework/` source. The
 including `<vellum/render/skia_surface.hpp>` or `<vellum/render/gpu_surface.hpp>`
 fails with the guard's message, and that a consumer subclassing `PluginViewHost`
 builds, links and runs without `VELLUM_MIRROR_BUILD`.
-
