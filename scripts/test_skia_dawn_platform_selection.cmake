@@ -20,7 +20,7 @@ assert_platform("Android" "x86_64" "x86_64" "android-x86_64")
 
 set(_unknown_error "")
 execute_process(
-    COMMAND "${CMAKE_COMMAND}" -DTEST_ROOT="${CMAKE_CURRENT_LIST_DIR}/.."
+    COMMAND "${CMAKE_COMMAND}" "-DTEST_ROOT=${CMAKE_CURRENT_LIST_DIR}/.."
         -P "${CMAKE_CURRENT_LIST_DIR}/test_skia_dawn_platform_unknown.cmake"
     RESULT_VARIABLE _unknown_result
     OUTPUT_VARIABLE _unknown_output

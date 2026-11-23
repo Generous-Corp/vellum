@@ -247,7 +247,6 @@
       "vellum.scene-capture-harness",
       "vellum.scene-capture-harness.compare",
       "vellum.scene-capture-harness.record",
-      "vellum.skia-dawn-platform-selection",
       "vellum.smoke-native",
       "vellum.swift-host-proof",
       "vellum.swift-host-proof-native",
@@ -267,7 +266,6 @@
       "vellum.rmlui.cpu-bench-2x",
       "vellum.rmlui.install-consumer-native",
       "vellum.rmlui.install-consumer-native-package",
-      "vellum.skia-dawn-platform-selection",
       "vellum.web.browser-smoke",
       "vellum.web.phase3-exact-browser",
       "vellum.web.text-ime-accessibility"
