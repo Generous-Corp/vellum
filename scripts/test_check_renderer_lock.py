@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import check_renderer_lock as drift  # noqa: E402
 
 COPIED = (drift.LOCK, *drift.READERS, *drift.RECORDS, *drift.DOCUMENTS,
-          drift.evidence.PLATFORM_FILE)
+          drift.evidence.PLATFORM_FILE, drift.evidence.EVIDENCE)
 
 
 class RendererLockDriftTest(unittest.TestCase):
@@ -90,6 +90,10 @@ class RendererLockDriftTest(unittest.TestCase):
 
     def with_rows(self, change=None) -> None:
         def edit(lock):
+            # Synthetic rows replace the real ones so the evidence written
+            # below describes exactly the rows under test.
+            for key in [k for k in lock["platforms"] if k != drift.PLATFORM]:
+                del lock["platforms"][key]
             self.add_row(lock, "linux-x64")
             self.add_row(lock, "linux-arm64")
             self.add_row(lock, "windows-x64", windows=True)
@@ -207,7 +211,12 @@ class RendererLockDriftTest(unittest.TestCase):
         self.assertEqual(drift.check(self.root), [])
 
     def test_bumping_the_lock_alone_is_drift(self) -> None:
-        self.edit_json(drift.LOCK, lambda lock: lock.update(milestone="chrome/m159"))
+        def bump(lock):
+            lock.update(milestone="chrome/m159")
+            for key, row in lock["platforms"].items():
+                if key != drift.PLATFORM:
+                    row["release"] = "chrome/m159-attested.2"
+        self.edit_json(drift.LOCK, bump)
         self.assert_drift("third-party-lock.json: renderer artifact release_tag")
         self.assert_drift("renderer-attestation.json: artifact release_tag")
         self.assert_drift("README.md: names chrome/m158")
