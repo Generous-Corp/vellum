@@ -9,7 +9,10 @@ endif()
 foreach(_name IN ITEMS vellum-android-gpu-smoke vellum-android-gpu-smoke-negative)
     add_executable(${_name} "${CMAKE_CURRENT_LIST_DIR}/android_gpu_smoke.cpp")
     target_compile_features(${_name} PRIVATE cxx_std_20)
-    target_link_libraries(${_name} PRIVATE VellumRmlUi::VellumRenderer Vellum::Gpu)
+    # The smoke names gpu_runtime::GpuSurface directly. Its definitions come
+    # from the GPU provider inside Vellum::Gpu; DeviceApi supplies the headers.
+    target_link_libraries(${_name} PRIVATE
+        VellumRmlUi::VellumRenderer Vellum::Gpu VellumGpuRuntime::DeviceApi)
     target_link_libraries(${_name} PRIVATE log android)
     set_target_properties(${_name} PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endforeach()

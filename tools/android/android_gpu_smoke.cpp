@@ -22,6 +22,11 @@ int fail(const char* message) {
 }  // namespace
 
 int main() {
+    // Dawn's proc table must be installed before any GpuSurface exists.
+    std::string error;
+    if (!vellum::app_host::register_native_dawn_bootstrap(&error))
+        return fail(error.c_str());
+
     auto gpu = gpu_runtime::GpuSurface::create_dawn();
     if (!gpu) return 77;
 
@@ -29,8 +34,11 @@ int main() {
     gpu_config.width = kWidth;
     gpu_config.height = kHeight;
     gpu_config.native_surface_handle = nullptr;
+    // default_backend asks Dawn for the hardware adapter; the `vulkan`
+    // preference is the hosted software-ICD lane and rejects real GPUs. The
+    // backend is checked to be Vulkan below.
     gpu_config.backend_preference =
-        gpu_runtime::GpuSurface::AdapterBackendPreference::vulkan;
+        gpu_runtime::GpuSurface::AdapterBackendPreference::default_backend;
     if (!gpu->initialize(gpu_config)) return 77;
 
     const auto adapter = gpu->adapter_info();
@@ -39,9 +47,6 @@ int main() {
                 adapter.backend.c_str(), adapter.backend_type.c_str());
     if (adapter.backend_type != "Vulkan") return fail("expected Vulkan backend");
 
-    std::string error;
-    if (!vellum::app_host::register_native_dawn_bootstrap(&error))
-        return fail(error.c_str());
     auto surface = vellum::graphics::SkiaDawnSurface::create(
         {.width = kWidth, .height = kHeight, .scale = 1.0F, .native_surface_handle = nullptr},
         &error);
