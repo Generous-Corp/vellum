@@ -157,6 +157,21 @@ void check_command_mapping(vellum::graphics::SkiaDawnSurface& surface) {
     renderer.submit(command);
     VELLUM_RMLUI_CHECK(renderer.triangles_submitted() == 2);
 
+    // A loaded PNG is decoded by the Vellum GPU provider when the caller has
+    // not installed a custom decoder. This is the normal Backend path for
+    // <img> and image decorators.
+    auto loaded_image = command;
+    loaded_image.texture_path = "checker.png";
+    loaded_image.texture_bytes = std::make_shared<const std::string>(
+        test::read_binary(fixtures / "checker.png"));
+    loaded_image.texture_width = 16;
+    loaded_image.texture_height = 16;
+    renderer.submit(loaded_image);
+    VELLUM_RMLUI_CHECK(renderer.skipped_draws() == 0);
+    VELLUM_RMLUI_CHECK(renderer.scene().root.children.back().mesh->texture);
+    VELLUM_RMLUI_CHECK(renderer.scene().root.children.back().mesh->texture->width == 16);
+    VELLUM_RMLUI_CHECK(renderer.scene().root.children.back().mesh->texture->height == 16);
+
     auto projective = command;
     // w = 1 - 0.1 * x: the fourth vertex lands at x = 11 after translation,
     // where w is negative, so the triangle that uses it is dropped.
