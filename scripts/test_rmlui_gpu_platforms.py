@@ -40,6 +40,26 @@ def main() -> None:
     assert "sha256sum -c -" in gpu_job
     assert "shasum" not in gpu_job
 
+    # The provider is built on Windows and Linux, so its sources may not
+    # include Apple-only or POSIX-only headers unconditionally.
+    for name in ("skia_dawn_surface.cpp", "text_paragraph.cpp"):
+        lines = (ROOT / "graphics/src" / name).read_text(encoding="utf-8").splitlines()
+        guards: list[str] = []
+        for number, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if stripped.startswith(("#if", "#ifdef", "#ifndef")):
+                guards.append(stripped)
+            elif stripped.startswith("#endif"):
+                guards.pop()
+            elif stripped.startswith("#else"):
+                guards[-1] = "ELSE-OF " + guards[-1]
+            if "SkFontMgr_mac_ct.h" in line:
+                assert guards and guards[-1].startswith("#if defined(__APPLE__)"), (
+                    f"{name}:{number} includes the CoreText font manager outside __APPLE__")
+            if "<dlfcn.h>" in line:
+                assert guards and guards[-1].startswith("ELSE-OF #if defined(_WIN32)"), (
+                    f"{name}:{number} includes <dlfcn.h> outside the non-Windows branch")
+
 
 if __name__ == "__main__":
     main()

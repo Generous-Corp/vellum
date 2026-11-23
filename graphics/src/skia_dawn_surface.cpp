@@ -65,7 +65,6 @@
 #include "include/gpu/graphite/Surface.h"
 #include "include/gpu/graphite/dawn/DawnBackendContext.h"
 #include "include/gpu/graphite/dawn/DawnGraphiteTypes.h"
-#include "include/ports/SkFontMgr_mac_ct.h"
 #include "modules/skparagraph/include/FontCollection.h"
 #include "modules/skparagraph/include/Paragraph.h"
 #include "modules/skparagraph/include/ParagraphBuilder.h"
@@ -74,8 +73,6 @@
 #include "modules/skparagraph/include/TypefaceFontProvider.h"
 #include "modules/skunicode/include/SkUnicode_icu.h"
 #include "webgpu/webgpu_cpp.h"
-
-#include <dlfcn.h>
 
 #include <algorithm>
 #include <functional>

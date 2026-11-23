@@ -7,7 +7,11 @@
 #include "include/core/SkPaint.h"
 #include "include/core/SkString.h"
 #include "include/core/SkTypeface.h"
+#if defined(__APPLE__)
 #include "include/ports/SkFontMgr_mac_ct.h"
+#else
+#include "include/ports/SkFontMgr_empty.h"
+#endif
 #include "modules/skparagraph/include/FontCollection.h"
 #include "modules/skparagraph/include/ParagraphBuilder.h"
 #include "modules/skparagraph/include/ParagraphStyle.h"
@@ -15,7 +19,17 @@
 #include "modules/skparagraph/include/TypefaceFontProvider.h"
 #include "modules/skunicode/include/SkUnicode_icu.h"
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -36,10 +50,29 @@ void set_error(std::string* destination, std::string message) {
 
 std::filesystem::path font_directory(std::string_view requested) {
     if (!requested.empty()) return std::filesystem::path(requested);
+    std::filesystem::path module_path;
+#if defined(_WIN32)
+    HMODULE module = nullptr;
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(&font_directory), &module) != 0) {
+        std::wstring buffer(32768, L'\0');
+        const DWORD length = GetModuleFileNameW(module, buffer.data(),
+                                                static_cast<DWORD>(buffer.size()));
+        if (length > 0 && length < buffer.size()) {
+            buffer.resize(length);
+            module_path = std::filesystem::path(buffer);
+        }
+    }
+#else
     Dl_info info{};
     if (dladdr(reinterpret_cast<const void*>(&font_directory), &info) != 0 &&
         info.dli_fname != nullptr) {
-        const auto library_directory = std::filesystem::path(info.dli_fname).parent_path();
+        module_path = std::filesystem::path(info.dli_fname);
+    }
+#endif
+    if (!module_path.empty()) {
+        const auto library_directory = module_path.parent_path();
         const auto bundled = library_directory.parent_path() /
             "Resources" / "vellum" / "fonts";
         if (std::filesystem::is_directory(bundled)) return bundled;
@@ -102,7 +135,13 @@ const sk_sp<SkUnicode>& text_unicode() {
 // holds `text_mutex`.
 PackagedFontSet* packaged_fonts(const std::filesystem::path& directory,
                                 std::string* error) {
+#if defined(__APPLE__)
     static const sk_sp<SkFontMgr> manager = SkFontMgr_New_CoreText(nullptr);
+#else
+    // Faces are loaded only from the packaged directory, so the empty custom
+    // manager (FreeType, no system scan) is the portable equivalent.
+    static const sk_sp<SkFontMgr> manager = SkFontMgr_New_Custom_Empty();
+#endif
     static std::unordered_map<std::string, PackagedFontSet> font_cache;
     if (!manager || directory.empty() || !std::filesystem::is_directory(directory)) {
         set_error(error, "Vellum packaged font directory is unavailable: " + directory.string());
@@ -120,7 +159,7 @@ PackagedFontSet* packaged_fonts(const std::filesystem::path& directory,
         };
         for (const auto filename : packaged_fonts) {
             const auto path = directory / filename;
-            auto typeface = manager->makeFromFile(path.c_str());
+            auto typeface = manager->makeFromFile(path.string().c_str());
             if (!typeface) {
                 set_error(error, "Vellum packaged font is unavailable: " + path.string());
                 return nullptr;
