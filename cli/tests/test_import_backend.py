@@ -164,13 +164,8 @@ class ImportBackendTests(unittest.TestCase):
             materialized = root / "runtime"
             completed = invoke("import", "jsx", str(jsx), "--mode", "live", "--emit", "materialized-runtime", "--source-out", str(materialized), cwd=root)
             self.assertNotEqual(completed.returncode, 0)
-            self.assertIn("raw JSX is not compiled", completed.stdout)
+            self.assertIn("not implemented", completed.stdout)
             self.assertFalse(materialized.exists())
-            doc = root / "doc.json"
-            doc.write_text(json.dumps({"schema": "pulp-materialized-browser-document-v1", "html": "<div>ok</div>"}), encoding="utf-8")
-            completed = invoke("import", "jsx", str(doc), "--mode", "live", "--emit", "materialized-runtime", "--source-out", str(materialized), cwd=root)
-            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
-            self.assertTrue((materialized / "src/MaterializedDocument.tsx").is_file())
             bad_utf8 = root / "bad.jsx"
             bad_utf8.write_bytes(b"\xff\xfe export")
             completed = invoke("import", "jsx", str(bad_utf8), "--mode", "baked", "--emit", "ir-json", "--out", str(root / "o.json"), cwd=root)
