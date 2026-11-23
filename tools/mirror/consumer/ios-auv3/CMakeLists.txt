@@ -97,6 +97,9 @@ if(VELLUM_RMLUI_IOS_METAL_RUNTIME_TEST)
         COMMAND "${CMAKE_COMMAND}" -E copy_directory
             "${_vellum_rmlui_rmlui_src}/Tests/Data/VisualTests"
             "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime>/Resources/rmlui/Tests/Data/VisualTests"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${_vellum_rmlui_rmlui_src}/Tests/Data/style.rcss"
+            "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime>/Resources/rmlui/Tests/Data/style.rcss"
         COMMAND "${CMAKE_COMMAND}" -E copy_directory
             "${vellum_root}/rmlui/tests/fixtures"
             "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime>/Resources/fixtures"
@@ -152,6 +155,9 @@ if(VELLUM_RMLUI_IOS_METAL_NEGATIVE_CONTROL)
         COMMAND "${CMAKE_COMMAND}" -E copy_directory
             "${_vellum_rmlui_rmlui_src}/Tests/Data/VisualTests"
             "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime-control>/Resources/rmlui/Tests/Data/VisualTests"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${_vellum_rmlui_rmlui_src}/Tests/Data/style.rcss"
+            "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime-control>/Resources/rmlui/Tests/Data/style.rcss"
         COMMAND "${CMAKE_COMMAND}" -E copy_directory
             "${vellum_root}/rmlui/tests/fixtures"
             "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime-control>/Resources/fixtures"
