@@ -65,6 +65,7 @@ function(gpu_runtime_find_dawn)
     set(_expected "${_gr_SHA256_${_dawn_name}}")
     string(REGEX REPLACE "^chrome/m" "" _milestone "${_gr_MILESTONE}")
     set(GPU_RUNTIME_SKIA_MILESTONE "${_milestone}" PARENT_SCOPE)
+    set(GPU_RUNTIME_SKIA_RELEASE "${_gr_RELEASE}" PARENT_SCOPE)
 
     if(TARGET VellumGpuRuntime::Dawn)
         get_target_property(_recorded VellumGpuRuntime::Dawn GPU_RUNTIME_DAWN_SHA256)

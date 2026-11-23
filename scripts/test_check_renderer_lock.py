@@ -112,6 +112,69 @@ class RendererLockDriftTest(unittest.TestCase):
         self.with_rows(lambda lock: lock["platforms"]["linux-x64"].update(archive_root="/etc"))
         self.assert_drift("linux-x64 archive_root is not a build/ relative path")
 
+    def test_a_row_release_of_another_milestone_is_drift(self) -> None:
+        self.with_rows(lambda lock: lock["platforms"]["linux-x64"]
+                       .update(release="chrome/m999-attested.7"))
+        self.assert_drift("linux-x64 release chrome/m999-attested.7 is not of milestone chrome/m158")
+
+    def test_a_mutable_release_on_a_non_macos_row_is_drift(self) -> None:
+        self.with_rows(lambda lock: lock["platforms"]["linux-x64"].update(release="chrome/m158"))
+        self.assert_drift("linux-x64 release is not chrome/mNNN-attested.N")
+
+    def test_a_malformed_release_on_a_non_macos_row_is_drift(self) -> None:
+        self.with_rows(lambda lock: lock["platforms"]["windows-x64"].update(release="latest"))
+        self.assert_drift("windows-x64 release is not chrome/mNNN-attested.N")
+
+    def test_a_macos_release_other_than_the_milestone_is_drift(self) -> None:
+        for release in ("chrome/m999-attested.7", "chrome/m158-attested.2", "latest"):
+            with self.subTest(release=release):
+                self.setUp()
+                self.edit_json(drift.LOCK, lambda lock: lock["platforms"][drift.PLATFORM]
+                               .update(release=release))
+                self.assert_drift(f"{drift.PLATFORM} release is {release!r}")
+
+    def test_a_macos_release_equal_to_the_milestone_agrees(self) -> None:
+        self.edit_json(drift.LOCK, lambda lock: lock["platforms"][drift.PLATFORM]
+                       .update(release=lock["milestone"]))
+        self.assertEqual(drift.check(self.root), [])
+
+    def test_an_attested_top_level_milestone_is_drift(self) -> None:
+        self.edit_json(drift.LOCK, lambda lock: lock.update(milestone="chrome/m158-attested.1"))
+        self.assert_drift("milestone is not chrome/mNNN")
+
+    def test_a_row_without_a_builder_commit_is_drift(self) -> None:
+        for bad in (None, "z" * 40, "a" * 39):
+            with self.subTest(builder_commit=bad):
+                self.setUp()
+                def change(lock, bad=bad):
+                    row = lock["platforms"]["linux-arm64"]
+                    row.pop("builder_commit") if bad is None else row.update(builder_commit=bad)
+                self.with_rows(change)
+                self.assert_drift("linux-arm64 builder_commit is not a 40-character commit")
+
+    def test_a_non_release_asset_name_is_drift(self) -> None:
+        for asset in ("evil.zip", "skia-build-linux-x64-gpu-debug.zip", "../skia-build-x-gpu-release.zip"):
+            with self.subTest(asset=asset):
+                self.setUp()
+                self.with_rows(lambda lock: lock["platforms"]["linux-x64"].update(asset=asset))
+                self.assert_drift("linux-x64 asset name is not a skia-builder GPU release zip")
+
+    def test_a_non_macos_digest_held_by_another_file_is_drift(self) -> None:
+        """The no-other-copies scan covers every row, not just macOS."""
+        self.with_rows()
+        copy = self.root / "docs" / "hand-copy.md"
+        copy.parent.mkdir(parents=True, exist_ok=True)
+        lock = json.loads((self.root / drift.LOCK).read_text(encoding="utf-8"))
+        digest = lock["platforms"]["windows-x64"]["archives"]["skia.lib"]
+        copy.write_text(f"skia.lib {digest}\n", encoding="utf-8")
+        self.assert_drift(f"docs/hand-copy.md: holds locked digest {digest}")
+
+    def test_a_macos_digest_held_by_another_file_is_still_drift(self) -> None:
+        copy = self.root / "docs" / "hand-copy.md"
+        copy.parent.mkdir(parents=True, exist_ok=True)
+        copy.write_text(f"{self.platform['sha256']}\n", encoding="utf-8")
+        self.assert_drift("docs/hand-copy.md: holds locked digest")
+
     def test_a_deleted_macos_row_is_drift(self) -> None:
         self.edit_json(drift.LOCK, lambda lock: lock["platforms"].pop(drift.PLATFORM))
         self.assert_drift(f"platform {drift.PLATFORM} is missing")
