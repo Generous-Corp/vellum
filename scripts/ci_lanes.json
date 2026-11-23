@@ -159,6 +159,10 @@
         "isolated": true
       },
       {
+        "script": "scripts/test_rmlui_metal_ios_contract.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/test_verify_gpu_runtime_release.py",
         "isolated": true
       },
