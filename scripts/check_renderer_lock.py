@@ -125,7 +125,9 @@ def check_release(key: str, platform: dict, milestone: object, problems: list[st
     platform must name an attested release, never a mutable chrome/mNNN tag.
     """
     release = platform.get("release")
-    if key == PLATFORM and release is None:
+    # Absent is fine for macos-arm64; an explicit null (or any non-string) is
+    # malformed, as in the CMake reader.
+    if key == PLATFORM and "release" not in platform:
         return
     found = RELEASE.fullmatch(release) if isinstance(release, str) else None
     if not found or (key != PLATFORM and not found.group(2)):
@@ -153,6 +155,9 @@ def check_platform_row(key: str, platform: dict, milestone: object, seen: dict[s
         else:
             seen[value] = label
     check_release(key, platform, milestone, problems)
+    if platform.get("configuration") != "Release":
+        problems.append(f"{LOCK}: {key} configuration is {platform.get('configuration')!r}, "
+                        "expected 'Release'")
     if key != PLATFORM or "builder_commit" in platform:
         if not isinstance(platform.get("builder_commit"), str) or \
                 not HEX_40.fullmatch(platform["builder_commit"]):
@@ -203,7 +208,14 @@ def check_cmake_names(root: Path, lock: dict, problems: list[str]) -> None:
     # per-library name variable (set(_vellum_foo_name "libfoo.a")); read both.
     direct = re.findall(r"_vellum_renderer_SHA256_(lib[A-Za-z0-9_]+\.a)", text)
     named = re.findall(r'set\(_vellum_[a-z0-9_]+_name\s+"(lib[A-Za-z0-9_]+\.a)"\)', text)
-    for name in sorted(set(direct) | set(named)):
+    # Windows names are the stem plus the archive suffix variable
+    # (set(_vellum_foo_name "foo${_vellum_archive_suffix}")) or a literal foo.lib.
+    stems = re.findall(r'set\(_vellum_[a-z0-9_]+_name\s+"([A-Za-z0-9_]+)\$\{_vellum_archive_suffix\}"\)', text)
+    windows = [f"{stem}.lib" for stem in stems] + re.findall(r'"([A-Za-z0-9_]+\.lib)"', text)
+    # Until the lock holds a Windows row there is nothing to compare them with.
+    if not any(key.startswith("windows-") for key in lock["platforms"]):
+        windows = []
+    for name in sorted(set(direct) | set(named) | set(windows)):
         if name not in archives:
             problems.append(f"cmake/VellumSkiaDawn.cmake: reads {name}, which the lock does not lock")
 

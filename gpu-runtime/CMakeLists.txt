@@ -171,6 +171,8 @@ if(GPU_RUNTIME_HAS_DEVICE)
     if(APPLE)
         target_link_libraries(gpu-runtime-device PRIVATE
             "-framework Cocoa" "-framework Metal" "-framework QuartzCore")
+    elseif(ANDROID)
+        target_link_libraries(gpu-runtime-device PRIVATE android log)
     endif()
 
     # The installed provider is the one image that intentionally exposes the
@@ -207,6 +209,8 @@ if(GPU_RUNTIME_HAS_DEVICE)
         if(APPLE)
             target_link_libraries(gpu-runtime-device-provider PRIVATE
                 "-framework Cocoa" "-framework Metal" "-framework QuartzCore")
+        elseif(ANDROID)
+            target_link_libraries(gpu-runtime-device-provider PRIVATE android log)
         endif()
     endif()
 
