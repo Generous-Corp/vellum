@@ -16,8 +16,6 @@ import subprocess
 import sys
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
 
 def _escape_data(value: str) -> str:
     return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
@@ -90,6 +88,8 @@ def run(lane: str, manifest: dict[str, Any]) -> int:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         first_output = ""
         assert result.stdout is not None

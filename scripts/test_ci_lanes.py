@@ -153,6 +153,25 @@ class CiLaneTests(unittest.TestCase):
                 result.stdout,
             )
 
+    def test_runner_survives_non_utf8_child_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "bytes.py").write_text(
+                "import sys\nsys.stdout.buffer.write(b'bad \\xff byte\\n')\nsys.stdout.flush()\n",
+                encoding="utf-8",
+            )
+            manifest = {"schema": lanes.SCHEMA, "elsewhere": {}, "lanes": {"x": [
+                {"script": str(root / "bytes.py")}
+            ]}}
+            path = root / "lanes.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, "-I", str(ROOT / "scripts/run_ci_lane.py"), "--lane", "x", "--manifest", str(path)],
+                capture_output=True, text=True, encoding="utf-8", check=False,
+                env=dict(os.environ, PYTHONUTF8="0", LC_ALL="C"))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+
     def test_unknown_entries_and_lanes_fail_closed(self) -> None:
         with self.assertRaises(lanes.LaneError):
             lanes.command({"script": "x.py", "shell": "rm"})
