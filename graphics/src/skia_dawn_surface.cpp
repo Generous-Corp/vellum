@@ -82,7 +82,6 @@
 #include "modules/skunicode/include/SkUnicode_icu.h"
 #include "webgpu/webgpu_cpp.h"
 
-#include <dlfcn.h>
 
 #include <algorithm>
 #include <functional>
