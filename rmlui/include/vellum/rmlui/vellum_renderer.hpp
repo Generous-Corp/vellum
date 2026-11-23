@@ -32,9 +32,10 @@ namespace vellum::rmlui {
 // output matches the soft renderer within a tolerance, not byte for byte.
 class VellumRenderer final : public RenderInterface {
   public:
-    // Decodes an image asset to premultiplied RGBA8, as SoftRenderer's
-    // decoder does. Without one, draws that reference an image asset are
-    // skipped and counted in skipped_draws().
+    // Decodes an image asset to premultiplied RGBA8. The renderer uses
+    // SkiaDawnSurface's bounded PNG decoder by default. A host can replace it
+    // for another encoded format. A failed decode skips the draw and increments
+    // skipped_draws().
     using ImageDecoder = std::function<bool(const std::string& encoded, std::uint32_t& width,
                                             std::uint32_t& height,
                                             std::vector<std::uint8_t>& premultiplied_rgba)>;
