@@ -56,6 +56,10 @@
         "isolated": true
       },
       {
+        "script": "scripts/test_rmlui_plugin_view_not_installed.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/test_ci_lanes.py",
         "isolated": true
       },

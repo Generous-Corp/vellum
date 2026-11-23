@@ -1,8 +1,5 @@
-# Controls for the module's link boundary check: a stand-in VellumRenderer
-# links a stand-in Vellum::Gpu, and with PLANT set another library links it
-# too, privately (PLANT=private) or publicly through a generator expression
-# (PLANT=genex), or through an alias spelled like a module target
-# (PLANT=alias). Each case is matched on the check's own output.
+# The stand-in bridges link their respective Vellum units. PLANT introduces
+# a forbidden link or removes a required bridge link.
 cmake_minimum_required(VERSION 3.24)
 project(vellum_rmlui_link_boundary_control C)
 
@@ -10,15 +7,24 @@ include("${VELLUM_RMLUI_MODULE_DIR}/cmake/VellumRmlUiLinkBoundary.cmake")
 
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/stub.c" "int vellum_rmlui_link_boundary_stub(void) { return 0; }\n")
 add_library(Vellum::Gpu INTERFACE IMPORTED)
+add_library(Vellum::MirrorView_core INTERFACE IMPORTED)
 add_library(vellum-rmlui-core STATIC "${CMAKE_CURRENT_BINARY_DIR}/stub.c")
 add_library(vellum-rmlui-native STATIC "${CMAKE_CURRENT_BINARY_DIR}/stub.c")
 add_library(vellum-rmlui-vellum-renderer STATIC "${CMAKE_CURRENT_BINARY_DIR}/stub.c")
+add_library(vellum-rmlui-plugin-view STATIC "${CMAKE_CURRENT_BINARY_DIR}/stub.c")
 target_link_libraries(vellum-rmlui-native PUBLIC vellum-rmlui-core)
 if(NOT PLANT STREQUAL "unlinked_renderer")
     target_link_libraries(vellum-rmlui-vellum-renderer PUBLIC vellum-rmlui-core Vellum::Gpu)
 endif()
+target_link_libraries(vellum-rmlui-plugin-view PUBLIC vellum-rmlui-core)
+if(NOT PLANT STREQUAL "unlinked_plugin_view")
+    target_link_libraries(vellum-rmlui-plugin-view PUBLIC Vellum::MirrorView_core)
+endif()
 if(PLANT STREQUAL "private")
     target_link_libraries(vellum-rmlui-native PRIVATE Vellum::Gpu)
+elseif(PLANT STREQUAL "near_match")
+    add_library(vellum-rmlui-plugin-view-extra INTERFACE)
+    target_link_libraries(vellum-rmlui-plugin-view-extra INTERFACE Vellum::MirrorView_core)
 elseif(PLANT STREQUAL "genex")
     target_link_libraries(vellum-rmlui-core PUBLIC "$<$<PLATFORM_ID:${CMAKE_SYSTEM_NAME}>:Vellum::Gpu>")
 elseif(PLANT STREQUAL "alias")
@@ -26,5 +32,5 @@ elseif(PLANT STREQUAL "alias")
     target_link_libraries(vellum-rmlui-native PRIVATE VellumRmlUi::Gpu)
 endif()
 
-vellum_rmlui_check_link_boundary(ALLOW vellum-rmlui-vellum-renderer
-    TARGETS vellum-rmlui-core vellum-rmlui-native vellum-rmlui-vellum-renderer)
+get_property(_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+vellum_rmlui_check_link_boundary(TARGETS ${_targets})
