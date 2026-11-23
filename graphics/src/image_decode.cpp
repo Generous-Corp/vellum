@@ -4,6 +4,10 @@
 #if defined(__APPLE__)
 #include <CommonCrypto/CommonDigest.h>
 #elif defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #include <bcrypt.h>
 #else
 #include <openssl/sha.h>

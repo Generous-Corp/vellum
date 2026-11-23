@@ -26,7 +26,8 @@ def main() -> None:
         assert "-DVELLUM_ENABLE_GRAPHICS=ON" in workflow
         assert "-DVELLUM_ENABLE_GPU=ON" in workflow
         assert f"backend: {backend}" in workflow
-    assert "vellum\\\\.rmlui\\\\.vellum-renderer" in workflow
+    assert "-R '^vellum\\.rmlui\\.vellum-renderer$' --no-tests=error" in workflow
+    assert "vellum\\\\.rmlui" not in workflow
 
 
 if __name__ == "__main__":

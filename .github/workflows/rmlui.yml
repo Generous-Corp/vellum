@@ -336,4 +336,4 @@ jobs:
         shell: bash
         run: |
           ctest --test-dir build-rmlui-gpu -C Release --output-on-failure \
-            -R '^vellum\\.rmlui\\.vellum-renderer$' --no-tests=error
+            -R '^vellum\.rmlui\.vellum-renderer$' --no-tests=error
