@@ -1,4 +1,5 @@
 import { normalizeSha256ContentHash } from './assets.js';
+import { normalizeImport } from './normalize.js';
 import { canonicalize } from './stable-json.js';
 
 export const FIGMA_PLUGIN_FORMAT = '2026.05-figma-plugin-v1';
@@ -115,7 +116,32 @@ export function decodeFigmaPluginExport(input, options = {}) {
     const pngAssets = new Map(assets.filter((asset) =>
         asset.mimeType === 'image/png' && asset.contentHash && asset.uri)
         .map((asset) => [asset.id, asset]));
-    const root = decodeNode(rootEnvelope, '$.root', diagnostics, pngAssets);
+    const { alternate_frames: alternateFrames, ...primaryFrame } = rootEnvelope;
+    const root = decodeNode(primaryFrame, '$.root', diagnostics, pngAssets);
+
+    if (alternateFrames !== undefined) {
+        if (!Array.isArray(alternateFrames) || alternateFrames.length === 0) {
+            throw new TypeError('$.root.alternate_frames must be a nonempty array');
+        }
+        root.extensions['dev.vellum.figma-plugin.states.v1'] = {
+            alternateFrames: alternateFrames.map((frame, index) => normalizeImport({
+                source: {
+                    adapter: 'figma-plugin',
+                    adapterVersion: provenance.version,
+                    formatVersion: FIGMA_PLUGIN_FORMAT,
+                    key: sourceKey, revision, snapshotHash,
+                },
+                root: decodeNode(frame, `$.root.alternate_frames[${index}]`, diagnostics, pngAssets),
+            }).root),
+        };
+        diagnostics.push({
+            code: 'figma-alternate-frames-preserved',
+            disposition: 'unsupported',
+            message: 'Alternate Figma frames are preserved in input order and require a state consumer',
+            path: '$.root.alternate_frames',
+            severity: 'warning',
+        });
+    }
 
     if (envelope.diagnostics !== undefined && !Array.isArray(envelope.diagnostics)) {
         throw new TypeError('$.diagnostics must be an array');
@@ -188,6 +214,9 @@ function decodeNode(value, path, diagnostics, pngAssets) {
     const node = object(value, path);
     const sourceKind = requiredString(node.type, `${path}.type`).toLowerCase();
     if (AUDIO_NODE_KINDS.has(sourceKind)) rejectAudio(path);
+    if (node.alternate_frames !== undefined) {
+        throw new TypeError(`${path}.alternate_frames is only allowed on the export root`);
+    }
     for (const field of AUDIO_NODE_FIELDS) {
         if (node[field] !== undefined) rejectAudio(`${path}.${field}`);
     }

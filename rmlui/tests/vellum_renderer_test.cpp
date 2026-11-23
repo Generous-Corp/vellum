@@ -154,8 +154,26 @@ void check_command_mapping(vellum::graphics::SkiaDawnSurface& surface) {
     command.transform_enabled = true;
     command.transform = {2.0f, 0.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f, 0.0f,
                          0.0f, 0.0f, 1.0f, 0.0f,  0.0f, 0.0f, 0.0f, 1.0f};
+    const auto before_raw = renderer.triangles_submitted();
     renderer.submit(command);
-    VELLUM_RMLUI_CHECK(renderer.triangles_submitted() == 2);
+    VELLUM_RMLUI_CHECK(renderer.triangles_submitted() - before_raw == 2);
+
+    // A loaded PNG is decoded by the Vellum GPU provider when the caller has
+    // not installed a custom decoder. This is the normal Backend path for
+    // <img> and image decorators.
+    auto loaded_image = command;
+    loaded_image.texture_path = "checker.png";
+    loaded_image.texture_bytes = std::make_shared<const std::string>(
+        test::read_binary(fixtures / "checker.png"));
+    loaded_image.texture_width = 16;
+    loaded_image.texture_height = 16;
+    const auto before_loaded = renderer.triangles_submitted();
+    renderer.submit(loaded_image);
+    VELLUM_RMLUI_CHECK(renderer.triangles_submitted() - before_loaded == 2);
+    VELLUM_RMLUI_CHECK(renderer.skipped_draws() == 0);
+    VELLUM_RMLUI_CHECK(renderer.scene().root.children.back().mesh->texture);
+    VELLUM_RMLUI_CHECK(renderer.scene().root.children.back().mesh->texture->width == 16);
+    VELLUM_RMLUI_CHECK(renderer.scene().root.children.back().mesh->texture->height == 16);
 
     auto projective = command;
     // w = 1 - 0.1 * x: the fourth vertex lands at x = 11 after translation,
@@ -167,8 +185,9 @@ void check_command_mapping(vellum::graphics::SkiaDawnSurface& surface) {
         {-10.0f, 1.0f, 0.0f, 0.0f, 0xffffffffu},
         {1.0f, 0.0f, 0.0f, 0.0f, 0xffffffffu},
     });
+    const auto before_projective = renderer.triangles_submitted();
     renderer.submit(projective);
-    VELLUM_RMLUI_CHECK(renderer.triangles_submitted() == 3);
+    VELLUM_RMLUI_CHECK(renderer.triangles_submitted() - before_projective == 1);
 
     auto image = command;
     image.texture_path = "missing.png";
@@ -176,7 +195,7 @@ void check_command_mapping(vellum::graphics::SkiaDawnSurface& surface) {
     VELLUM_RMLUI_CHECK(renderer.skipped_draws() == 1);
 
     const auto& nodes = renderer.scene().root.children;
-    VELLUM_RMLUI_CHECK(nodes.size() == 2);
+    VELLUM_RMLUI_CHECK(nodes.size() == 3);
     const auto& mesh = *nodes[0].mesh;
     VELLUM_RMLUI_CHECK(nodes[0].kind == vellum::graphics::SceneNode::Kind::mesh);
     VELLUM_RMLUI_CHECK(mesh.vertices.size() == 6 && mesh.indices.size() == 6);
@@ -190,9 +209,9 @@ void check_command_mapping(vellum::graphics::SkiaDawnSurface& surface) {
                            std::vector<std::uint8_t>(8, std::uint8_t{0x7f}));
     // The projective command keeps only its first triangle; the second uses
     // the vertex at x = 11, where w is negative.
-    VELLUM_RMLUI_CHECK(nodes[1].mesh->vertices.size() == 3);
+    VELLUM_RMLUI_CHECK(nodes[2].mesh->vertices.size() == 3);
     // A shared generated texture is converted once.
-    VELLUM_RMLUI_CHECK(nodes[1].mesh->texture == mesh.texture);
+    VELLUM_RMLUI_CHECK(nodes[2].mesh->texture == mesh.texture);
 
     // Detaching retains decoded textures for a short, clock-controlled grace
     // period so a quick reattach does not decode them again.
