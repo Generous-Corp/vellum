@@ -24,6 +24,9 @@ def main() -> None:
     assert "simctl launch" in wrapper and "exit 77" in wrapper
     # The negative control must prove the exit code AND the pixel message, not WILL_FAIL.
     assert "WILL_FAIL" not in cmake
+    # The metallib is copied from the configurable RmlUi build dir, never a hard-coded one.
+    assert "${CMAKE_BINARY_DIR}/rmlui/metal" not in cmake
+    assert cmake.count("${VELLUM_RMLUI_IOS_METAL_BUILD_DIR}/metal/vellum-rmlui-metal.metallib") == 4
     control = (CMAKE.parent / "run_ios_sim_negative_control.sh").read_text()
     assert "negative control: expected pixel 255, got" in control
     assert "run_ios_sim_negative_control.sh" in cmake

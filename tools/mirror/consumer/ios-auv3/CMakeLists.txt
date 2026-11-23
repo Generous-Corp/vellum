@@ -74,7 +74,7 @@ if(VELLUM_RMLUI_IOS_METAL_RUNTIME_TEST)
         "-framework CoreGraphics" "-framework ImageIO")
     add_custom_command(TARGET vellum-rmlui-metal-ios-runtime POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${CMAKE_BINARY_DIR}/rmlui/metal/vellum-rmlui-metal.metallib"
+            "${VELLUM_RMLUI_IOS_METAL_BUILD_DIR}/metal/vellum-rmlui-metal.metallib"
             "$<TARGET_FILE_DIR:vellum-rmlui-metal-ios-runtime>/vellum-rmlui-metal.metallib")
     add_custom_command(TARGET vellum-rmlui-metal-ios-runtime POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E make_directory
@@ -103,7 +103,7 @@ if(VELLUM_RMLUI_IOS_METAL_RUNTIME_TEST)
             "${vellum_root}/rmlui/tests/fixtures"
             "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime>/Resources/fixtures"
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${CMAKE_BINARY_DIR}/rmlui/metal/vellum-rmlui-metal.metallib"
+            "${VELLUM_RMLUI_IOS_METAL_BUILD_DIR}/metal/vellum-rmlui-metal.metallib"
             "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime>/Resources/vellum-rmlui-metal.metallib")
     # Device (iphoneos) bundles cannot run in a simulator: build-only there.
     if(_vellum_ios_sdk MATCHES "simulator")
@@ -139,7 +139,7 @@ if(VELLUM_RMLUI_IOS_METAL_NEGATIVE_CONTROL)
         "-framework CoreGraphics" "-framework ImageIO")
     add_custom_command(TARGET vellum-rmlui-metal-ios-runtime-control POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${CMAKE_BINARY_DIR}/rmlui/metal/vellum-rmlui-metal.metallib"
+            "${VELLUM_RMLUI_IOS_METAL_BUILD_DIR}/metal/vellum-rmlui-metal.metallib"
             "$<TARGET_FILE_DIR:vellum-rmlui-metal-ios-runtime-control>/vellum-rmlui-metal.metallib")
     add_custom_command(TARGET vellum-rmlui-metal-ios-runtime-control POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E make_directory
@@ -168,7 +168,7 @@ if(VELLUM_RMLUI_IOS_METAL_NEGATIVE_CONTROL)
             "${vellum_root}/rmlui/tests/fixtures"
             "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime-control>/Resources/fixtures"
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${CMAKE_BINARY_DIR}/rmlui/metal/vellum-rmlui-metal.metallib"
+            "${VELLUM_RMLUI_IOS_METAL_BUILD_DIR}/metal/vellum-rmlui-metal.metallib"
             "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime-control>/Resources/vellum-rmlui-metal.metallib")
     if(_vellum_ios_sdk MATCHES "simulator")
     # Passes only when the app exits 1 AND prints the pixel-check message, so
