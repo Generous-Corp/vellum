@@ -163,8 +163,35 @@ class ImportBackendTests(unittest.TestCase):
                 self.assertTrue(output.is_file())
             materialized = root / "runtime"
             completed = invoke("import", "jsx", str(jsx), "--mode", "live", "--emit", "materialized-runtime", "--source-out", str(materialized), cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("raw JSX is not compiled", completed.stdout)
+            self.assertFalse(materialized.exists())
+            doc = root / "doc.json"
+            doc.write_text(json.dumps({"schema": "pulp-materialized-browser-document-v1", "html": "<div>ok</div>"}), encoding="utf-8")
+            completed = invoke("import", "jsx", str(doc), "--mode", "live", "--emit", "materialized-runtime", "--source-out", str(materialized), cwd=root)
             self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
             self.assertTrue((materialized / "src/MaterializedDocument.tsx").is_file())
+            bad_utf8 = root / "bad.jsx"
+            bad_utf8.write_bytes(b"\xff\xfe export")
+            completed = invoke("import", "jsx", str(bad_utf8), "--mode", "baked", "--emit", "ir-json", "--out", str(root / "o.json"), cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertNotIn("Traceback", completed.stderr)
+            self.assertIn("valid UTF-8", completed.stdout)
+            directory_out = root / "adir"
+            directory_out.mkdir()
+            completed = invoke("import", "jsx", str(jsx), "--mode", "live", "--emit", "js", "--out", str(directory_out), cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertNotIn("Traceback", completed.stderr)
+            dangling = root / "dangling.js"
+            dangling.symlink_to(root / "nowhere")
+            completed = invoke("import", "jsx", str(jsx), "--mode", "live", "--emit", "js", "--out", str(dangling), cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("symlink", completed.stdout)
+            bad_side = root / "badside.json"
+            bad_side.write_bytes(b"\xff\xfe")
+            completed = invoke("import", "preconverted-svg", str(svg), "--manifest", str(bad_side), "--validate-only", cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertNotIn("Traceback", completed.stderr)
             completed = invoke("import", "preconverted-svg", str(svg), "--manifest", str(manifest), "--validate-only", cwd=root)
             self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
             bad = json.loads(manifest.read_text())
