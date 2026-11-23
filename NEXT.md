@@ -36,3 +36,11 @@ The required contract test was added before the implementation and failed on the
 CMake Error at tools/android/test_android_gpu_surface.cmake:14 (message):
   android-gpu-surface: missing framework/core/render/platform/android/android_gpu_surface.hpp
 ```
+
+The fix control was run after commit 504dcff98 by reverting only that commit without committing. The contract failed again with:
+
+```text
+android-gpu-surface: missing framework/core/render/platform/android/android_gpu_surface.hpp
+```
+
+The implementation was restored with `git reset --hard 504dcff98`.
