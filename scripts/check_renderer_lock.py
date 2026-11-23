@@ -41,6 +41,11 @@ def digests_in(text: str) -> set[str]:
     return {match.lower() for match in ANY_HEX_64.findall(text)}
 HEX_40 = re.compile(r"^[0-9a-f]{40}$")
 MILESTONE = re.compile(r"\bchrome/m[0-9]+\b")
+# A platform row's release: the lock's milestone, or an attested release of it.
+RELEASE = re.compile(r"chrome/m([0-9]+)(-attested\.[0-9]+)?")
+# The libraries cmake/VellumSkiaDawn.cmake links, by stem.
+REQUIRED_LIBRARIES = ("skia", "dawn_combined", "svg", "skresources", "skshaper",
+                      "skparagraph", "skunicode_core", "skunicode_icu")
 
 # Build inputs that must read the lock rather than restate it.
 READERS = {
@@ -75,15 +80,81 @@ def load_lock(root: Path, problems: list[str]) -> dict | None:
                          ("sources.dawn", sources.get("dawn"))):
         if not isinstance(value, str) or not HEX_40.fullmatch(value):
             problems.append(f"{LOCK}: {label} is not a 40-character commit")
-    platform = (lock.get("platforms") or {}).get(PLATFORM)
-    if not isinstance(platform, dict):
+    platforms = lock.get("platforms") or {}
+    if not isinstance(platforms.get(PLATFORM), dict):
         problems.append(f"{LOCK}: platform {PLATFORM} is missing")
         return None
-    digests = [platform.get("sha256"), *(platform.get("archives") or {}).values()]
-    if not platform.get("archives") or any(
-            not isinstance(value, str) or not HEX_64.fullmatch(value) for value in digests):
-        problems.append(f"{LOCK}: {PLATFORM} digests are missing or malformed")
+    seen: dict[str, str] = {}
+    seen_assets: dict[str, str] = {}
+    for key, platform in platforms.items():
+        if not isinstance(platform, dict):
+            problems.append(f"{LOCK}: platform {key} is not an object")
+            continue
+        check_platform_row(key, platform, lock.get("milestone"), seen, seen_assets, problems)
     return None if problems else lock
+
+
+def check_release(key: str, platform: dict, milestone: object, problems: list[str]) -> None:
+    """The release rules gpu-runtime/cmake/GpuRuntimeRendererLock.cmake enforces too.
+
+    A row's release is of the lock's milestone. macos-arm64 may omit it or repeat
+    the milestone (the tag the macOS records are checked against); every other
+    platform must name an attested release, never a mutable chrome/mNNN tag.
+    """
+    release = platform.get("release")
+    if key == PLATFORM:
+        # Absent is fine; an explicit null (or any non-string) is malformed, as in
+        # the CMake reader.
+        if "release" in platform and release != milestone:
+            problems.append(f"{LOCK}: {key} release is {release!r}, expected {milestone!r}")
+        return
+    found = RELEASE.fullmatch(release) if isinstance(release, str) else None
+    if not found or not found.group(2):
+        problems.append(f"{LOCK}: {key} release is not chrome/mNNN-attested.N")
+    elif isinstance(milestone, str) and f"chrome/m{found.group(1)}" != milestone:
+        problems.append(f"{LOCK}: {key} release {release} is not of milestone {milestone}")
+
+
+def check_platform_row(key: str, platform: dict, milestone: object, seen: dict[str, str],
+                       seen_assets: dict[str, str], problems: list[str]) -> None:
+    archives = platform.get("archives")
+    if not isinstance(archives, dict) or not archives:
+        problems.append(f"{LOCK}: {key} lists no archives")
+        archives = {}
+    labelled = [(f"{key} asset", platform.get("sha256")),
+                *((f"{key} {name}", value) for name, value in archives.items())]
+    for label, value in labelled:
+        if not isinstance(value, str) or not HEX_64.fullmatch(value):
+            problems.append(f"{LOCK}: {label} digest is missing or malformed")
+        elif not value.strip("0"):
+            problems.append(f"{LOCK}: {label} digest is an all-zero placeholder")
+        elif value in seen:
+            problems.append(f"{LOCK}: {label} digest repeats {seen[value]}")
+        else:
+            seen[value] = label
+    check_release(key, platform, milestone, problems)
+    if platform.get("configuration") != "Release":
+        problems.append(f"{LOCK}: {key} configuration is {platform.get('configuration')!r}, "
+                        "expected 'Release'")
+    if key != PLATFORM:
+        if not isinstance(platform.get("builder_commit"), str) or \
+                not HEX_40.fullmatch(platform["builder_commit"]):
+            problems.append(f"{LOCK}: {key} builder_commit is not a 40-character commit")
+    asset = platform.get("asset")
+    if not isinstance(asset, str) or not re.fullmatch(r"skia-build-[a-z0-9_.-]+-gpu-release\.zip", asset):
+        problems.append(f"{LOCK}: {key} asset name is not a skia-builder GPU release zip")
+    elif asset in seen_assets:
+        problems.append(f"{LOCK}: {key} asset {asset} repeats {seen_assets[asset]}")
+    else:
+        seen_assets[asset] = key
+    root = platform.get("archive_root")
+    if not isinstance(root, str) or not re.fullmatch(r"build/[A-Za-z0-9_./-]+", root) or ".." in root:
+        problems.append(f"{LOCK}: {key} archive_root is not a build/ relative path")
+    suffix = ".lib" if key.startswith("windows-") else ".a"
+    for library in REQUIRED_LIBRARIES:
+        name = f"{library}.lib" if suffix == ".lib" else f"lib{library}.a"
+        if archives and name not in archives:
+            problems.append(f"{LOCK}: {key} does not lock {name}")
 
 
 def asset_url(lock: dict) -> str:
@@ -93,8 +164,8 @@ def asset_url(lock: dict) -> str:
 
 
 def locked_digests(lock: dict) -> set[str]:
-    platform = lock["platforms"][PLATFORM]
-    return {platform["sha256"], *platform["archives"].values()}
+    return {digest for platform in lock["platforms"].values()
+            for digest in (platform["sha256"], *platform["archives"].values())}
 
 
 def check_readers(root: Path, lock: dict, problems: list[str]) -> None:
@@ -110,8 +181,19 @@ def check_readers(root: Path, lock: dict, problems: list[str]) -> None:
 
 def check_cmake_names(root: Path, lock: dict, problems: list[str]) -> None:
     text = (root / "cmake/VellumSkiaDawn.cmake").read_text(encoding="utf-8")
-    archives = lock["platforms"][PLATFORM]["archives"]
-    for name in sorted(set(re.findall(r"_vellum_renderer_SHA256_(lib[A-Za-z0-9_]+\.a)", text))):
+    archives = {name for row in lock["platforms"].values() for name in row["archives"]}
+    # Libraries are named directly (_vellum_renderer_SHA256_libfoo.a) or through a
+    # per-library name variable (set(_vellum_foo_name "libfoo.a")); read both.
+    direct = re.findall(r"_vellum_renderer_SHA256_(lib[A-Za-z0-9_]+\.a)", text)
+    named = re.findall(r'set\(_vellum_[a-z0-9_]+_name\s+"(lib[A-Za-z0-9_]+\.a)"\)', text)
+    # Windows names are the stem plus the archive suffix variable
+    # (set(_vellum_foo_name "foo${_vellum_archive_suffix}")) or a literal foo.lib.
+    stems = re.findall(r'set\(_vellum_[a-z0-9_]+_name\s+"([A-Za-z0-9_]+)\$\{_vellum_archive_suffix\}"\)', text)
+    windows = [f"{stem}.lib" for stem in stems] + re.findall(r'"([A-Za-z0-9_]+\.lib)"', text)
+    # Until the lock holds a Windows row there is nothing to compare them with.
+    if not any(key.startswith("windows-") for key in lock["platforms"]):
+        windows = []
+    for name in sorted(set(direct) | set(named) | set(windows)):
         if name not in archives:
             problems.append(f"cmake/VellumSkiaDawn.cmake: reads {name}, which the lock does not lock")
 

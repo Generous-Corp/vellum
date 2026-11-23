@@ -60,9 +60,15 @@ function(gpu_runtime_find_dawn)
         list(APPEND _lock_args LOCK "${ARG_LOCK}")
     endif()
     gpu_runtime_read_renderer_lock(${_lock_args})
-    set(_expected "${_gr_SHA256_libdawn_combined.a}")
+    if(ARG_PLATFORM MATCHES "^windows-")
+        set(_dawn_name "dawn_combined.lib")
+    else()
+        set(_dawn_name "libdawn_combined.a")
+    endif()
+    set(_expected "${_gr_SHA256_${_dawn_name}}")
     string(REGEX REPLACE "^chrome/m" "" _milestone "${_gr_MILESTONE}")
     set(GPU_RUNTIME_SKIA_MILESTONE "${_milestone}" PARENT_SCOPE)
+    set(GPU_RUNTIME_SKIA_RELEASE "${_gr_RELEASE}" PARENT_SCOPE)
 
     if(TARGET VellumGpuRuntime::Dawn)
         get_target_property(_recorded VellumGpuRuntime::Dawn GPU_RUNTIME_DAWN_SHA256)
@@ -115,12 +121,12 @@ function(gpu_runtime_find_dawn)
     endif()
 
     set(_include "${_dir}/build/include")
-    set(_library "${_dir}/${_gr_ARCHIVE_ROOT}/libdawn_combined.a")
+    set(_library "${_dir}/${_gr_ARCHIVE_ROOT}/${_dawn_name}")
     if(NOT EXISTS "${_include}/third_party/externals/dawn/include/dawn/native/DawnNative.h" OR
        NOT EXISTS "${_include}/dawn/dawn_proc_table.h")
         message(FATAL_ERROR
             "gpu-runtime: ${_dir} does not hold the locked Dawn headers and "
-            "${_gr_ARCHIVE_ROOT}/libdawn_combined.a")
+            "${_gr_ARCHIVE_ROOT}/${_dawn_name}")
     endif()
     _gpu_runtime_check_dawn_library("${_library}" "${_expected}")
     _gpu_runtime_define_dawn("${_library}"

@@ -100,12 +100,22 @@ target_compile_definitions(gpu-runtime-bootstrap PRIVATE
     GPU_RUNTIME_VERSION="${PROJECT_VERSION}")
 target_link_libraries(gpu-runtime-bootstrap PUBLIC VellumGpuRuntime::DeviceApi)
 
-if(APPLE)
-    set(_gpu_runtime_platform macos-arm64)
-else()
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/VellumSkiaDawnPlatform.cmake")
+vellum_skia_dawn_platform_key("${CMAKE_SYSTEM_NAME}" "${CMAKE_SYSTEM_PROCESSOR}"
+    "${ANDROID_ABI}" _gpu_runtime_platform QUIET)
+gpu_runtime_renderer_lock_has_platform("${_gpu_runtime_platform}" _gpu_runtime_platform_locked)
+if(NOT _gpu_runtime_platform_locked)
     set(_gpu_runtime_platform "")
 endif()
 set(GPU_RUNTIME_HAS_DEVICE OFF)
+# The installed package config checks the shipped Dawn library against this
+# platform's row of the lock, under this file name.
+set(GPU_RUNTIME_PLATFORM "${_gpu_runtime_platform}")
+if(_gpu_runtime_platform MATCHES "^windows-")
+    set(GPU_RUNTIME_DAWN_FILE "dawn_combined.lib")
+else()
+    set(GPU_RUNTIME_DAWN_FILE "libdawn_combined.a")
+endif()
 if(_gpu_runtime_platform)
     include("${CMAKE_CURRENT_LIST_DIR}/cmake/GpuRuntimeDawn.cmake")
     set(_gpu_runtime_dawn_args PLATFORM ${_gpu_runtime_platform}
@@ -116,7 +126,8 @@ if(_gpu_runtime_platform)
     gpu_runtime_find_dawn(${_gpu_runtime_dawn_args})
     set(GPU_RUNTIME_HAS_DEVICE ${GPU_RUNTIME_HAS_DAWN})
 elseif(GPU_RUNTIME_REQUIRE_DEVICE)
-    message(FATAL_ERROR "gpu-runtime: no locked Dawn platform for this target")
+    message(FATAL_ERROR "gpu-runtime: the locked device library is unavailable for "
+        "${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR}/${ANDROID_ABI}")
 endif()
 
 if(GPU_RUNTIME_HAS_DEVICE)
