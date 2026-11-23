@@ -107,7 +107,8 @@ if(VELLUM_RMLUI_IOS_METAL_RUNTIME_TEST)
             "${CMAKE_BINARY_DIR}/rmlui/metal/vellum-rmlui-metal.metallib"
             "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime>/Resources/vellum-rmlui-metal.metallib")
     add_test(NAME vellum.rmlui.metal-ios-runtime
-        COMMAND "$<TARGET_FILE:vellum-rmlui-metal-ios-runtime>"
+        COMMAND /bin/sh "${CMAKE_CURRENT_LIST_DIR}/run_ios_sim.sh"
+            "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime>"
             "${_vellum_rmlui_rmlui_src}" "${vellum_root}/rmlui/tests/fixtures")
     set_tests_properties(vellum.rmlui.metal-ios-runtime PROPERTIES SKIP_RETURN_CODE 77)
     add_dependencies(vellum-rmlui-metal-ios-compile vellum-rmlui-metal-ios-runtime)

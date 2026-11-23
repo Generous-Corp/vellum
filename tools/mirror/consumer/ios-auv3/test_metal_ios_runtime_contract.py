@@ -15,9 +15,14 @@ def main() -> None:
     runtime_block = cmake[cmake.index("if(VELLUM_RMLUI_IOS_METAL_RUNTIME_TEST)"):]
     assert '"${_vellum_rmlui_rmlui_src}"' in runtime_block
     assert '"${vellum_root}/rmlui" "${vellum_root}/rmlui/tests/fixtures"' not in runtime_block
+    # The runtime test must go through the simulator wrapper, never a bare iOS binary.
+    assert "run_ios_sim.sh" in runtime_block
+    assert (CMAKE.parent / "run_ios_sim.sh").is_file()
+    wrapper = (CMAKE.parent / "run_ios_sim.sh").read_text()
+    assert "simctl launch" in wrapper and "exit 77" in wrapper
     for marker in (
         "progress: Metal device",
-        "progress: context created",
+        "progress: Native context constructed",
         "progress: document loaded",
         "progress: render",
         "progress: readback",
