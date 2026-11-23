@@ -26,6 +26,10 @@ add_test(NAME vellum.rmlui.metal-ios-compile
     COMMAND "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}"
         --target vellum-rmlui-metal-ios-compile)
 
+add_test(NAME vellum.rmlui.metal-ios-runtime
+    COMMAND "${CMAKE_BINARY_DIR}/vellum-rmlui-metal-ios-runtime"
+        "${vellum_root}/rmlui" "${vellum_root}/rmlui/tests/fixtures")
+
 set(_metal_ios_test_sources
     "${vellum_root}/rmlui/tests/metal/metal_effects_test.cpp"
     "${vellum_root}/rmlui/tests/metal/metal_image_decode_test.mm"
