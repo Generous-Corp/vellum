@@ -55,8 +55,8 @@ if(VELLUM_HAS_SKIA_DAWN)
     target_sources(vellum-skia-dawn-provider PRIVATE
         src/dawn_bootstrap.cpp
         src/frame_trace.cpp
-        src/image_decode.mm
-        src/skia_dawn_surface.mm
+        src/image_decode.cpp
+        src/skia_dawn_surface.cpp
         src/text_paragraph.cpp)
     target_include_directories(vellum-skia-dawn-provider PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -78,18 +78,25 @@ if(VELLUM_HAS_SKIA_DAWN)
     # linked statically with hidden symbols, so this provider is its only copy.
     target_link_libraries(vellum-skia-dawn-provider PRIVATE
         "$<LINK_LIBRARY:WHOLE_ARCHIVE,VellumGpuRuntime::DeviceProvider>")
+    if(WIN32)
+        target_link_libraries(vellum-skia-dawn-provider PRIVATE bcrypt)
+    elseif(NOT APPLE)
+        find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+        target_link_libraries(vellum-skia-dawn-provider PRIVATE OpenSSL::Crypto)
+    endif()
 
     # Preserve the Vellum::Gpu binary identity for existing consumers. It is a
     # forwarding frontend; all GPU implementation symbols live in the group.
     add_library(vellum-gpu SHARED src/gpu_frontend_anchor.cpp)
     add_library(Vellum::Gpu ALIAS vellum-gpu)
 
-    set_target_properties(vellum-gpu PROPERTIES
-        EXPORT_NAME Gpu
-        MACOSX_RPATH ON
-        INSTALL_RPATH "@loader_path"
-        OSX_ARCHITECTURES arm64
-        MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
+    set_target_properties(vellum-gpu PROPERTIES EXPORT_NAME Gpu)
+    if(APPLE)
+        set_target_properties(vellum-gpu PROPERTIES
+            MACOSX_RPATH ON INSTALL_RPATH "@loader_path"
+            OSX_ARCHITECTURES arm64
+            MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
+    endif()
 
     target_include_directories(vellum-gpu
         PUBLIC
@@ -103,8 +110,10 @@ if(VELLUM_HAS_SKIA_DAWN)
         PUBLIC Vellum::Graphics Vellum::SkiaDawnProvider)
     # Preserve the legacy direct-link ABI while the provider remains the sole
     # owner of the GPU implementation symbols.
-    target_link_options(vellum-gpu PRIVATE
-        "LINKER:-reexport_library,$<TARGET_FILE:vellum-skia-dawn-provider>")
+    if(APPLE)
+        target_link_options(vellum-gpu PRIVATE
+            "LINKER:-reexport_library,$<TARGET_FILE:vellum-skia-dawn-provider>")
+    endif()
     add_custom_command(TARGET vellum-gpu POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E make_directory
             "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_DATADIR}/vellum/fonts"

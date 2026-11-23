@@ -1,7 +1,13 @@
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
+#if defined(__APPLE__)
 #include <CommonCrypto/CommonDigest.h>
+#elif defined(_WIN32)
+#include <bcrypt.h>
+#else
+#include <openssl/sha.h>
+#endif
 
 #include "include/codec/SkCodec.h"
 #include "include/codec/SkPngDecoder.h"
@@ -13,6 +19,7 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace vellum::graphics {
 namespace {
@@ -22,6 +29,7 @@ void set_error(std::string* error, std::string message) {
 }
 
 std::string content_hash_of(std::span<const std::uint8_t> bytes) {
+#if defined(__APPLE__)
     CC_SHA256_CTX context;
     CC_SHA256_Init(&context);
     constexpr std::size_t chunk = std::numeric_limits<CC_LONG>::max() / 2U;
@@ -31,6 +39,36 @@ std::string content_hash_of(std::span<const std::uint8_t> bytes) {
     }
     std::array<unsigned char, CC_SHA256_DIGEST_LENGTH> digest{};
     CC_SHA256_Final(digest.data(), &context);
+#elif defined(_WIN32)
+    std::vector<unsigned char> object;
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    DWORD object_size = 0;
+    DWORD result_size = 0;
+    if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) != 0 ||
+        BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH,
+                          reinterpret_cast<PUCHAR>(&object_size), sizeof object_size,
+                          &result_size, 0) != 0 ||
+        (object.resize(object_size), BCryptCreateHash(algorithm, &hash, object.data(),
+                                                      object_size, nullptr, 0, 0) != 0) ||
+        BCryptHashData(hash, const_cast<PUCHAR>(bytes.data()),
+                       static_cast<ULONG>(bytes.size()), 0) != 0) {
+        if (hash) BCryptDestroyHash(hash);
+        if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
+        return {};
+    }
+    std::array<unsigned char, 32> digest{};
+    const auto status = BCryptFinishHash(hash, digest.data(), digest.size(), 0);
+    BCryptDestroyHash(hash);
+    BCryptCloseAlgorithmProvider(algorithm, 0);
+    if (status != 0) return {};
+#else
+    SHA256_CTX context;
+    SHA256_Init(&context);
+    SHA256_Update(&context, bytes.data(), bytes.size());
+    std::array<unsigned char, SHA256_DIGEST_LENGTH> digest{};
+    SHA256_Final(digest.data(), &context);
+#endif
     std::string hash = "sha256:";
     char hex[3];
     for (const auto byte : digest) {

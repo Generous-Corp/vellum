@@ -267,3 +267,72 @@ jobs:
         run: |
           ctest --test-dir build-rmlui-cpu -C Release --output-on-failure \
             -R '^vellum\.rmlui\.(cpu-(render|hash)|idle-update|settings(-bridge)?)$' --no-tests=error
+
+  rmlui-gpu:
+    # scripts/test_rmlui_gpu_platforms.py checks this platform proof.
+    name: rmlui GPU (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            platform: linux-x64
+            runs_on: ${{ vars.VELLUM_LINUX_RUNS_ON_JSON || '["ubuntu-latest"]' }}
+            backend: vulkan
+          - name: Windows
+            platform: windows-x64
+            runs_on: '["windows-2022"]'
+            backend: d3d12
+    runs-on: ${{ fromJSON(matrix.runs_on) }}
+    timeout-minutes: 60
+    env:
+      VELLUM_GPU_SOFTWARE: '1'
+      VELLUM_GPU_BACKEND: ${{ matrix.backend }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Download and verify the locked Skia/Dawn archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          read -r repository milestone asset sha256 <<EOF
+          $(python3 - <<'PY'
+          import json
+          lock = json.load(open('gpu-runtime/renderer-lock.json'))
+          row = lock['platforms']["${{ matrix.platform }}"]
+          print(lock['builder']['repository'], lock['milestone'], row['asset'], row['sha256'])
+          PY
+          )
+          EOF
+          url="$repository/releases/download/$milestone/$asset"
+          curl --fail --location --retry 8 --retry-all-errors "$url" --output "$RUNNER_TEMP/$asset"
+          printf '%s  %s\n' "$sha256" "$RUNNER_TEMP/$asset" | shasum -a 256 -c -
+          printf 'VELLUM_SKIA_ARCHIVE=%s\n' "$RUNNER_TEMP/$asset" >> "$GITHUB_ENV"
+
+      - name: Configure the Vellum RmlUi GPU renderer
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-rmlui-gpu \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVELLUM_BUILD_TESTS=ON \
+            -DVELLUM_REQUIRE_GPU=ON \
+            -DVELLUM_SKIA_ARCHIVE="$VELLUM_SKIA_ARCHIVE" \
+            -DVELLUM_ENABLE_GRAPHICS=ON \
+            -DVELLUM_ENABLE_GPU=ON \
+            -DVELLUM_ENABLE_RMLUI=ON \
+            -DVELLUM_RMLUI_BUILD_TESTS=ON \
+            -DVELLUM_RMLUI_VELLUM_RENDERER=ON \
+            -DVELLUM_RMLUI_CPU=ON
+
+      - name: Build the Vellum RmlUi GPU test
+        shell: bash
+        run: cmake --build build-rmlui-gpu --config Release --target vellum-rmlui-vellum-renderer-test --parallel 4
+
+      - name: Run the Vellum RmlUi GPU renderer on the software adapter
+        shell: bash
+        run: ctest --test-dir build-rmlui-gpu -C Release --output-on-failure \
+          -R '^vellum\\.rmlui\\.vellum-renderer$' --no-tests=error

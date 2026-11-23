@@ -21,12 +21,12 @@ def main() -> None:
 
     workflow = (ROOT / ".github/workflows/rmlui.yml").read_text(encoding="utf-8")
     for platform, backend in (("Linux", "vulkan"), ("Windows", "d3d12")):
-        assert f"rmlui GPU ({platform})" in workflow
+        assert f"name: {platform}" in workflow
         assert "-DVELLUM_RMLUI_VELLUM_RENDERER=ON" in workflow
         assert "-DVELLUM_ENABLE_GRAPHICS=ON" in workflow
         assert "-DVELLUM_ENABLE_GPU=ON" in workflow
-        assert f"backend_preference={backend}" in workflow
-    assert "vellum.rmlui.vellum-renderer" in workflow
+        assert f"backend: {backend}" in workflow
+    assert "vellum\\\\.rmlui\\\\.vellum-renderer" in workflow
 
 
 if __name__ == "__main__":

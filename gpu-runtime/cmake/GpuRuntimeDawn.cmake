@@ -112,7 +112,11 @@ function(gpu_runtime_find_dawn)
     endif()
 
     set(_include "${_dir}/build/include")
-    set(_library "${_dir}/${_gr_ARCHIVE_ROOT}/libdawn_combined.a")
+    if(WIN32)
+        set(_library "${_dir}/${_gr_ARCHIVE_ROOT}/dawn_combined.lib")
+    else()
+        set(_library "${_dir}/${_gr_ARCHIVE_ROOT}/libdawn_combined.a")
+    endif()
     if(NOT EXISTS "${_include}/third_party/externals/dawn/include/dawn/native/DawnNative.h" OR
        NOT EXISTS "${_include}/dawn/dawn_proc_table.h")
         message(FATAL_ERROR

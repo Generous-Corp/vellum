@@ -1,12 +1,19 @@
 set(VELLUM_SKIA_ARCHIVE "" CACHE FILEPATH
-    "Path to the pinned macOS universal Skia/Dawn release archive")
+    "Path to the pinned platform Skia/Dawn release archive")
 set(VELLUM_SKIA_DIR "" CACHE PATH
     "Development-only path to the extracted pinned Skia/Dawn archive")
 
 # The pin is read from gpu-runtime/renderer-lock.json, the only place the
 # milestone and the skia-builder digests are written.
 include("${CMAKE_CURRENT_LIST_DIR}/../gpu-runtime/cmake/GpuRuntimeRendererLock.cmake")
-gpu_runtime_read_renderer_lock(PLATFORM macos-arm64 PREFIX _vellum_renderer)
+if(APPLE)
+    set(VELLUM_SKIA_PLATFORM macos-arm64)
+elseif(WIN32)
+    set(VELLUM_SKIA_PLATFORM windows-x64)
+else()
+    set(VELLUM_SKIA_PLATFORM linux-x64)
+endif()
+gpu_runtime_read_renderer_lock(PLATFORM ${VELLUM_SKIA_PLATFORM} PREFIX _vellum_renderer)
 set(_vellum_expected_archive_sha256 "${_vellum_renderer_SHA256}")
 foreach(_vellum_locked IN ITEMS
         skia dawn_combined svg skresources skshaper skparagraph
@@ -45,26 +52,18 @@ if(VELLUM_SKIA_ARCHIVE)
 endif()
 
 set(VELLUM_HAS_SKIA_DAWN OFF)
-if(NOT APPLE)
-    if(VELLUM_REQUIRE_GPU)
-        message(FATAL_ERROR
-            "Vellum: the initial required GPU host is currently macOS-only")
-    endif()
-    return()
-endif()
-
-if(CMAKE_OSX_ARCHITECTURES AND
+if(APPLE AND CMAKE_OSX_ARCHITECTURES AND
    NOT CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
     message(FATAL_ERROR
         "Vellum: the locked first GPU artifact supports only macOS arm64; "
         "requested CMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}")
 endif()
-if(NOT CMAKE_OSX_ARCHITECTURES AND
+if(APPLE AND NOT CMAKE_OSX_ARCHITECTURES AND
    NOT CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
     message(FATAL_ERROR
         "Vellum: the locked first GPU artifact supports only macOS arm64")
 endif()
-if(CMAKE_OSX_DEPLOYMENT_TARGET AND
+if(APPLE AND CMAKE_OSX_DEPLOYMENT_TARGET AND
    CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS VELLUM_MACOS_DEPLOYMENT_TARGET)
     message(FATAL_ERROR
         "Vellum: the GPU artifact requires macOS ${VELLUM_MACOS_DEPLOYMENT_TARGET} or newer")
@@ -80,26 +79,35 @@ endif()
 
 set(_vellum_skia_include "${VELLUM_SKIA_DIR}/build/include")
 set(_vellum_skia_release_dir "${VELLUM_SKIA_DIR}/${_vellum_renderer_ARCHIVE_ROOT}")
+if(WIN32)
+    set(_vellum_library_suffix lib)
+    set(_vellum_library_prefix "")
+else()
+    set(_vellum_library_suffix a)
+    set(_vellum_library_prefix lib)
+endif()
+set(_vellum_skia_name "${_vellum_library_prefix}skia.${_vellum_library_suffix}")
+set(_vellum_dawn_name "${_vellum_library_prefix}dawn_combined.${_vellum_library_suffix}")
 set(_vellum_skia_libdir "")
 foreach(_vellum_candidate IN ITEMS
         "${_vellum_skia_release_dir}"
         "${_vellum_skia_release_dir}/${CMAKE_SYSTEM_PROCESSOR}"
         "${_vellum_skia_release_dir}/arm64"
         "${_vellum_skia_release_dir}/x86_64")
-    if(EXISTS "${_vellum_candidate}/libskia.a" AND
-       EXISTS "${_vellum_candidate}/libdawn_combined.a")
+    if(EXISTS "${_vellum_candidate}/${_vellum_skia_name}" AND
+       EXISTS "${_vellum_candidate}/${_vellum_dawn_name}")
         set(_vellum_skia_libdir "${_vellum_candidate}")
         break()
     endif()
 endforeach()
-set(_vellum_skia_core "${_vellum_skia_libdir}/libskia.a")
-set(_vellum_dawn_core "${_vellum_skia_libdir}/libdawn_combined.a")
-set(_vellum_svg "${_vellum_skia_libdir}/libsvg.a")
-set(_vellum_skresources "${_vellum_skia_libdir}/libskresources.a")
-set(_vellum_skshaper "${_vellum_skia_libdir}/libskshaper.a")
-set(_vellum_skparagraph "${_vellum_skia_libdir}/libskparagraph.a")
-set(_vellum_skunicode_core "${_vellum_skia_libdir}/libskunicode_core.a")
-set(_vellum_skunicode_icu "${_vellum_skia_libdir}/libskunicode_icu.a")
+set(_vellum_skia_core "${_vellum_skia_libdir}/${_vellum_skia_name}")
+set(_vellum_dawn_core "${_vellum_skia_libdir}/${_vellum_dawn_name}")
+set(_vellum_svg "${_vellum_skia_libdir}/${_vellum_library_prefix}svg.${_vellum_library_suffix}")
+set(_vellum_skresources "${_vellum_skia_libdir}/${_vellum_library_prefix}skresources.${_vellum_library_suffix}")
+set(_vellum_skshaper "${_vellum_skia_libdir}/${_vellum_library_prefix}skshaper.${_vellum_library_suffix}")
+set(_vellum_skparagraph "${_vellum_skia_libdir}/${_vellum_library_prefix}skparagraph.${_vellum_library_suffix}")
+set(_vellum_skunicode_core "${_vellum_skia_libdir}/${_vellum_library_prefix}skunicode_core.${_vellum_library_suffix}")
+set(_vellum_skunicode_icu "${_vellum_skia_libdir}/${_vellum_library_prefix}skunicode_icu.${_vellum_library_suffix}")
 
 if(NOT _vellum_skia_libdir OR
    NOT EXISTS "${_vellum_skia_core}" OR
@@ -171,8 +179,10 @@ add_library(vellum-skia-dawn-provider SHARED
     "${CMAKE_CURRENT_LIST_DIR}/skia_dawn_provider.cpp")
 add_library(Vellum::SkiaDawnProvider ALIAS vellum-skia-dawn-provider)
 set(_vellum_provider_exports "${CMAKE_CURRENT_LIST_DIR}/skia_dawn_provider.exports")
-target_link_options(vellum-skia-dawn-provider PRIVATE
-    "LINKER:-exported_symbols_list,${_vellum_provider_exports}")
+if(APPLE)
+    target_link_options(vellum-skia-dawn-provider PRIVATE
+        "LINKER:-exported_symbols_list,${_vellum_provider_exports}")
+endif()
 set_property(TARGET vellum-skia-dawn-provider APPEND PROPERTY LINK_DEPENDS
     "${_vellum_provider_exports}")
 file(RELATIVE_PATH _vellum_provider_to_mirror_lib
@@ -187,9 +197,12 @@ set_target_properties(vellum-skia-dawn-provider PROPERTIES
     EXPORT_NAME SkiaDawnProvider
     MACOSX_RPATH ON
     INSTALL_RPATH "${_vellum_provider_install_rpath}"
-    OSX_ARCHITECTURES arm64
-    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
     INTERFACE_VELLUM_SKIA_DAWN_PROVIDER vellum-skia-dawn-provider)
+if(APPLE)
+    set_target_properties(vellum-skia-dawn-provider PROPERTIES
+        OSX_ARCHITECTURES arm64
+        MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
+endif()
 set_property(TARGET vellum-skia-dawn-provider APPEND PROPERTY
     COMPATIBLE_INTERFACE_STRING VELLUM_SKIA_DAWN_PROVIDER)
 target_include_directories(vellum-skia-dawn-provider PUBLIC
@@ -215,19 +228,18 @@ target_link_libraries(vellum-skia-dawn-provider PRIVATE
     # libsvg.a bundles copies of Skia/resource objects. Its factory anchor
     # selects SVG objects normally, resolving dependencies through the owners
     # above instead of force-loading the embedded duplicate implementations.
-    "${_vellum_svg}"
-    "-framework ImageIO"
-    "-framework Cocoa"
-    "-framework CoreFoundation"
-    "-framework CoreGraphics"
-    "-framework CoreText"
-    "-framework Foundation"
-    "-framework IOKit"
-    "-framework IOSurface"
-    "-framework Metal"
-    "-framework MetalKit"
-    "-framework QuartzCore"
-    objc)
+    "${_vellum_svg}")
+if(APPLE)
+    target_link_libraries(vellum-skia-dawn-provider PRIVATE
+        "-framework ImageIO" "-framework Cocoa" "-framework CoreFoundation"
+        "-framework CoreGraphics" "-framework CoreText" "-framework Foundation"
+        "-framework IOKit" "-framework IOSurface" "-framework Metal"
+        "-framework MetalKit" "-framework QuartzCore" objc)
+elseif(WIN32)
+    target_link_libraries(vellum-skia-dawn-provider PRIVATE d3d12 dxgi userenv ws2_32)
+else()
+    target_link_libraries(vellum-skia-dawn-provider PRIVATE dl pthread)
+endif()
 
 # The provider must link to the same bytes every time: the SDK artifact is
 # built twice and compared. Some macOS SDKs (the macOS 15 SDK in Xcode 16) give
@@ -282,4 +294,4 @@ endif()
 set(VELLUM_HAS_SKIA_DAWN ON)
 message(STATUS
     "Vellum: locked Skia Graphite + Dawn found at ${VELLUM_SKIA_DIR} "
-    "(macOS universal GPU host enabled; minimum macOS ${VELLUM_MACOS_DEPLOYMENT_TARGET})")
+    "(${VELLUM_SKIA_PLATFORM} GPU host enabled)")

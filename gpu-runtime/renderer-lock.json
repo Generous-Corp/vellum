@@ -28,6 +28,38 @@
         "libskunicode_icu.a": "ea7352e2ebab5734852924be28ffba61e99db578f4b065a302cbff9dcae484cb",
         "libsvg.a": "651c113ade708034b19461016b219a216ef8b2f451e83e60931c9eae1aed594b"
       }
+    },
+    "linux-x64": {
+      "asset": "skia-build-linux-x64-gpu-release.zip",
+      "sha256": "74c31d020cd18f1f9e544b1d8440bcc293e82982e50a9777a3940d84e2ccd666",
+      "configuration": "Release",
+      "archive_root": "build/linux-gpu/lib/Release/x64",
+      "archives": {
+        "libdawn_combined.a": "53cbac4189b46291b853a63b2640bf1d3dbf65fa06ecf809c98934f176d8a290",
+        "libskia.a": "477a32c507586408865e4382f498b64256d50113b0e7af96fb24a5459179b554",
+        "libsvg.a": "162e20806a1bf2c4df0dad59d6178c7e0fc9373eee0ebf0bd617f638831a8fac",
+        "libskresources.a": "edf6758631f92e33f49cf9e274ba16ab599ad9442c5acc4aa2ad56ebf5ecffee",
+        "libskshaper.a": "acc564f7dea97c4f7620cf79687ef32e5fd99f72fe61c8370bcfc6b2a6972d80",
+        "libskparagraph.a": "0af2b3855d258a7ec7bec546e0e67c13245a45d39120c38168eef3145a8db91a",
+        "libskunicode_core.a": "c0958c411a84bba10c4cbf07ad43b71d136099560b0f8324d6b64bf62665b12d",
+        "libskunicode_icu.a": "e91c7647776730e73ce96d34a97733ccbb7254cb1f75269fa75c26f4fdb9041f"
+      }
+    },
+    "windows-x64": {
+      "asset": "skia-build-win-x64-gpu-release.zip",
+      "sha256": "a23b3fc4f75eda3420ec7de70cbc68307be6f4fed37d004f43e9bb1ea81e5854",
+      "configuration": "Release",
+      "archive_root": "build/win-gpu/lib/Release/x64",
+      "archives": {
+        "libdawn_combined.a": "6c6c40f3ee4a5fde941f12159d355dc29cdb606616dff04ab6c71601a24d31d0",
+        "libskia.a": "456e7218d0ae26391c4d071e9933e6ad7a3b4cc2fda5ab28c53a5f03b51a201a",
+        "libsvg.a": "5db3188141db42b4843a452e8cf10598208847fa242e4dabdf7c2e6ab4804f98",
+        "libskresources.a": "e1a8e8bee162fb26a43a3222432898aa374f006872539b8c2e66e12c81589834",
+        "libskshaper.a": "57d6a00d94615aecb5106ffa9e5e349090d8b58f002def7dd550bf4220e51365",
+        "libskparagraph.a": "3ac3690752e587749dcf401afa84ff97985422da2c8ab9e4c62330f32c0aab45",
+        "libskunicode_core.a": "8e1cc85ec0b28c384121c1ffdddf143dbfe537adf08e3998e53758a3e0029a54",
+        "libskunicode_icu.a": "5660f9ba4f1600087e958b820d13b24ce7bb13aedad81a334d73a6e5619cb6b2"
+      }
     }
   }
 }

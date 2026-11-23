@@ -23,7 +23,9 @@
 #include "text_paragraph.hpp"
 #include "utf8_text.hpp"
 
+#if defined(__APPLE__)
 #import <QuartzCore/CAMetalLayer.h>
+#endif
 
 #include "dawn/dawn_proc.h"
 #include "dawn/native/DawnNative.h"
@@ -2077,7 +2079,19 @@ public:
         }
         wgpu::RequestAdapterOptions adapter_options{};
         adapter_options.powerPreference = wgpu::PowerPreference::HighPerformance;
-        adapter_options.backendType = wgpu::BackendType::Metal;
+        wgpu::BackendType requested_backend = wgpu::BackendType::Metal;
+#if defined(_WIN32)
+        requested_backend = wgpu::BackendType::D3D12;
+#elif !defined(__APPLE__)
+        requested_backend = wgpu::BackendType::Vulkan;
+#endif
+        if (const char* backend = std::getenv("VELLUM_GPU_BACKEND")) {
+            if (std::strcmp(backend, "d3d12") == 0)
+                requested_backend = wgpu::BackendType::D3D12;
+            else if (std::strcmp(backend, "vulkan") == 0)
+                requested_backend = wgpu::BackendType::Vulkan;
+        }
+        adapter_options.backendType = requested_backend;
         if (compatible) {
             adapter_options.compatibleSurface = compatible;
         } else if (compatible_surface_) {
@@ -2086,7 +2100,20 @@ public:
         wgpu::Adapter adapter;
         wgpu::RequestAdapterStatus adapter_status = wgpu::RequestAdapterStatus::Unavailable;
         std::string adapter_message;
-        instance_.RequestAdapter(
+        const bool software = std::getenv("VELLUM_GPU_SOFTWARE") != nullptr;
+        if (software) {
+            const auto candidates = native_instance_->EnumerateAdapters(&adapter_options);
+            for (const auto& candidate : candidates) {
+                wgpu::Adapter selected(candidate.Get());
+                wgpu::AdapterInfo info{};
+                if (selected.GetInfo(&info) == wgpu::Status::Success &&
+                    info.adapterType == wgpu::AdapterType::CPU) {
+                    adapter = std::move(selected);
+                    adapter_status = wgpu::RequestAdapterStatus::Success;
+                    break;
+                }
+            }
+        } else instance_.RequestAdapter(
             &adapter_options,
             wgpu::CallbackMode::AllowProcessEvents,
             [&](wgpu::RequestAdapterStatus status, wgpu::Adapter result,
@@ -2099,11 +2126,11 @@ public:
             });
         instance_.ProcessEvents();
         if (adapter_status != wgpu::RequestAdapterStatus::Success || !adapter) {
-            set_error(error, "Dawn Metal adapter unavailable: " + adapter_message);
+            set_error(error, "Dawn GPU adapter unavailable: " + adapter_message);
             return false;
         }
         if (take_injection(failing_device_requests)) {
-            set_error(error, "Dawn Metal device unavailable: failed by test injection");
+            set_error(error, "Dawn GPU device unavailable: failed by test injection");
             return false;
         }
 
@@ -2146,7 +2173,7 @@ public:
         instance_.ProcessEvents();
         if (device_status != wgpu::RequestDeviceStatus::Success || !device) {
             loss_->activate(current);
-            set_error(error, "Dawn Metal device unavailable: " + device_message);
+            set_error(error, "Dawn GPU device unavailable: " + device_message);
             return false;
         }
         if (current > 0 && take_injection(losing_recreations)) {
@@ -2379,6 +2406,7 @@ public:
         core_ = std::move(core);
 
         if (config_.native_surface_handle != nullptr) {
+#if defined(__APPLE__)
             wgpu::SurfaceSourceMetalLayer source{};
             source.layer = config_.native_surface_handle;
             wgpu::SurfaceDescriptor descriptor{};
@@ -2388,6 +2416,10 @@ public:
                 set_error(error, "Dawn could not create a Metal surface from CAMetalLayer");
                 return false;
             }
+#else
+            set_error(error, "native GPU surfaces are only wired for Metal here");
+            return false;
+#endif
         }
 
         if (owns_device) {
@@ -2454,8 +2486,8 @@ public:
             evidence_.adapter = "Dawn " + evidence_.backend + " adapter";
         }
         evidence_.texture_format = "bgra8unorm";
-        if (evidence_.backend != "Metal") {
-            set_error(error, "requested Metal backend but Dawn selected " + evidence_.backend);
+        if (evidence_.backend == "Null" || evidence_.backend == "Unknown") {
+            set_error(error, "Dawn selected an unusable backend " + evidence_.backend);
             return false;
         }
         return true;
