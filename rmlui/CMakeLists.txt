@@ -25,9 +25,9 @@ cmake_minimum_required(VERSION 3.24)
 #                              and Apple frameworks.
 #   VellumRmlUi::VellumRenderer draws the backend's commands as triangle meshes
 #                              through Vellum's SkiaDawnSurface
-#                              (VELLUM_RMLUI_VELLUM_RENDERER=ON). It is the only
-#                              target that links Vellum; Core and SoftRenderer
-#                              never do.
+#                              (VELLUM_RMLUI_VELLUM_RENDERER=ON).
+#   VellumRmlUi::PluginView    exposes a CPU-rendered document as a Vellum View
+#                              when the Vellum mirror view unit is available.
 # On its own the module pins the macOS deployment target Vellum uses, so the
 # archives Native installs (RmlUi, FreeType) can link into a plug-in that runs
 # on older macOS than the build host. Inside a Vellum build the parent decides.
@@ -199,6 +199,26 @@ set(VELLUM_RMLUI_COMPONENTS Core SoftRenderer DevAssets)
 set(_vellum_rmlui_install_targets
     vellum-rmlui-core vellum-rmlui-soft-renderer vellum-rmlui-dev-assets)
 
+# The mirror unit lets PluginView use the platform host's native child window,
+# paint surface, and event dispatch.
+if(TARGET Vellum::MirrorView_core)
+    add_library(vellum-rmlui-plugin-view STATIC plugin_view/plugin_view.cpp)
+    add_library(VellumRmlUi::PluginView ALIAS vellum-rmlui-plugin-view)
+    target_compile_features(vellum-rmlui-plugin-view PUBLIC cxx_std_20)
+    set_target_properties(vellum-rmlui-plugin-view PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    # The view core keeps its headers private; the mirror publishes them in
+    # one list, the same one the framework tests use.
+    target_include_directories(vellum-rmlui-plugin-view PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/plugin_view/include>
+        "$<BUILD_INTERFACE:${_vellum_mirror_public_includes}>"
+        $<BUILD_INTERFACE:${VELLUM_MIRROR_BUILD_INFO_DIR}>
+        $<BUILD_INTERFACE:${VELLUM_MIRROR_CHOC_ROOT}>)
+    target_link_libraries(vellum-rmlui-plugin-view
+        PUBLIC Vellum::MirrorView_core vellum-rmlui-core vellum-rmlui-soft-renderer
+        PRIVATE RmlUi::Core)
+endif()
+
 if(VELLUM_RMLUI_NATIVE_HOST)
     if(NOT APPLE)
         message(FATAL_ERROR "VELLUM_RMLUI_NATIVE_HOST is currently supported on macOS only")
@@ -354,11 +374,9 @@ if(TARGET vellum-rmlui-native)
     vellum_rmlui_require_nonfinite(vellum-rmlui-native PUBLIC)
 endif()
 
-# Only VellumRenderer may link Vellum; every other library here stays usable
-# without it.
 include(cmake/VellumRmlUiLinkBoundary.cmake)
 get_property(_vellum_rmlui_targets DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" PROPERTY BUILDSYSTEM_TARGETS)
-vellum_rmlui_check_link_boundary(ALLOW vellum-rmlui-vellum-renderer TARGETS ${_vellum_rmlui_targets})
+vellum_rmlui_check_link_boundary(TARGETS ${_vellum_rmlui_targets})
 
 if(VELLUM_RMLUI_INSTALL)
     set(_vellum_rmlui_cmake_dir "${CMAKE_INSTALL_LIBDIR}/cmake/VellumRmlUi")
@@ -386,6 +404,8 @@ if(VELLUM_RMLUI_INSTALL)
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
         COMPONENT VellumRmlUi
         ${_vellum_rmlui_native_header_excludes})
+    # plugin_view.hpp stays in-tree: it includes vellum/view headers, which the
+    # SDK payload scan refuses outside the mirror scope.
     install(FILES assets/midi-learn.rcss assets/midi-panic.rcss
         DESTINATION ${CMAKE_INSTALL_DATADIR}/VellumRmlUi
         COMPONENT VellumRmlUi)

@@ -28,8 +28,12 @@ export function parseArguments(values) {
         if (value === undefined || value.startsWith('--')) {
             fail('invalid_arguments', `--${key} requires a value`);
         }
-        if (Object.hasOwn(output, key)) fail('invalid_arguments', `--${key} was provided twice`);
-        output[key] = value;
+        if (key === 'file') {
+            (output.file ??= []).push(value);
+        } else {
+            if (Object.hasOwn(output, key)) fail('invalid_arguments', `--${key} was provided twice`);
+            output[key] = value;
+        }
         index += 1;
     }
     return output;

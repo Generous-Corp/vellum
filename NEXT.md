@@ -1,3 +1,9 @@
+# Follow-up platform closure
+
+This lane proves the macOS RmlUi PluginView bridge and its mirror link boundary. Windows and Linux remain gated because the mirror view unit is not yet packaged and consumed through verified platform closures on those targets.
+
+The next PR should package `Vellum::MirrorView_core` and its public headers for Windows and Linux, add installed-consumer coverage for each platform, and run the platform-native RmlUi CTests with the mirror enabled. Keep the platform work separate from this folder-level provenance exemption.
+
 # RmlUi idle follow-up
 
 The origin regression test is committed as `3058e8ee8`. The required native-parent-host test could not be executed in this lane because `~/bin/leased-build --wait-secs 60 -- cmake -S rmlui -B build-rmlui -DVELLUM_RMLUI_NATIVE=ON -DVELLUM_RMLUI_CPU=ON -DVELLUM_RMLUI_NATIVE_HOST=ON -DVELLUM_RMLUI_BUILD_TESTS=ON -DVELLUM_RMLUI_FONTS=OFF -DCMAKE_BUILD_TYPE=Release` returned `leased-build: no lease within 60s (cores=8)` before configuring. On origin, the new assertion is expected to fail because every idle tick replaces the layer contents.
@@ -33,3 +39,40 @@ The three rows map to Vellum owners as follows.
 | C14 | `tools/cli/cmd_design_subcommands.cpp`, `tools/design/pulp_design_debug.cpp`, and `tools/ui-build/` | `cli/vellum_cli.py`, `packages/vellum-design-ir/bin/`, `packages/vellum-ui/`, and the `vellum` installed CLI surface | Keep the design command family in Vellum and have commands forward to the installed design-import backend and UI build tooling. |
 
 C7 is the first implementation slice. The C2 and C14 moves remain planned until the conformance gate has a Vellum owner and test lane.
+
+# iOS Metal renderer lane
+
+The baseline test commit `dce2f4110` registered
+`vellum.rmlui.metal-ios-compile` before its target existed. On the baseline,
+CTest failed with:
+
+```
+Error: /private/tmp/rmlui-ios-test/rmlui is not a directory
+0% tests passed, 1 tests failed out of 1
+```
+
+The fixed simulator consumer configures with arm64 and compiles
+`vellum-rmlui-metal`, plus the Metal test translation units, as static
+libraries. The Cocoa negative control passes because Cocoa is unavailable in
+the iOS SDK. No simulator runtime or GPU pixel test ran in this lane, so
+`rmlui/renderers.json` remains `planned` for iOS.
+
+Lead runtime commands, after configuring a runtime-capable iOS test build:
+
+```sh
+xcrun simctl list devices available
+xcrun simctl boot "iPhone 16 Pro"
+xcrun simctl bootstatus "iPhone 16 Pro" -b
+ctest --test-dir <ios-runtime-build> -R 'vellum.rmlui.metal-(visual|layers|trim|filters|image-decode)' --output-on-failure
+xcrun simctl shutdown "iPhone 16 Pro"
+```
+
+Device compile check:
+
+```sh
+cmake -S tools/mirror/consumer/ios-auv3 -B <ios-device-build> -G Ninja \
+  -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
+  -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_BUILD_TYPE=Release
+~/bin/leased-build --wait-secs 3600 -- cmake --build <ios-device-build> \
+  --target vellum-rmlui-metal-ios-compile
+```

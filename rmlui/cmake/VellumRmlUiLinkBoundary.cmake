@@ -1,16 +1,14 @@
-# The RmlUi module's link boundary: of its library targets, only the one
-# named ALLOW (VellumRmlUi::VellumRenderer) may link a Vellum target. Core,
-# Native, Metal and the rest depend on RmlUi and the operating system only,
-# so any RmlUi user can adopt them without Vellum.
+# Only the two named bridges may link Vellum. The other libraries remain
+# usable in standalone RmlUi builds.
 #
-#   vellum_rmlui_check_link_boundary(ALLOW <target> TARGETS <target>...)
+#   vellum_rmlui_check_link_boundary(TARGETS <target>...)
 #
 # Reads each target's LINK_LIBRARIES and INTERFACE_LINK_LIBRARIES, including
 # entries inside generator expressions, and fails the configure when one names
 # Vellum::<x> or vellum-<x> (the module's own vellum-rmlui-* and
 # VellumRmlUi::* targets excepted), directly or through an ALIAS target that
-# resolves to one. When the ALLOW target exists it must
-# itself link Vellum, so a check that read no link libraries cannot pass.
+# resolves to one. Each bridge that exists must link Vellum, so an empty
+# link check cannot pass.
 # Findings are printed as status lines prefixed "rmlui-link-boundary:" (never
 # wrapped), then the configure fails.
 
@@ -55,10 +53,13 @@ function(_vellum_rmlui_links_vellum out alias_out entry)
 endfunction()
 
 function(vellum_rmlui_check_link_boundary)
-    cmake_parse_arguments(ARG "" "ALLOW" "TARGETS" ${ARGN})
+    cmake_parse_arguments(ARG "" "" "TARGETS" ${ARGN})
+    # VellumRenderer draws meshes through Vellum's GPU surface.
+    # PluginView hosts CPU-rendered documents through Vellum's PluginViewHost.
+    set(_bridges vellum-rmlui-vellum-renderer vellum-rmlui-plugin-view)
     set(_checked 0)
     set(_violations "")
-    set(_allowed_links_vellum FALSE)
+    set(_linked_bridges "")
     foreach(_target IN LISTS ARG_TARGETS)
         if(NOT TARGET "${_target}")
             continue()
@@ -84,8 +85,8 @@ function(vellum_rmlui_check_link_boundary)
             if(NOT _links)
                 continue()
             endif()
-            if(_target STREQUAL "${ARG_ALLOW}")
-                set(_allowed_links_vellum TRUE)
+            if(_target IN_LIST _bridges)
+                list(APPEND _linked_bridges "${_target}")
             elseif(_via)
                 string(REPLACE ";" ", " _via "${_via}")
                 list(APPEND _violations "${_target} links ${_entry} (alias ${_via})")
@@ -98,12 +99,15 @@ function(vellum_rmlui_check_link_boundary)
     foreach(_violation IN LISTS _violations)
         message(STATUS "rmlui-link-boundary: ${_violation}")
     endforeach()
+    list(JOIN _bridges " and " _bridge_names)
     if(_violations)
-        message(FATAL_ERROR "only ${ARG_ALLOW} may link Vellum (see rmlui-link-boundary above)")
+        message(FATAL_ERROR "only ${_bridge_names} may link Vellum (see rmlui-link-boundary above)")
     endif()
-    if(TARGET "${ARG_ALLOW}" AND NOT _allowed_links_vellum)
-        message(STATUS "rmlui-link-boundary: ${ARG_ALLOW} links no Vellum target")
-        message(FATAL_ERROR "the link boundary check read no Vellum link; it cannot vouch for the others")
-    endif()
-    message(STATUS "rmlui-link-boundary: ${_checked} targets checked; only ${ARG_ALLOW} links Vellum")
+    foreach(_bridge IN LISTS _bridges)
+        if(TARGET "${_bridge}" AND NOT _bridge IN_LIST _linked_bridges)
+            message(STATUS "rmlui-link-boundary: ${_bridge} links no Vellum target")
+            message(FATAL_ERROR "the link boundary check read no Vellum link for ${_bridge}")
+        endif()
+    endforeach()
+    message(STATUS "rmlui-link-boundary: ${_checked} targets checked; only ${_bridge_names} may link Vellum")
 endfunction()

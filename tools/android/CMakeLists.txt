@@ -16,10 +16,14 @@ cmake_minimum_required(VERSION 3.24)
 
 project(VellumAndroid LANGUAGES CXX)
 
+include("${CMAKE_CURRENT_LIST_DIR}/AndroidPlatform.cmake")
+
 if(NOT ANDROID)
     message(FATAL_ERROR
         "tools/android builds for Android only; pass the NDK's android.toolchain.cmake")
 endif()
+
+vellum_android_platform_configure()
 
 set(VELLUM_CHOC_ROOT "" CACHE PATH
     "Root of the pinned CHOC checkout (the header-only utility library)")

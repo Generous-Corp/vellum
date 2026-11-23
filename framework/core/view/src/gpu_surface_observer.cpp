@@ -108,6 +108,13 @@ void PluginViewHost::publish_gpu_surface(render::GpuSurface* surface,
 
     if (gpu_status_.surface == surface && gpu_status_.state == state) return;
 
+    // Invalidate every existing lease before notifying observers. A consumer
+    // can therefore use the generation as a fence before touching its pointer.
+    gpu_lease_state_->surface.store(nullptr, std::memory_order_release);
+    gpu_lease_state_->generation.fetch_add(1, std::memory_order_acq_rel);
+    if (state == GpuSurfaceState::ready)
+        gpu_lease_state_->surface.store(surface, std::memory_order_release);
+
     gpu_status_ = GpuSurfaceStatus{surface, state};
     if (gpu_observers_) gpu_observers_->notify(gpu_status_);
 }

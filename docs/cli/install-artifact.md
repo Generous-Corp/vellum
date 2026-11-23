@@ -4,7 +4,7 @@ The repository builds a reproducible local artifact, and the installer supports
 local development, verified local archive, and an exact-version release mode.
 The commands below install the published, immutable `v0.1.6` tagged release
 from `Generous-Corp/vellum`, the current published release. The source tree
-identifies as `0.2.2`, the next release, and is unreleased.
+identifies as `0.2.3`, the next release, and is unreleased.
 The name `v0.1.7` is retired and is never reused; [`provenance/retired-release-tags.json`](../../provenance/retired-release-tags.json)
 records why, and `scripts/verify_release_tag.py` refuses any retired tag.
 `v0.1.8` and `v0.1.9` are retired too: their tags stay in place, frozen, but no
@@ -101,10 +101,11 @@ sdk/lib/libvellum-*.a
 sdk/bin/vellum-app-host             # pinned-Skia mode
 sdk/lib/libvellum-authoring.dylib   # pinned-Skia mode
 sdk/lib/libvellum-gpu.dylib         # pinned-Skia mode
-sdk/lib/libvellum-skia-dawn-provider.dylib # pinned-Skia provider closure
-sdk/mirror/lib/libvellum-mirror-foundation.dylib # provider runtime dependency
-sdk/mirror/lib/libvellum-mirror-canvas.dylib # mirrored canvas runtime
-sdk/mirror/lib/libvellum-mirror-state-core.dylib # provider runtime dependency
+sdk/share/vellum/runtime-images.json # installed paths for the provider and required mirror units
+sdk/lib/libvellum-skia-dawn-provider-<identity>.dylib # pinned-Skia provider closure
+sdk/mirror/lib/libvellum-mirror-foundation-<identity>.dylib # provider runtime dependency
+sdk/mirror/lib/libvellum-mirror-canvas-<identity>.dylib # mirrored canvas runtime
+sdk/mirror/lib/libvellum-mirror-state-core-<identity>.dylib # provider runtime dependency
 design-ir/bin/vellum-backend.js
 design-ir/src/...
 design-ir/schema/...
@@ -257,10 +258,10 @@ Build and validate the artifact:
 ```sh
 python3 scripts/build_sdk_artifact.py --output-dir dist --json
 python3 scripts/verify_sdk_artifact.py \
-  --archive dist/vellum-sdk-0.2.2-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.2.3-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS --json
 python3 scripts/validate_installed_sdk.py \
-  --archive dist/vellum-sdk-0.2.2-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.2.3-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS \
   --output dist/installed-validation.json --json
 ```
@@ -323,7 +324,7 @@ release attestation is required and verified. See
 [Immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)
 and [GitHub security features](https://docs.github.com/en/code-security/getting-started/github-security-features#artifact-attestations).
 
-These are release gates, not claims that `v0.2.2` exists before the tag workflow
+These are release gates, not claims that `v0.2.3` exists before the tag workflow
 has completed. The local artifact flow exercises the same archive verification
 and transactional installation logic but cannot claim hosted release
 immutability or GitHub asset digests.

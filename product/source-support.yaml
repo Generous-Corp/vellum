@@ -8,7 +8,7 @@ sources:
     reimport: supported
   figma:
     channel: supported
-    accepted_artifact: single-root audio-free Pulp Figma plugin JSON or .pulp.zip export
+    accepted_artifact: audio-free Pulp Figma plugin JSON or .pulp.zip export
     provider_access: none
     reimport: supported
     pinned_contract:
@@ -60,11 +60,18 @@ sources:
     limitations:
       - does not accept arbitrary .fig files
       - does not call the Figma REST API
-      - accepts exactly one root and rejects the synthetic multi-export root
+      - a synthetic multi-export root requires a frame selection
+      - repeated JSON envelopes preserve alternate frame trees for a state consumer
       - the current Pulp extractor can audio-promote generic-looking layer names
       - rejects audio-widget nodes and audio-specific binding fields
       - image and vector assets are preserved but not painted by the native host
       - unsupported properties and fields remain explicit diagnostics and extensions
+  v0:
+    channel: experimental
+    accepted_artifact: local v0 TSX with host JSX and supported Tailwind layout classes
+    provider_access: none
+    reimport: supported
+    requires: macOS native SDK
   pencil:
     channel: experimental
     accepted_artifact: Pencil or OpenPencil node-tree JSON or .pen
