@@ -97,6 +97,7 @@ def import_jsx(source_path: Path, *, emit: str, mode: str, output: Path | None,
     if output is None:
         raise AssetImportError("--out is required for JSX output")
     if emit == "js":
+        _decode(source, "JSX source")
         _write(output, source)
     else:
         payload = {
