@@ -25,8 +25,8 @@ class UnexportsRelinkTest(unittest.TestCase):
         cmake = (repo / "cmake/VellumSkiaDawn.cmake").read_text(encoding="utf-8")
         self.assertIn('"LINKER:-exported_symbols_list,${_vellum_provider_exports}"', cmake)
         self.assertIn(
-            'set_property(TARGET vellum-skia-dawn-provider APPEND PROPERTY LINK_DEPENDS\n'
-            '    "${_vellum_provider_exports}")', cmake)
+            '    set_property(TARGET vellum-skia-dawn-provider APPEND PROPERTY LINK_DEPENDS\n'
+            '        "${_vellum_provider_exports}")', cmake)
 
     def test_weak_choc_definition_is_hidden_by_mirror_patterns(self) -> None:
         repo = Path(__file__).resolve().parents[2]
