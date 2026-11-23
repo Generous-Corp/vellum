@@ -298,6 +298,30 @@ if(VELLUM_RMLUI_METAL)
     target_link_libraries(vellum-rmlui-metal
         PUBLIC RmlUi::Core "-framework Metal" "-framework QuartzCore" "-framework Foundation"
         PRIVATE "-framework CoreGraphics" "-framework ImageIO")
+    if(IOS)
+        find_package(Python3 COMPONENTS Interpreter REQUIRED)
+        if(CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator")
+            set(_vellum_rmlui_metal_sdk iphonesimulator)
+        else()
+            set(_vellum_rmlui_metal_sdk iphoneos)
+        endif()
+        set(_vellum_rmlui_metal_build_dir "${CMAKE_CURRENT_BINARY_DIR}/metal")
+        set(_vellum_rmlui_metal_source "${_vellum_rmlui_metal_build_dir}/metal_shaders.metal")
+        set(_vellum_rmlui_metal_air "${_vellum_rmlui_metal_build_dir}/metal_shaders.air")
+        set(_vellum_rmlui_metal_library "${_vellum_rmlui_metal_build_dir}/vellum-rmlui-metal.metallib")
+        add_custom_command(OUTPUT "${_vellum_rmlui_metal_library}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${_vellum_rmlui_metal_build_dir}"
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/extract_metal_source.py"
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/metal_shaders.hpp" "${_vellum_rmlui_metal_source}"
+            COMMAND xcrun -sdk "${_vellum_rmlui_metal_sdk}" metal -c "${_vellum_rmlui_metal_source}"
+                -o "${_vellum_rmlui_metal_air}"
+            COMMAND xcrun -sdk "${_vellum_rmlui_metal_sdk}" metallib "${_vellum_rmlui_metal_air}"
+                -o "${_vellum_rmlui_metal_library}"
+            DEPENDS src/metal_shaders.hpp cmake/extract_metal_source.py
+            VERBATIM)
+        add_custom_target(vellum-rmlui-metal-library DEPENDS "${_vellum_rmlui_metal_library}")
+        add_dependencies(vellum-rmlui-metal vellum-rmlui-metal-library)
+    endif()
     vellum_rmlui_mark_runtime(vellum-rmlui-metal native)
     list(APPEND VELLUM_RMLUI_COMPONENTS Metal)
 endif()
@@ -478,6 +502,13 @@ if(VELLUM_RMLUI_INSTALL)
                 EXPORT VellumRmlUiMetalTargets
                 COMPONENT VellumRmlUiNative
                 ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+            if(IOS)
+                # The precompiled shader library the iOS renderer prefers; consumers
+                # bundle it into their app (the renderer compiles source without it).
+                install(FILES "${_vellum_rmlui_metal_library}"
+                    DESTINATION ${CMAKE_INSTALL_DATADIR}/vellum/rmlui
+                    COMPONENT VellumRmlUiNative)
+            endif()
             install(EXPORT VellumRmlUiMetalTargets
                 NAMESPACE VellumRmlUi::
                 DESTINATION ${_vellum_rmlui_native_cmake_dir}

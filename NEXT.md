@@ -76,3 +76,13 @@ cmake -S tools/mirror/consumer/ios-auv3 -B <ios-device-build> -G Ninja \
 ~/bin/leased-build --wait-secs 3600 -- cmake --build <ios-device-build> \
   --target vellum-rmlui-metal-ios-compile
 ```
+
+# iOS Metal asset-bundle regression
+
+The new regression contract was added before the implementation and fails on the pre-fix head 46abf596bb7573e58bf18bbe4023acc9f2b94b60:
+
+```
+AssertionError: missing contract text: 'progress: fonts loaded'
+```
+
+The implementation must bundle the fonts, fixtures, and metallib into both runtime app bundles and resolve them through NSBundle when argv paths are absent or unreadable. The simulator/device run needs the lead's GPU-capable execution environment.

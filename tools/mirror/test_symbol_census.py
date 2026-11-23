@@ -414,6 +414,15 @@ class ConsumerProviderPathTest(unittest.TestCase):
             r"target_compile_definitions\(gpu-runtime-device-provider PRIVATE\s+"
             r"GPU_RUNTIME_OBJC_SUFFIX=\$\{VELLUM_RUNTIME_OBJC_SUFFIX\}\)")
 
+    def test_native_gpu_consumer_receives_the_separate_runtime_prefix(self) -> None:
+        text = (HERE / "RunMirrorConsumer.cmake").read_text()
+        self.assertIn("VELLUM_GPU_RUNTIME_PREFIX", text)
+        self.assertIn('execute_process(COMMAND "${CMAKE_COMMAND}"', text)
+        self.assertIn('"-DCMAKE_PREFIX_PATH=${_prefix}"', text)
+        self.assertIn('"-DVellumGpuRuntime_DIR=${VELLUM_GPU_RUNTIME_PREFIX}/lib/cmake/VellumGpuRuntime"', text)
+        top_level = (HERE.parent.parent / "CMakeLists.txt").read_text()
+        self.assertIn("if(DEFINED VELLUM_GPU_RUNTIME_PREFIX", top_level)
+
 
 if __name__ == "__main__":
     unittest.main()
