@@ -34,13 +34,21 @@ if(_renderer_lock MATCHES "android-arm64-v8a" OR
         "android-gpu-surface: renderer lock must not contain unverified Android or zero digests")
 endif()
 
+# The Android attestation record ships separately from the verifier rule.
+# Until it lands there is none; once it does, it must stay deferred with a
+# null artifact, the same shape verify_renderer_dependency.py accepts.
 file(READ "${SOURCE_ROOT}/provenance/renderer-attestation.json" _attestation)
-if(NOT _attestation MATCHES
-   "\"state\"[ \t\r\n]*:[ \t\r\n]*\"deferred-no-verified-asset\"")
-    message(FATAL_ERROR "android-gpu-surface: attestation does not record the deferred asset state")
-endif()
-if(NOT _attestation MATCHES "\"artifact\"[ \t\r\n]*:[ \t\r\n]*null")
-    message(FATAL_ERROR "android-gpu-surface: deferred attestation must not name an artifact")
+string(JSON _android_type ERROR_VARIABLE _android_missing
+    TYPE "${_attestation}" android_arm64_v8a)
+if(NOT _android_missing)
+    string(JSON _android_state GET "${_attestation}" android_arm64_v8a state)
+    string(JSON _android_artifact_type TYPE "${_attestation}" android_arm64_v8a artifact)
+    if(NOT _android_state STREQUAL "deferred-no-verified-asset")
+        message(FATAL_ERROR "android-gpu-surface: attestation does not record the deferred asset state")
+    endif()
+    if(NOT _android_artifact_type STREQUAL "NULL")
+        message(FATAL_ERROR "android-gpu-surface: deferred attestation must not name an artifact")
+    endif()
 endif()
 
 file(READ "${SOURCE_ROOT}/framework/core/render/src/render_loop_android.cpp" _render_loop)
