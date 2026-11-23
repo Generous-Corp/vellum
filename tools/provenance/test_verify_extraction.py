@@ -3622,6 +3622,64 @@ class RendererPinTests(unittest.TestCase):
         pin.update(pin_overrides)
         return self.receipt(self.pulp_commit(pin))
 
+    def move_lock_past_the_prior_pin(self) -> None:
+        """Point the lock at an attested release, as a repin does."""
+        path = self.root / "provenance/third-party-lock.json"
+        lock = json.loads(path.read_text())
+        renderer = lock["runtime_toolchain_dependencies"]["renderer"]
+        renderer["artifact"].update(
+            sha256="6" * 64, url="https://github.com/danielraffel/skia-builder/releases/download/"
+            "chrome/m158-attested.2/skia-build-mac-universal-gpu-release.zip")
+        renderer["source_identities"]["builder"]["commit"] = "5" * 40
+        path.write_text(json.dumps(lock))
+
+    def prior_pin_receipt(self, **overrides: object) -> str:
+        pin = json.loads(json.dumps(self.matching_pin))
+        prior = verify_extraction.PRIOR_RENDERER_PIN
+        pin["skia_builder_ref"] = prior["skia_builder_ref"]
+        pin["release_assets"]["mac-universal"] = {"url": prior["archive_url"],
+                                                  "sha256": prior["archive_sha256"]}
+        for key, value in overrides.items():
+            if key == "archive_sha256":
+                pin["release_assets"]["mac-universal"]["sha256"] = value
+            elif key == "archive_url":
+                pin["release_assets"]["mac-universal"]["url"] = value
+            else:
+                pin[key] = value
+        return self.receipt(self.pulp_commit(pin))
+
+    def test_the_single_prior_renderer_pin_is_accepted_after_a_repin(self) -> None:
+        self.move_lock_past_the_prior_pin()
+        errors, rows = verify_extraction.renderer_pin_errors(
+            self.root, self.pulp, [self.prior_pin_receipt()])
+        self.assertEqual(errors, [])
+        self.assertTrue(rows[0]["matches_lock"])
+
+    def test_another_historical_renderer_asset_is_refused(self) -> None:
+        self.move_lock_past_the_prior_pin()
+        for label, overrides in (
+                ("another archive", {"archive_sha256": "4" * 64}),
+                ("another url", {"archive_url": "https://example.invalid/old.zip"}),
+                ("another builder", {"skia_builder_ref": "3" * 40}),
+                ("another milestone", {"skia_branch": "chrome/m157"}),
+                ("another skia", {"skia_commit": "2" * 40}),
+                ("another dawn", {"built_dawn": "1" * 40})):
+            with self.subTest(label=label):
+                errors, rows = verify_extraction.renderer_pin_errors(
+                    self.root, self.pulp, [self.prior_pin_receipt(**overrides)])
+                self.assertTrue(errors, label)
+                self.assertFalse(rows[0]["matches_lock"])
+
+    def test_the_prior_pin_is_all_or_nothing(self) -> None:
+        """A receipt matching only part of the prior triple is a different pin."""
+        self.move_lock_past_the_prior_pin()
+        prior = verify_extraction.PRIOR_RENDERER_PIN
+        half = {"skia_builder_ref": "5" * 40}  # the lock's builder with the prior archive
+        errors, _ = verify_extraction.renderer_pin_errors(
+            self.root, self.pulp, [self.prior_pin_receipt(**half)])
+        self.assertTrue(errors)
+        self.assertEqual(set(prior), {"archive_sha256", "archive_url", "skia_builder_ref"})
+
     def test_an_unbound_older_builder_and_archive_is_refused(self) -> None:
         errors, rows = verify_extraction.renderer_pin_errors(self.root, self.pulp, [self.older_pin_receipt()])
         self.assertFalse(rows[0]["matches_lock"])
