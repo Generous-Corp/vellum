@@ -3660,6 +3660,22 @@ class RendererPinTests(unittest.TestCase):
         errors, _ = verify_extraction.renderer_pin_errors(self.root, self.pulp, [receipt])
         self.assertIn("skia_branch", errors[0])
 
+    def test_a_malformed_bound_manifest_is_a_clean_error(self) -> None:
+        receipt = self.older_pin_receipt()
+        self.bound_pulp_commit()
+        git = ["git", "-C", str(self.pulp), "-c", "user.name=t", "-c", "user.email=t@t"]
+        for body in ('{"dependencies": null}', "[]", '{"dependencies": [5, null]}'):
+            with self.subTest(body=body):
+                (self.pulp / "tools/deps/manifest.json").write_text(body)
+                subprocess.run(git + ["commit", "-q", "-am", "bad"], check=True)
+                commit = subprocess.run(git + ["rev-parse", "HEAD"], check=True, capture_output=True,
+                                        text=True).stdout.strip()
+                subprocess.run(git + ["update-ref", "refs/remotes/origin/main", commit], check=True)
+                self.bind(commit)
+                errors, rows = verify_extraction.renderer_pin_errors(self.root, self.pulp, [receipt])
+                self.assertEqual(rows, [])
+                self.assertTrue(errors and "pulp_binding" in errors[0], errors)
+
     def test_a_malformed_binding_is_refused(self) -> None:
         receipt = self.older_pin_receipt()
         for bad in ("abc", "A" * 40, None, 5):

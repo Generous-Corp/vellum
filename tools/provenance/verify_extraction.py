@@ -1093,9 +1093,12 @@ def renderer_binding_errors(
         return [f"{where}: Pulp commit {commit} is not on the checked-out Pulp main"]
     try:
         manifest = json.loads(git(pulp_root, "show", f"{commit}:{PULP_DEPENDENCY_MANIFEST}"))
-        blocks = [d["vellum_mirror_renderer"] for d in manifest.get("dependencies", [])
+        dependencies = manifest.get("dependencies") if isinstance(manifest, dict) else None
+        if not isinstance(dependencies, list):
+            raise ValueError("dependencies is not a list")
+        blocks = [d["vellum_mirror_renderer"] for d in dependencies
                   if isinstance(d, dict) and isinstance(d.get("vellum_mirror_renderer"), dict)]
-    except (subprocess.CalledProcessError, ValueError, AttributeError) as exc:
+    except (subprocess.CalledProcessError, ValueError, AttributeError, TypeError) as exc:
         return [f"{where}: cannot read Pulp's {PULP_DEPENDENCY_MANIFEST} at {commit}: {exc}"]
     if len(blocks) != 1:
         return [f"{where}: expected one vellum_mirror_renderer block at {commit}, found {len(blocks)}"]
