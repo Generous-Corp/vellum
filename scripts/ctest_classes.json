@@ -83,6 +83,7 @@
       "vellum.rendered-tree-materializer",
       "vellum.renderer-lock-drift",
       "vellum.renderer-lock-drift-unit",
+      "vellum.renderer-platform-evidence-unit",
       "vellum.rmlui-sdk-artifact-unit",
       "vellum.rmlui.backend",
       "vellum.rmlui.core-flattening",

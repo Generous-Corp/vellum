@@ -11,6 +11,10 @@ record that must agree with it:
             provenance/renderer-attestation.json (the builder's records) and
             the documents that quote the pin must name exactly the lock's
             milestone, asset, digests and source commits.
+  evidence  every row other than macos-arm64 must agree, field by field, with
+            provenance/renderer-platform-evidence.json, the pinned record of what
+            skia-builder published for the row's release (see
+            scripts/renderer_platform_evidence.py).
   nowhere   no other tracked file may contain a locked digest, so a new hand
             copy cannot appear unnoticed. Mirror export closures and verifier
             test data are recorded evidence, checked by their own verifiers.
@@ -29,6 +33,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.append(str(Path(__file__).resolve().parent))
+import renderer_platform_evidence as evidence  # noqa: E402
+
 LOCK = "gpu-runtime/renderer-lock.json"
 SCHEMA = "gpu-runtime.renderer-lock.v1"
 PLATFORM = "macos-arm64"
@@ -60,7 +67,8 @@ DOCUMENTS = ("README.md", "DEPENDENCIES.md", "NOTICE.md",
 # Documents that give the asset's digest next to its name for a reader to check.
 DOCUMENTS_WITH_DIGEST = ("README.md", "DEPENDENCIES.md")
 # Recorded evidence that legitimately holds a digest and has its own verifier.
-EVIDENCE = ("provenance/mirror/closures/*", "tools/provenance/testdata/*")
+EVIDENCE = ("provenance/mirror/closures/*", "tools/provenance/testdata/*",
+            "scripts/testdata/renderer_platform/*")
 
 
 def load_lock(root: Path, problems: list[str]) -> dict | None:
@@ -282,7 +290,7 @@ def tracked_files(root: Path) -> list[str]:
 
 
 def check_no_other_copies(root: Path, lock: dict, problems: list[str]) -> None:
-    allowed = {LOCK, *READERS, *RECORDS, *DOCUMENTS}
+    allowed = {LOCK, evidence.EVIDENCE, *READERS, *RECORDS, *DOCUMENTS}
     digests = locked_digests(lock)
     for relative in tracked_files(root):
         if relative in allowed or any(fnmatch.fnmatch(relative, pattern) for pattern in EVIDENCE):
@@ -300,11 +308,19 @@ def check_no_other_copies(root: Path, lock: dict, problems: list[str]) -> None:
             problems.append(f"{relative}: holds locked digest {digest}; read it from {LOCK}")
 
 
+def check_platform_evidence(root: Path, lock: dict, problems: list[str]) -> None:
+    """Every non-macOS row must agree with the pinned release evidence."""
+    path = root / evidence.EVIDENCE
+    text = path.read_text(encoding="utf-8") if path.is_file() else None
+    evidence.check_rows(lock, text, evidence.platform_keys(root), LOCK, problems)
+
+
 def check(root: Path) -> list[str]:
     problems: list[str] = []
     lock = load_lock(root, problems)
     if lock is None:
         return problems
+    check_platform_evidence(root, lock, problems)
     check_readers(root, lock, problems)
     check_cmake_names(root, lock, problems)
     check_third_party_lock(root, lock, problems)

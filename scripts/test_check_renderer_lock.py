@@ -14,7 +14,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import check_renderer_lock as drift  # noqa: E402
 
-COPIED = (drift.LOCK, *drift.READERS, *drift.RECORDS, *drift.DOCUMENTS)
+COPIED = (drift.LOCK, *drift.READERS, *drift.RECORDS, *drift.DOCUMENTS,
+          drift.evidence.PLATFORM_FILE)
 
 
 class RendererLockDriftTest(unittest.TestCase):
@@ -58,21 +59,44 @@ class RendererLockDriftTest(unittest.TestCase):
         names = ["skia", "dawn_combined", "svg", "skresources", "skshaper", "skparagraph",
                  "skunicode_core", "skunicode_icu"]
         files = [f"{n}.lib" if windows else f"lib{n}.a" for n in names]
-        row = {"asset": f"skia-build-{key}-gpu-release.zip", "sha256": digest("asset"),
+        row = {"asset": drift.evidence.PLATFORM_ASSETS[key], "sha256": digest("asset"),
                "configuration": "Release", "archive_root": f"build/{key}/lib/Release",
                "release": "chrome/m158-attested.2", "builder_commit": "a" * 40,
                "archives": {f: digest(f) for f in files}}
         lock["platforms"][key] = row
         return row
 
+    def write_evidence(self) -> None:
+        """Pin evidence that agrees with the rows now in the lock."""
+        lock = json.loads((self.root / drift.LOCK).read_text(encoding="utf-8"))
+        records = {}
+        for key, row in lock["platforms"].items():
+            if key == drift.PLATFORM:
+                continue
+            stem = row["asset"].removesuffix(".zip")
+            manifest = "1" * 64
+            records[key] = {"asset": row["asset"], "sha256": row["sha256"],
+                            "legal_manifest": {"name": f"{stem}.legal-manifest.sha256-{manifest}.json",
+                                               "sha256": manifest},
+                            "configuration": "Release", "archive_root": row["archive_root"],
+                            "archives": dict(row["archives"])}
+        target = self.root / drift.evidence.EVIDENCE
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps({
+            "schema": drift.evidence.SCHEMA, "release": "chrome/m158-attested.2",
+            "builder": {"repository": "https://github.com/danielraffel/skia-builder",
+                        "commit": "a" * 40},
+            "attestation": {"sha256": "2" * 64}, "platforms": records}), encoding="utf-8")
+
     def with_rows(self, change=None) -> None:
         def edit(lock):
             self.add_row(lock, "linux-x64")
             self.add_row(lock, "linux-arm64")
             self.add_row(lock, "windows-x64", windows=True)
-            if change:
-                change(lock)
         self.edit_json(drift.LOCK, edit)
+        self.write_evidence()
+        if change:
+            self.edit_json(drift.LOCK, change)
 
     def test_a_row_added_to_the_lock_is_checked_and_agrees(self) -> None:
         self.with_rows()
