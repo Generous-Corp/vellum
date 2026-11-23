@@ -178,6 +178,11 @@ class ImportBackendTests(unittest.TestCase):
             self.assertNotEqual(completed.returncode, 0)
             self.assertIn("not implemented", completed.stdout)
             self.assertFalse(materialized.exists())
+            ignored = root / "ignored.js"
+            completed = invoke("import", "jsx", str(jsx), "--out", str(ignored), "--source-out", str(root / "src"), cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("--source-out", completed.stdout)
+            self.assertFalse(ignored.exists())
             bad_utf8 = root / "bad.jsx"
             bad_utf8.write_bytes(b"\xff\xfe export")
             completed = invoke("import", "jsx", str(bad_utf8), "--mode", "baked", "--emit", "ir-json", "--out", str(root / "o.json"), cwd=root)

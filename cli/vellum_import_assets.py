@@ -68,6 +68,8 @@ def import_jsx(source_path: Path, *, emit: str, mode: str, output: Path | None,
             "--emit materialized-runtime is not implemented by the standalone importer; "
             "use --emit js or --emit ir-json"
         )
+    if source_out is not None:
+        raise AssetImportError("--source-out is only used by --emit materialized-runtime, which is not implemented")
     if output is None:
         raise AssetImportError("--out is required for JSX output")
     if emit == "js":
