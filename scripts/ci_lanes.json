@@ -131,6 +131,10 @@
         "isolated": true
       },
       {
+        "script": "scripts/test_renderer_platform_evidence.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/check_renderer_lock.py",
         "isolated": true
       },
@@ -310,6 +314,10 @@
       },
       {
         "script": "scripts/test_check_renderer_lock.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/test_renderer_platform_evidence.py",
         "isolated": true
       },
       {
