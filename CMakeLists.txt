@@ -171,8 +171,8 @@ if(APPLE AND VELLUM_BUILD_TESTS)
 endif()
 
 # The RmlUi module is a self-contained project; it is also built on its own
-# with `cmake -S rmlui`. It is added after the graphics targets so its optional
-# VellumRenderer can link Vellum::Gpu; nothing else in it uses Vellum.
+# with `cmake -S rmlui`. Add it after the Vellum targets so its optional
+# VellumRenderer and PluginView bridges can link their Vellum units.
 if(VELLUM_ENABLE_RMLUI)
     add_subdirectory(rmlui)
 endif()
