@@ -234,6 +234,8 @@
       "vellum.rmlui.metal-image-decode",
       "vellum.rmlui.metal-ios-cocoa-negative",
       "vellum.rmlui.metal-ios-compile",
+      "vellum.rmlui.metal-ios-runtime",
+      "vellum.rmlui.metal-ios-runtime-control",
       "vellum.rmlui.metal-layers",
       "vellum.rmlui.metal-reference",
       "vellum.rmlui.metal-trim",
@@ -257,6 +259,7 @@
     ],
     "slow": [
       "gpu-runtime.install-consumer",
+      "vellum.design-emitter-conformance",
       "vellum.framework.threejs-modules",
       "vellum.framework.v8-engine",
       "vellum.install-consumer-nested-libdir",
@@ -271,5 +274,5 @@
       "vellum.web.text-ime-accessibility"
     ]
   },
-  "note": "slow also covers tests that need an input only the GPU lane provides: vellum.mirror-install-consumer needs VELLUM_VIEW_AUDIO_ARCHIVE, fetched from a Pulp release by tools/mirror/fetch_view_audio_archive.py; vellum.framework.threejs-modules needs V8, which only the GPU lane configures."
+  "note": "slow also covers tests that need an input only the GPU lane provides: vellum.mirror-install-consumer and vellum.design-emitter-conformance need VELLUM_VIEW_AUDIO_ARCHIVE, fetched from a Pulp release by tools/mirror/fetch_view_audio_archive.py; vellum.framework.threejs-modules needs V8, which only the GPU lane configures."
 }

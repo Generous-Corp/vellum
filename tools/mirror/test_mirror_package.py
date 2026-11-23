@@ -1645,24 +1645,26 @@ class PlatformRecordPlanTest(unittest.TestCase):
         mp.BUILD_INFO_INPUTS.pop(EXPORT_ID, None)
         self.temporary.cleanup()
 
-    def write_record(self, extra_sources: list[str] | None = None, edit_options=None, **overrides) -> dict:
+    def write_record(self, extra_sources: list[str] | None = None, edit_options=None,
+                     record_platform: str = "linux-x64", **overrides) -> dict:
+        system, processor = mp.platform_closures.IDENTITIES[record_platform]
         closure = json.loads(json.dumps(self.fixture.closure))
-        options = {"CMAKE_SYSTEM_NAME": "Linux", "CMAKE_SYSTEM_PROCESSOR": "x86_64", "CMAKE_BUILD_TYPE": "Release",
+        options = {"CMAKE_SYSTEM_NAME": system, "CMAKE_SYSTEM_PROCESSOR": processor, "CMAKE_BUILD_TYPE": "Release",
                    "PULP_ENABLE_GPU": "ON", "PULP_HAS_SKIA": "1"}
         identity = {"gpu": True, "skia": True, "text_shaping": True, "build_type": "Release",
-                    "system": "Linux", "processor": "x86_64"}
+                    "system": system, "processor": processor}
         if edit_options:
             edit_options(options)
         closure["configure"] = {"options": options, "identity": identity}
         closure["targets"][0]["sources"] += extra_sources or []
-        root = self.fixture.repo / "provenance/framework/platforms/linux-x64"
+        root = self.fixture.repo / f"provenance/framework/platforms/{record_platform}"
         root.mkdir(parents=True, exist_ok=True)
         (root / "foundation.json").write_text(json.dumps(closure), encoding="utf-8")
         units = [{"name": "foundation",
-                  "closure_manifest": "provenance/framework/platforms/linux-x64/foundation.json",
+                  "closure_manifest": f"provenance/framework/platforms/{record_platform}/foundation.json",
                   "closure_sha256": mp.sha256_file(root / "foundation.json")}]
         record = {
-            "schema": "vellum.framework-platform-closure.v1", "platform": "linux-x64",
+            "schema": "vellum.framework-platform-closure.v1", "platform": record_platform,
             "pulp_repository": "Generous-Corp/pulp", "pulp_sha": PULP_SHA,
             "tool": {"path": "tools/scripts/vellum_closure.py", "pulp_blob": "f" * 40},
             "configure": {"identity": identity, "options_sha256": mp.platform_closures.options_sha256(options)},
@@ -1677,7 +1679,7 @@ class PlatformRecordPlanTest(unittest.TestCase):
         (root / "record.json").write_text(json.dumps(record), encoding="utf-8")
         (root.parent / "index.json").write_text(json.dumps({
             "schema": "vellum.framework-platform-index.v1",
-            "platforms": {"linux-x64": "provenance/framework/platforms/linux-x64/record.json"}}), encoding="utf-8")
+            "platforms": {record_platform: f"provenance/framework/platforms/{record_platform}/record.json"}}), encoding="utf-8")
         return record
 
     def plan(self, platform: str) -> dict:
@@ -1807,6 +1809,43 @@ class PlatformRecordPlanTest(unittest.TestCase):
                 self.write_record([source])
                 with self.assertRaises(mp.PlanError) as caught:
                     self.plan("linux-x64")
+                self.assertIn("safe relative path", str(caught.exception))
+
+    RUNNER_ROOT = "C:/Users/runneradmin/AppData/Local/Pulp/fetchcontent-src/"
+
+    def load_windows(self, sources: list[str]) -> None:
+        self.write_record(sources, record_platform="windows-x64")
+        mp.platform_closures.load_record(self.fixture.repo, "windows-x64")
+
+    def test_windows_record_accepts_sources_under_the_runner_fetchcontent_cache(self) -> None:
+        self.load_windows([self.RUNNER_ROOT + "brotli-v1.2.1/c/common/constants.c"])
+
+    def test_windows_runner_source_rule_stays_narrow(self) -> None:
+        for source in (
+            "C:/Windows/System32/x.c",                                    # outside the runner cache
+            "D:/a/vellum/vellum/x.c",                                     # another drive
+            "C:/Users/other/AppData/Local/Pulp/fetchcontent-src/x.c",     # another user
+            self.RUNNER_ROOT + "../escape.c",                             # traversal
+            self.RUNNER_ROOT + "a/./b.c",                                 # dot segment
+            self.RUNNER_ROOT + "a//b.c",                                  # empty segment
+            self.RUNNER_ROOT,                                             # no file
+            self.RUNNER_ROOT.replace("/", "\\") + "x.c",                  # backslash
+            "//server/share/x.c",                                         # UNC
+            "/Users/runneradmin/AppData/Local/Pulp/fetchcontent-src/x.c",  # POSIX absolute
+        ):
+            with self.subTest(source=source):
+                with self.assertRaises(mp.platform_closures.RecordError) as caught:
+                    self.load_windows([source])
+                self.assertIn("safe relative path", str(caught.exception))
+
+    def test_runner_absolute_sources_are_refused_off_windows(self) -> None:
+        for platform in ("linux-x64", "windows-arm64"):
+            if platform not in mp.platform_closures.IDENTITIES:
+                continue
+            with self.subTest(platform=platform):
+                self.write_record([self.RUNNER_ROOT + "x.c"], record_platform=platform)
+                with self.assertRaises(mp.platform_closures.RecordError) as caught:
+                    mp.platform_closures.load_record(self.fixture.repo, platform)
                 self.assertIn("safe relative path", str(caught.exception))
 
     def test_export_binding_must_match_the_recorded_manifests(self) -> None:

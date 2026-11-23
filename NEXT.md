@@ -28,6 +28,18 @@ ctest --test-dir build-rmlui --output-on-failure -R '^vellum\\.rmlui\\.install-c
 
 The lead should also run the animation-specific host fixture covering zero idle presents, one present after a DOM/data change, and presents on each animation tick until completion. This lane contains no GPU result.
 
+# Pulp design cutover map
+
+The three rows map to Vellum owners as follows.
+
+| Pulp row | Pulp capability | Vellum owner | Cutover shape |
+| --- | --- | --- | --- |
+| C2 | `tools/import-design/` and the `pulp-import-design` executable | `packages/vellum-design-ir/`, `authoring/design_pipeline/`, and the installed `vellum` import backend in `cli/vellum_cli.py` | Keep the import executable contract at the Vellum CLI boundary. Move source adapters and DesignIR normalization into the Vellum design-import package, with the native pipeline as the C++ consumer. |
+| C7 | `test/fixtures/emitter-conformance/` and `test/test_design_emitter_conformance.cpp` | `framework/core/view/src/design_import*`, `framework/core/view/src/design_*_codegen.cpp`, and `authoring/design_pipeline/tests/` | Keep one DesignIR fixture set and compare the native materializer, bridge JavaScript, baked C++, and SwiftUI lowerings in Vellum's design-import test lane. |
+| C14 | `tools/cli/cmd_design_subcommands.cpp`, `tools/design/pulp_design_debug.cpp`, and `tools/ui-build/` | `cli/vellum_cli.py`, `packages/vellum-design-ir/bin/`, `packages/vellum-ui/`, and the `vellum` installed CLI surface | Keep the design command family in Vellum and have commands forward to the installed design-import backend and UI build tooling. |
+
+C7 is the first implementation slice. The C2 and C14 moves remain planned until the conformance gate has a Vellum owner and test lane.
+
 # iOS Metal renderer lane
 
 The baseline test commit `dce2f4110` registered
@@ -64,3 +76,13 @@ cmake -S tools/mirror/consumer/ios-auv3 -B <ios-device-build> -G Ninja \
 ~/bin/leased-build --wait-secs 3600 -- cmake --build <ios-device-build> \
   --target vellum-rmlui-metal-ios-compile
 ```
+
+# iOS Metal asset-bundle regression
+
+The new regression contract was added before the implementation and fails on the pre-fix head 46abf596bb7573e58bf18bbe4023acc9f2b94b60:
+
+```
+AssertionError: missing contract text: 'progress: fonts loaded'
+```
+
+The implementation must bundle the fonts, fixtures, and metallib into both runtime app bundles and resolve them through NSBundle when argv paths are absent or unreadable. The simulator/device run needs the lead's GPU-capable execution environment.

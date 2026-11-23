@@ -277,6 +277,12 @@ if(VELLUM_RMLUI_METAL AND VELLUM_RMLUI_FONTS)
             VellumRmlUi::Native VellumRmlUi::Metal VellumRmlUi::Cpu
             "-framework CoreGraphics" "-framework ImageIO")
         target_compile_options(vellum-rmlui-cpu-vs-metal-test PRIVATE -fobjc-arc)
+        if(IOS)
+            add_custom_command(TARGET vellum-rmlui-cpu-vs-metal-test POST_BUILD
+                COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                    "${_vellum_rmlui_metal_library}"
+                    "$<TARGET_FILE_DIR:vellum-rmlui-cpu-vs-metal-test>/vellum-rmlui-metal.metallib")
+        endif()
         add_test(NAME vellum.rmlui.cpu-vs-metal
             COMMAND vellum-rmlui-cpu-vs-metal-test "${_vellum_rmlui_rmlui_src}" "${_vellum_rmlui_fixtures}")
         set_tests_properties(vellum.rmlui.cpu-vs-metal PROPERTIES SKIP_RETURN_CODE 77)
