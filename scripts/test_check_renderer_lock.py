@@ -80,8 +80,8 @@ class RendererLockDriftTest(unittest.TestCase):
         self.assert_drift("VellumSkiaDawn.cmake: does not read")
 
     def test_cmake_reading_an_unlocked_archive_is_drift(self) -> None:
-        self.edit_text("cmake/VellumSkiaDawn.cmake", "_vellum_renderer_SHA256_libsvg.a",
-                       "_vellum_renderer_SHA256_libsvg2.a")
+        self.edit_text("cmake/VellumSkiaDawn.cmake", 'set(_vellum_svg_name "libsvg.a")',
+                       'set(_vellum_svg_name "libsvg2.a")')
         self.assert_drift("reads libsvg2.a, which the lock does not lock")
 
     def test_a_milestone_restated_in_the_workflow_is_drift(self) -> None:

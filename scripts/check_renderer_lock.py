@@ -111,7 +111,11 @@ def check_readers(root: Path, lock: dict, problems: list[str]) -> None:
 def check_cmake_names(root: Path, lock: dict, problems: list[str]) -> None:
     text = (root / "cmake/VellumSkiaDawn.cmake").read_text(encoding="utf-8")
     archives = lock["platforms"][PLATFORM]["archives"]
-    for name in sorted(set(re.findall(r"_vellum_renderer_SHA256_(lib[A-Za-z0-9_]+\.a)", text))):
+    # Libraries are named directly (_vellum_renderer_SHA256_libfoo.a) or through a
+    # per-library name variable (set(_vellum_foo_name "libfoo.a")); read both.
+    direct = re.findall(r"_vellum_renderer_SHA256_(lib[A-Za-z0-9_]+\.a)", text)
+    named = re.findall(r'set\(_vellum_[a-z0-9_]+_name\s+"(lib[A-Za-z0-9_]+\.a)"\)', text)
+    for name in sorted(set(direct) | set(named)):
         if name not in archives:
             problems.append(f"cmake/VellumSkiaDawn.cmake: reads {name}, which the lock does not lock")
 
