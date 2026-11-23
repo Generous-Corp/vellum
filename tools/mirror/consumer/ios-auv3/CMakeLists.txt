@@ -8,6 +8,7 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" OR
 endif()
 
 include(CTest)
+# The host-side test_metal_ios_runtime_contract.py checks this registration.
 
 get_filename_component(vellum_root "${CMAKE_CURRENT_SOURCE_DIR}/../../../.." ABSOLUTE)
 set(VELLUM_RMLUI_IOS_METAL_BUILD_DIR "${CMAKE_BINARY_DIR}/rmlui" CACHE PATH
