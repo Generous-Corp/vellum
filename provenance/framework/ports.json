@@ -1067,8 +1067,7 @@
       "pulp_path": null,
       "pulp_commits": [],
       "framework_blob": null,
-      "reason": "Vellum-owned Android GPU surface lifecycle boundary over Pulp's Dawn Vulkan path.",
-      "platforms": ["android-arm64-v8a"]
+      "reason": "Vellum-owned Android GPU surface lifecycle boundary over Pulp's Dawn Vulkan path."
     },
     {
       "framework_path": "framework/core/render/platform/android/android_gpu_surface.cpp",
