@@ -154,8 +154,9 @@ function(gpu_runtime_read_renderer_lock)
     # A row names the release its asset is downloaded from. It must be of the
     # lock's own milestone. Every platform except macos-arm64 must name an
     # attested release (chrome/mNNN-attested.N): a mutable chrome/mNNN tag is
-    # refused for them. The macOS row may omit it or repeat the milestone, which
-    # is the tag the macOS records are checked against.
+    # refused for them. The macOS row may omit it (the milestone's own release)
+    # or name any release of the milestone; the macOS records are checked
+    # against the release it resolves to.
     set(_release "${_milestone}")
     string(JSON _row_release ERROR_VARIABLE _error
         GET "${_json}" platforms "${ARG_PLATFORM}" release)
@@ -174,13 +175,7 @@ function(gpu_runtime_read_renderer_lock)
                 "gpu-runtime: renderer lock ${ARG_PLATFORM} release ${_row_release} is not of "
                 "milestone ${_milestone}")
         endif()
-        if(ARG_PLATFORM STREQUAL "macos-arm64")
-            if(NOT _row_release STREQUAL _milestone)
-                message(FATAL_ERROR
-                    "gpu-runtime: renderer lock macos-arm64 release is ${_row_release}, "
-                    "expected ${_milestone}")
-            endif()
-        elseif(NOT CMAKE_MATCH_2)
+        if(NOT ARG_PLATFORM STREQUAL "macos-arm64" AND NOT CMAKE_MATCH_2)
             message(FATAL_ERROR
                 "gpu-runtime: renderer lock ${ARG_PLATFORM} release is not attested: ${_row_release}")
         endif()
