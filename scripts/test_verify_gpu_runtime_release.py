@@ -138,6 +138,8 @@ class Renderer(unittest.TestCase):
         for key, value in overrides.items():
             if key in ("asset", "sha256"):
                 lock["platforms"]["macos-arm64"][key] = value
+            elif key == "release":
+                lock["platforms"]["macos-arm64"]["release"] = value
             elif key == "repository":
                 lock["builder"]["repository"] = value
             else:
@@ -153,6 +155,16 @@ class Renderer(unittest.TestCase):
                     {"asset": "--output=/etc/x"}, {"sha256": "nope"}):
             with self.subTest(bad=bad), self.assertRaises(release.ReleaseError):
                 release.renderer_asset(self.lock(**bad))
+
+    def test_the_macos_rows_own_release_forms_the_url(self):
+        url, _, _ = release.renderer_asset(self.lock(release="chrome/m147-attested.2"))
+        self.assertEqual(url, f"{release.BUILDER}/releases/download/chrome/m147-attested.2/skia.zip")
+        url, _, _ = release.renderer_asset(self.lock(release="chrome/m147"))
+        self.assertTrue(url.endswith("/chrome/m147/skia.zip"))
+        for bad in ("chrome/m148-attested.2", "chrome/m147-attested", "latest", "chrome/m147/../x",
+                    "-K/etc/passwd", None, 7):
+            with self.subTest(release=bad), self.assertRaises(release.ReleaseError):
+                release.renderer_asset(self.lock(release=bad))
 
     def test_a_download_that_does_not_match_the_lock_is_refused(self):
         directory = Path(tempfile.mkdtemp(prefix="fetch-"))
