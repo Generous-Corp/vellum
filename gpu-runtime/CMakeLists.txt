@@ -102,7 +102,7 @@ target_link_libraries(gpu-runtime-bootstrap PUBLIC VellumGpuRuntime::DeviceApi)
 
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/VellumSkiaDawnPlatform.cmake")
 vellum_skia_dawn_platform_key("${CMAKE_SYSTEM_NAME}" "${CMAKE_SYSTEM_PROCESSOR}"
-    "${ANDROID_ABI}" _gpu_runtime_platform)
+    "${ANDROID_ABI}" _gpu_runtime_platform QUIET)
 set(GPU_RUNTIME_HAS_DEVICE OFF)
 if(_gpu_runtime_platform)
     include("${CMAKE_CURRENT_LIST_DIR}/cmake/GpuRuntimeDawn.cmake")
@@ -114,7 +114,8 @@ if(_gpu_runtime_platform)
     gpu_runtime_find_dawn(${_gpu_runtime_dawn_args})
     set(GPU_RUNTIME_HAS_DEVICE ${GPU_RUNTIME_HAS_DAWN})
 elseif(GPU_RUNTIME_REQUIRE_DEVICE)
-    message(FATAL_ERROR "gpu-runtime: the locked device library is unavailable for ${_gpu_runtime_platform}")
+    message(FATAL_ERROR "gpu-runtime: the locked device library is unavailable for "
+        "${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR}/${ANDROID_ABI}")
 endif()
 
 if(GPU_RUNTIME_HAS_DEVICE)

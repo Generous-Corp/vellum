@@ -39,6 +39,10 @@ function(_gpu_runtime_lock_get out json)
 endfunction()
 
 function(_gpu_runtime_lock_require_sha256 value label)
+    if(value MATCHES "^0+$")
+        message(FATAL_ERROR
+            "gpu-runtime: renderer lock ${label} is an all-zero placeholder")
+    endif()
     if(NOT value MATCHES "^[0-9a-f]+$")
         message(FATAL_ERROR
             "gpu-runtime: renderer lock ${label} is not a lowercase SHA-256: ${value}")
@@ -74,7 +78,7 @@ function(gpu_runtime_read_renderer_lock)
             "${_GPU_RUNTIME_RENDERER_LOCK_SCHEMA}")
     endif()
     _gpu_runtime_lock_get(_milestone "${_json}" milestone)
-    if(NOT _milestone MATCHES "^chrome/m[0-9]+$")
+    if(NOT _milestone MATCHES "^chrome/m[0-9]+(-attested\\.[0-9]+)?$")
         message(FATAL_ERROR
             "gpu-runtime: renderer lock milestone is not chrome/mNNN: ${_milestone}")
     endif()
@@ -96,6 +100,19 @@ function(gpu_runtime_read_renderer_lock)
     endif()
     _gpu_runtime_lock_get(_sha256 "${_json}" platforms "${ARG_PLATFORM}" sha256)
     _gpu_runtime_lock_require_sha256("${_sha256}" "${ARG_PLATFORM} asset digest")
+    # A row may come from a different release than the top-level milestone
+    # (for example chrome/m158-attested.2); its URL must resolve to the asset
+    # whose digest is locked.
+    set(_release "${_milestone}")
+    string(JSON _row_release ERROR_VARIABLE _error
+        GET "${_json}" platforms "${ARG_PLATFORM}" release)
+    if(NOT _error)
+        set(_release "${_row_release}")
+        if(NOT _release MATCHES "^chrome/m[0-9]+(-attested\\.[0-9]+)?$")
+            message(FATAL_ERROR
+                "gpu-runtime: renderer lock ${ARG_PLATFORM} release is malformed: ${_release}")
+        endif()
+    endif()
     _gpu_runtime_lock_get(_archive_root "${_json}"
         platforms "${ARG_PLATFORM}" archive_root)
 
@@ -121,10 +138,10 @@ function(gpu_runtime_read_renderer_lock)
         set(${ARG_PREFIX}_SHA256_${_name} "${_digest}" PARENT_SCOPE)
     endforeach()
 
-    set(${ARG_PREFIX}_MILESTONE "${_milestone}" PARENT_SCOPE)
+    set(${ARG_PREFIX}_MILESTONE "${_release}" PARENT_SCOPE)
     set(${ARG_PREFIX}_ASSET "${_asset}" PARENT_SCOPE)
     set(${ARG_PREFIX}_URL
-        "${_repository}/releases/download/${_milestone}/${_asset}" PARENT_SCOPE)
+        "${_repository}/releases/download/${_release}/${_asset}" PARENT_SCOPE)
     set(${ARG_PREFIX}_SHA256 "${_sha256}" PARENT_SCOPE)
     set(${ARG_PREFIX}_ARCHIVE_ROOT "${_archive_root}" PARENT_SCOPE)
     set(${ARG_PREFIX}_ARCHIVES "${_names}" PARENT_SCOPE)

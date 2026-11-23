@@ -49,6 +49,36 @@ class RendererLockDriftTest(unittest.TestCase):
     def test_the_checkout_agrees(self) -> None:
         self.assertEqual(drift.check(ROOT), [])
 
+    def test_a_zeroed_digest_in_a_non_macos_row_is_drift(self) -> None:
+        self.edit_json(drift.LOCK, lambda lock: lock["platforms"]["android-arm64-v8a"]["archives"]
+                       .update({"libskia.a": "0" * 64}))
+        self.assert_drift("android-arm64-v8a libskia.a digest is an all-zero placeholder")
+
+    def test_a_zeroed_asset_digest_in_a_non_macos_row_is_drift(self) -> None:
+        self.edit_json(drift.LOCK, lambda lock: lock["platforms"]["android-x86_64"]
+                       .update(sha256="0" * 64))
+        self.assert_drift("android-x86_64 asset digest is an all-zero placeholder")
+
+    def test_swapped_asset_digests_across_rows_are_drift(self) -> None:
+        def swap(lock):
+            rows = lock["platforms"]
+            rows["linux-arm64"]["sha256"] = rows["linux-x64"]["sha256"]
+        self.edit_json(drift.LOCK, swap)
+        self.assert_drift("asset digest repeats linux-x64 asset")
+
+    def test_a_deleted_platform_row_is_drift(self) -> None:
+        self.edit_json(drift.LOCK, lambda lock: lock["platforms"].pop("windows-arm64"))
+        self.assert_drift("platform windows-arm64 is missing")
+
+    def test_a_row_without_a_release_is_drift(self) -> None:
+        self.edit_json(drift.LOCK, lambda lock: lock["platforms"]["linux-x64"].pop("release"))
+        self.assert_drift("linux-x64 release is not")
+
+    def test_a_windows_row_must_lock_lib_names(self) -> None:
+        self.edit_json(drift.LOCK, lambda lock: lock["platforms"]["windows-x64"]["archives"]
+                       .pop("skia.lib"))
+        self.assert_drift("windows-x64 does not lock skia.lib")
+
     def test_an_unchanged_copy_agrees(self) -> None:
         self.assertEqual(drift.check(self.root), [])
 
@@ -60,7 +90,7 @@ class RendererLockDriftTest(unittest.TestCase):
 
     def test_one_changed_archive_digest_is_drift(self) -> None:
         self.edit_json(drift.LOCK, lambda lock: lock["platforms"][drift.PLATFORM]["archives"]
-                       .update({"libskia.a": "0" * 64}))
+                       .update({"libskia.a": "1" * 64}))
         self.assert_drift("renderer archives differ from the lock: libskia.a")
 
     def test_a_changed_source_commit_is_drift(self) -> None:
@@ -124,7 +154,7 @@ class RendererLockDriftTest(unittest.TestCase):
     def test_a_malformed_lock_is_refused(self) -> None:
         self.edit_json(drift.LOCK, lambda lock: lock["platforms"][drift.PLATFORM]
                        .update(sha256="DCA7"))
-        self.assert_drift("digests are missing or malformed")
+        self.assert_drift("asset digest is missing or malformed")
 
 
 if __name__ == "__main__":

@@ -34,6 +34,8 @@
       "sha256": "ecc2a8c8042116ce3f342f8b768c13c4ececdb5abe51b5d42de9f4e8f6e14cfc",
       "configuration": "Release",
       "archive_root": "build/linux-gpu/lib/Release/x64",
+      "release": "chrome/m158-attested.2",
+      "builder_commit": "a9c9f37255121d4b3d0fe8931fdd81c9eca97da2",
       "archives": {
         "libskia.a": "477a32c507586408865e4382f498b64256d50113b0e7af96fb24a5459179b554",
         "libdawn_combined.a": "53cbac4189b46291b853a63b2640bf1d3dbf65fa06ecf809c98934f176d8a290",
@@ -50,6 +52,8 @@
       "sha256": "368ea9bfa07a97decea0fd0e3db93456a8a31c5c1d38d77fbeef82740d1ab349",
       "configuration": "Release",
       "archive_root": "build/linux-gpu/lib/Release/arm64",
+      "release": "chrome/m158-attested.2",
+      "builder_commit": "a9c9f37255121d4b3d0fe8931fdd81c9eca97da2",
       "archives": {
         "libskia.a": "a209c57c1966a1d3380730d5f29a9f29c92067e2221ec0e959194f0da4b06328",
         "libdawn_combined.a": "5a04ad9d594498539b27c0eb09f442489e3e9f1d6cc3d75eaf64e61192dc09dc",
@@ -66,6 +70,8 @@
       "sha256": "d3918db7623dad9835c8ac171ff5d75b75a9b6322672329df7845fedc0957734",
       "configuration": "Release",
       "archive_root": "build/android-gpu/lib/Release",
+      "release": "chrome/m158-attested.2",
+      "builder_commit": "a9c9f37255121d4b3d0fe8931fdd81c9eca97da2",
       "archives": {
         "libskia.a": "8720cd84491a1fc1dacefc7e21addc2038af503c55018c98282e196deef7faa8",
         "libdawn_combined.a": "602d00641cf506f3334e3953eb8c9a1f1320907c3f8d8434a61c0c468d042aa9",
@@ -81,7 +87,9 @@
       "asset": "skia-build-android-x86_64-gpu-release.zip",
       "sha256": "17d5a1784ad8cb143cc7b02a6e10064f9c7bf04ddfbd9c994fd0fdb5232643b1",
       "configuration": "Release",
-      "archive_root": "build/android-gpu/lib/Release",
+      "archive_root": "build/android-gpu-x86_64/lib/Release",
+      "release": "chrome/m158-attested.2",
+      "builder_commit": "a9c9f37255121d4b3d0fe8931fdd81c9eca97da2",
       "archives": {
         "libskia.a": "bd7e8b7441ed3091e4c59479ab4885a4539a883a5aa6e7ff32543edabe63db4d",
         "libdawn_combined.a": "a57f4a825025e0bb17bca52dcbcbb1ad01a204e793167de4a8992eada828664e",
@@ -98,6 +106,8 @@
       "sha256": "6ce4bc023a4d3254301598eb351e13c1f1cef82fd284daa7f7a9fb637aec50d0",
       "configuration": "Release",
       "archive_root": "build/win-gpu/lib/Release/x64",
+      "release": "chrome/m158-attested.2",
+      "builder_commit": "a9c9f37255121d4b3d0fe8931fdd81c9eca97da2",
       "archives": {
         "skia.lib": "ba648879b04426a5676ce4fe75d63eeaaac20e11b35703a60b14afba88109083",
         "dawn_combined.lib": "be4843a8498b151ec297c3197d766824ad6a6483f538a92f836d64df5b223d2a",
@@ -114,6 +124,8 @@
       "sha256": "b66098dddaebf1185b7b6778709b02eccfeaad6774836f63bd36c7cf46b6d248",
       "configuration": "Release",
       "archive_root": "build/win-gpu/lib/Release/arm64",
+      "release": "chrome/m158-attested.2",
+      "builder_commit": "a9c9f37255121d4b3d0fe8931fdd81c9eca97da2",
       "archives": {
         "skia.lib": "ded38083f4de56d3fcc54ec2b96aadfde652ea662799fa37fc405cb142c41b45",
         "dawn_combined.lib": "db70835bd65de21adcad98e2e62af3ed6fbae8d4753ffa7cefc2c643d3d1a201",
@@ -122,7 +134,7 @@
         "skshaper.lib": "b35a2a19f67b35d25e312f167e2aa2d78c7469d56e941bb737094a1e6a16b80b",
         "skparagraph.lib": "5307cf72916bcff338ad27d9ff202f056cee1d933fcd8198d4ce5dacb5c51f3f",
         "skunicode_core.lib": "2b1e113fefc7a872c0c1675f552db2d2731f4fb1f197ef8bfe3b900dd7e5c8d4",
-        "skunicode_icu.lib": "59413d2fa4eddb314ed20529992c8d22c2a503b1d58f4199298ca5d4842d538c"
+        "skunicode_icu.lib": "59413d2fae4ddb314ed20529992c8d22c2a503b1d58f4199298ca5d4842d538c"
       }
     }
   }

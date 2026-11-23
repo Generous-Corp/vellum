@@ -1,4 +1,8 @@
+# Sets <output> to the lock key for the target platform. An unlisted platform is
+# a configure error, unless QUIET is given: then <output> is empty, so callers
+# that treat the GPU as optional keep their "no device library" path.
 function(vellum_skia_dawn_platform_key system processor android_abi output)
+    cmake_parse_arguments(PARSE_ARGV 4 ARG "QUIET" "" "")
     if(system STREQUAL "Darwin" AND processor STREQUAL "arm64")
         set(_key "macos-arm64")
     elseif(system STREQUAL "Linux" AND processor MATCHES "^(x86_64|AMD64)$")
@@ -13,6 +17,8 @@ function(vellum_skia_dawn_platform_key system processor android_abi output)
         set(_key "android-arm64-v8a")
     elseif(system STREQUAL "Android" AND android_abi STREQUAL "x86_64")
         set(_key "android-x86_64")
+    elseif(ARG_QUIET)
+        set(_key "")
     else()
         message(FATAL_ERROR
             "Vellum: unsupported GPU platform ${system}/${processor}/${android_abi}")

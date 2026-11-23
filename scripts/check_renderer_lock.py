@@ -41,6 +41,12 @@ def digests_in(text: str) -> set[str]:
     return {match.lower() for match in ANY_HEX_64.findall(text)}
 HEX_40 = re.compile(r"^[0-9a-f]{40}$")
 MILESTONE = re.compile(r"\bchrome/m[0-9]+\b")
+RELEASE = re.compile(r"chrome/m[0-9]+(-attested\.[0-9]+)?")
+EXPECTED_PLATFORMS = ("macos-arm64", "linux-x64", "linux-arm64", "windows-x64",
+                      "windows-arm64", "android-arm64-v8a", "android-x86_64")
+# The libraries cmake/VellumSkiaDawn.cmake links, by stem.
+REQUIRED_LIBRARIES = ("skia", "dawn_combined", "svg", "skresources", "skshaper",
+                      "skparagraph", "skunicode_core", "skunicode_icu")
 
 # Build inputs that must read the lock rather than restate it.
 READERS = {
@@ -75,15 +81,51 @@ def load_lock(root: Path, problems: list[str]) -> dict | None:
                          ("sources.dawn", sources.get("dawn"))):
         if not isinstance(value, str) or not HEX_40.fullmatch(value):
             problems.append(f"{LOCK}: {label} is not a 40-character commit")
-    platform = (lock.get("platforms") or {}).get(PLATFORM)
-    if not isinstance(platform, dict):
+    platforms = lock.get("platforms") or {}
+    if not isinstance(platforms.get(PLATFORM), dict):
         problems.append(f"{LOCK}: platform {PLATFORM} is missing")
         return None
-    digests = [platform.get("sha256"), *(platform.get("archives") or {}).values()]
-    if not platform.get("archives") or any(
-            not isinstance(value, str) or not HEX_64.fullmatch(value) for value in digests):
-        problems.append(f"{LOCK}: {PLATFORM} digests are missing or malformed")
+    for key in EXPECTED_PLATFORMS:
+        if not isinstance(platforms.get(key), dict):
+            problems.append(f"{LOCK}: platform {key} is missing")
+    seen: dict[str, str] = {}
+    for key, platform in platforms.items():
+        if not isinstance(platform, dict):
+            problems.append(f"{LOCK}: platform {key} is not an object")
+            continue
+        check_platform_row(key, platform, seen, problems)
     return None if problems else lock
+
+
+def check_platform_row(key: str, platform: dict, seen: dict[str, str],
+                       problems: list[str]) -> None:
+    archives = platform.get("archives")
+    if not isinstance(archives, dict) or not archives:
+        problems.append(f"{LOCK}: {key} lists no archives")
+        archives = {}
+    labelled = [(f"{key} asset", platform.get("sha256")),
+                *((f"{key} {name}", value) for name, value in archives.items())]
+    for label, value in labelled:
+        if not isinstance(value, str) or not HEX_64.fullmatch(value):
+            problems.append(f"{LOCK}: {label} digest is missing or malformed")
+        elif not value.strip("0"):
+            problems.append(f"{LOCK}: {label} digest is an all-zero placeholder")
+        elif value in seen:
+            problems.append(f"{LOCK}: {label} digest repeats {seen[value]}")
+        else:
+            seen[value] = label
+    if key != PLATFORM:
+        release = platform.get("release")
+        if not isinstance(release, str) or not RELEASE.fullmatch(release):
+            problems.append(f"{LOCK}: {key} release is not chrome/mNNN[-attested.N]")
+        if not isinstance(platform.get("builder_commit"), str) or \
+                not HEX_40.fullmatch(platform["builder_commit"]):
+            problems.append(f"{LOCK}: {key} builder_commit is not a 40-character commit")
+    suffix = ".lib" if key.startswith("windows-") else ".a"
+    for library in REQUIRED_LIBRARIES:
+        name = f"{library}.lib" if suffix == ".lib" else f"lib{library}.a"
+        if archives and name not in archives:
+            problems.append(f"{LOCK}: {key} does not lock {name}")
 
 
 def asset_url(lock: dict) -> str:
@@ -93,8 +135,8 @@ def asset_url(lock: dict) -> str:
 
 
 def locked_digests(lock: dict) -> set[str]:
-    platform = lock["platforms"][PLATFORM]
-    return {platform["sha256"], *platform["archives"].values()}
+    return {digest for platform in lock["platforms"].values()
+            for digest in (platform["sha256"], *platform["archives"].values())}
 
 
 def check_readers(root: Path, lock: dict, problems: list[str]) -> None:
@@ -110,7 +152,7 @@ def check_readers(root: Path, lock: dict, problems: list[str]) -> None:
 
 def check_cmake_names(root: Path, lock: dict, problems: list[str]) -> None:
     text = (root / "cmake/VellumSkiaDawn.cmake").read_text(encoding="utf-8")
-    archives = lock["platforms"][PLATFORM]["archives"]
+    archives = {name for row in lock["platforms"].values() for name in row["archives"]}
     # Libraries are named directly (_vellum_renderer_SHA256_libfoo.a) or through a
     # per-library name variable (set(_vellum_foo_name "libfoo.a")); read both.
     direct = re.findall(r"_vellum_renderer_SHA256_(lib[A-Za-z0-9_]+\.a)", text)

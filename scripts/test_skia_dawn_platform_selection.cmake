@@ -18,6 +18,43 @@ assert_platform("Windows" "ARM64" "" "windows-arm64")
 assert_platform("Android" "aarch64" "arm64-v8a" "android-arm64-v8a")
 assert_platform("Android" "x86_64" "x86_64" "android-x86_64")
 
+# QUIET: an unlisted platform yields an empty key instead of an error, so an
+# optional-GPU configure on it still succeeds.
+foreach(_quiet_case IN ITEMS "Linux|riscv64|" "Linux|armv7l|" "Windows|x86|" "Darwin|x86_64|"
+        "FreeBSD|amd64|")
+    string(REPLACE "|" ";" _quiet_args "${_quiet_case}")
+    list(GET _quiet_args 0 _s)
+    list(GET _quiet_args 1 _p)
+    vellum_skia_dawn_platform_key("${_s}" "${_p}" "" _quiet_key QUIET)
+    if(NOT _quiet_key STREQUAL "")
+        message(FATAL_ERROR "QUIET ${_quiet_case} returned ${_quiet_key}")
+    endif()
+endforeach()
+
+# The lock reader: a row's own release forms its URL; the right archive root is
+# read for android-x86_64; an all-zero digest is refused.
+include("${CMAKE_CURRENT_LIST_DIR}/../gpu-runtime/cmake/GpuRuntimeRendererLock.cmake")
+gpu_runtime_read_renderer_lock(PLATFORM android-x86_64 PREFIX _t)
+if(NOT _t_URL MATCHES "/releases/download/chrome/m158-attested\\.2/skia-build-android-x86_64-gpu-release\\.zip$")
+    message(FATAL_ERROR "row release not used in URL: ${_t_URL}")
+endif()
+if(NOT _t_ARCHIVE_ROOT STREQUAL "build/android-gpu-x86_64/lib/Release")
+    message(FATAL_ERROR "android-x86_64 archive root is ${_t_ARCHIVE_ROOT}")
+endif()
+file(READ "${CMAKE_CURRENT_LIST_DIR}/../gpu-runtime/renderer-lock.json" _lock_text)
+string(REPLACE "${_t_SHA256}" "0000000000000000000000000000000000000000000000000000000000000000"
+    _zeroed "${_lock_text}")
+set(_zero_lock "${CMAKE_CURRENT_LIST_DIR}/../build-zero-renderer-lock.json")
+file(WRITE "${_zero_lock}" "${_zeroed}")
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" "-DTEST_ROOT=${CMAKE_CURRENT_LIST_DIR}/.." "-DZERO_LOCK=${_zero_lock}"
+        -P "${CMAKE_CURRENT_LIST_DIR}/test_skia_dawn_platform_zero.cmake"
+    RESULT_VARIABLE _zero_result ERROR_VARIABLE _zero_error)
+if(_zero_result EQUAL 0 OR NOT _zero_error MATCHES "all-zero[ \n]+placeholder")
+    message(FATAL_ERROR "zero digest was accepted: ${_zero_error}")
+endif()
+file(REMOVE "${_zero_lock}")
+
 set(_unknown_error "")
 execute_process(
     COMMAND "${CMAKE_COMMAND}" "-DTEST_ROOT=${CMAKE_CURRENT_LIST_DIR}/.."

@@ -75,10 +75,6 @@ if(VELLUM_SKIA_ARCHIVE)
 endif()
 
 set(VELLUM_HAS_SKIA_DAWN OFF)
-if(NOT APPLE AND NOT WIN32 AND NOT UNIX AND NOT ANDROID)
-    message(FATAL_ERROR "Vellum: unsupported GPU platform ${_vellum_platform}")
-endif()
-
 if(APPLE AND CMAKE_OSX_ARCHITECTURES AND
    NOT CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
     message(FATAL_ERROR
