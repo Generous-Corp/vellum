@@ -6,16 +6,15 @@ endif()
 
 set(_required
     "tools/android/android_gpu_smoke.cpp"
-    "tools/android/CMakeLists.txt")
+    "tools/android/CMakeLists.txt"
+    "NEXT.md")
 foreach(_path IN LISTS _required)
     if(NOT EXISTS "${SOURCE_ROOT}/${_path}")
         message(FATAL_ERROR "android-gpu-smoke: missing ${_path}")
     endif()
 endforeach()
 
-file(READ "${SOURCE_ROOT}/CMakeLists.txt" _android_cmake)
-file(READ "${SOURCE_ROOT}/tools/android/AndroidGpuSmoke.cmake" _android_smoke_cmake)
-string(APPEND _android_cmake "\n${_android_smoke_cmake}")
+file(READ "${SOURCE_ROOT}/tools/android/CMakeLists.txt" _android_cmake)
 foreach(_needle IN ITEMS
     "vellum-android-gpu-smoke"
     "vellum-android-gpu-smoke-negative"
@@ -36,10 +35,7 @@ foreach(_needle IN ITEMS
     endif()
 endforeach()
 
-if(NOT EXISTS "${SOURCE_ROOT}/../NEXT.md")
-    message(FATAL_ERROR "android-gpu-smoke: missing NEXT.md beside clone")
-endif()
-file(READ "${SOURCE_ROOT}/../NEXT.md" _next)
+file(READ "${SOURCE_ROOT}/NEXT.md" _next)
 foreach(_needle IN ITEMS
     "-no-window -no-audio -gpu host -no-snapshot"
     "adb wait-for-device"
