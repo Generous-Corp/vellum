@@ -356,7 +356,7 @@ find_package(VellumGpuRuntime 0.2.3 EXACT CONFIG REQUIRED COMPONENTS Device)
 add_library(editor_host editor.cpp) # only vellum/platform/gpu_fwd.hpp and view headers
 target_link_libraries(editor_host PRIVATE Vellum::MirrorView_core)
 
-add_library(editor_gpu gpu_runtime.cpp) # includes <gpu_runtime/gpu_surface.hpp>
+add_library(editor_gpu editor_gpu.cpp) # includes <gpu_runtime/gpu_surface.hpp>
 target_link_libraries(editor_gpu PRIVATE VellumGpuRuntime::Device)
 
 add_executable(my_plugin editor_entry.cpp)
