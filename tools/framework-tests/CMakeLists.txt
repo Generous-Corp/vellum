@@ -48,6 +48,9 @@ vellum_add_framework_test(widget-bridge
 vellum_add_framework_test(gpu-surface-lease
     SOURCES gpu_surface_lease_test.cpp
     UNITS Vellum::MirrorView_core Vellum::MirrorRender_2d)
+# The test fakes a surface through the gpu_runtime header the render unit wraps.
+target_include_directories(vellum-framework-gpu-surface-lease-test PRIVATE
+    "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     vellum_add_framework_test(canvas-raster-parity
