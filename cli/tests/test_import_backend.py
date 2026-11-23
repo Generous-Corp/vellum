@@ -205,6 +205,16 @@ class ImportBackendTests(unittest.TestCase):
             nan_manifest.write_text(json.dumps(nan), encoding="utf-8")
             completed = invoke("import", "preconverted-svg", str(svg), "--manifest", str(nan_manifest), "--validate-only", cwd=root)
             self.assertNotEqual(completed.returncode, 0)
+            nan["elements"][0]["geometry"] = {"x": 10**1000, "y": 0, "w": 1, "h": 1}
+            nan_manifest.write_text(json.dumps(nan), encoding="utf-8")
+            completed = invoke("import", "preconverted-svg", str(svg), "--manifest", str(nan_manifest), "--validate-only", cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertNotIn("Traceback", completed.stderr)
+            nan["canvas"]["width"] = 10**1000
+            nan_manifest.write_text(json.dumps(nan), encoding="utf-8")
+            completed = invoke("import", "preconverted-svg", str(svg), "--manifest", str(nan_manifest), "--validate-only", cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertNotIn("Traceback", completed.stderr)
             bad_side = root / "badside.json"
             bad_side.write_bytes(b"\xff\xfe")
             completed = invoke("import", "preconverted-svg", str(svg), "--manifest", str(bad_side), "--validate-only", cwd=root)
