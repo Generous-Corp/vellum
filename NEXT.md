@@ -44,3 +44,45 @@ android-gpu-surface: missing framework/core/render/platform/android/android_gpu_
 ```
 
 The implementation was restored with `git reset --hard 504dcff98`.
+
+## Android GPU proof status
+
+Passed with `~/bin/leased-build --wait-secs 3600 -- cmake --build build-android-gpu --target vellum-android-gpu-surface` after an arm64-v8a API 26 NDK configure. The output is `build-android-gpu/libvellum-android-gpu-surface.a`. This is an object and static-library compile proof only. It does not link Dawn or render pixels.
+
+The standalone GPU-runtime configure was attempted with:
+
+```sh
+NDK="$HOME/Library/Android/sdk/ndk/30.0.16248370"
+~/bin/leased-build --wait-secs 3600 -- cmake -S gpu-runtime -B build-gpu-runtime-android -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 \
+  -DGPU_RUNTIME_REQUIRE_DEVICE=ON -DGPU_RUNTIME_BUILD_TESTS=ON \
+  -DCMAKE_BUILD_TYPE=Release
+```
+
+It stopped because this lane has no locked Android Dawn/Skia asset:
+
+```text
+gpu-runtime: the device library needs the locked Dawn build; set GPU_RUNTIME_SKIA_DIR or GPU_RUNTIME_RENDERER_ARCHIVE
+```
+
+The requested root RmlUi VellumRenderer configure was attempted with the same NDK and `-DVELLUM_ENABLE_RMLUI=ON -DVELLUM_RMLUI_RENDERER=vellum -DVELLUM_ENABLE_GPU=ON -DVELLUM_REQUIRE_GPU=ON`. It stopped at the existing macOS-only VellumSkiaDawn guard before defining `vellum-rmlui-vellum-renderer-test`. No test result is claimed.
+
+Lead device or emulator commands, after supplying the locked Android Dawn/Skia asset and packaging the Vellum shell:
+
+```sh
+emulator -list-avds
+QEMU_AUDIO_DRV=coreaudio emulator -avd Medium_Phone_API_36 -gpu host -no-snapshot &
+adb wait-for-device
+adb shell getprop sys.boot_completed
+adb logcat -c
+adb shell am start -n com.vellum/.VellumActivity
+adb logcat -d -s Vellum:D AndroidRuntime:E
+adb shell am force-stop com.vellum
+adb shell am start -n com.vellum/.VellumActivity
+adb exec-out screencap -p > /tmp/vellum-android-gpu.png
+```
+
+The lead must run pause, resume, resize, and surface-destroy/recreate on a
+Vulkan-capable emulator or arm64 device and retain the Vulkan validation log.
+This lane did not run an emulator or claim GPU pixels.
