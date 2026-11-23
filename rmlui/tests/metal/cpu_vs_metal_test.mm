@@ -92,7 +92,9 @@ std::pair<std::filesystem::path, std::filesystem::path> asset_roots(int argc, ch
         return {argv[1], argv[2]};
     NSString* resource_path = [[NSBundle mainBundle] resourcePath];
     if (resource_path)
-        return {resource_path.UTF8String, resource_path.UTF8String};
+        // The bundle mirrors DirectoryAssets' roots: rmlui/... and fixtures/...
+        return {std::filesystem::path(resource_path.UTF8String) / "rmlui",
+                std::filesystem::path(resource_path.UTF8String) / "fixtures"};
     return {};
 }
 
