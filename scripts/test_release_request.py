@@ -1335,7 +1335,7 @@ class ReleaseTagWorkflow(unittest.TestCase):
         self.assertIn("if: steps.select.outputs.tag != ''", checks)
         self.assertIn('python3 -I scripts/pretag_checks.py --tag "$TAG" --commit "$GITHUB_SHA"', checks)
         self.assertIn('--snapshot-output "$RUNNER_TEMP/open-pr-snapshot.json"', checks)
-        self.assertIn("actions/upload-artifact@v4", checks)
+        self.assertIn("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", checks)
         self.assertNotIn("continue-on-error", self.select_job)
         self.assertIn("path: .exact-boundary-pulp", self.select_job)
         self.assertIn("ref: ${{ steps.select.outputs.pulp-cursor }}", self.select_job)
@@ -1345,7 +1345,7 @@ class ReleaseTagWorkflow(unittest.TestCase):
     def test_the_tag_and_attestation_bind_the_pushed_commit(self) -> None:
         self.assertIn('attestation --commit "$GITHUB_SHA"', self.sign_job)
         self.assertIn('--open-pr-snapshot-json "$RUNNER_TEMP/open-pr-snapshot.json"', self.sign_job)
-        self.assertIn("actions/download-artifact@v4", self.sign_job)
+        self.assertIn("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", self.sign_job)
         self.assertIn('tag -s -F "$RUNNER_TEMP/promotion-attestation.json" "$TAG" "$GITHUB_SHA"', self.sign_job)
         self.assertIn('--source-commit "$GITHUB_SHA"', self.sign_job)
         self.assertIn("ref: ${{ github.sha }}", self.sign_job)

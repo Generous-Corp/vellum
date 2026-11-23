@@ -1037,6 +1037,7 @@ class Tests(unittest.TestCase):
         data = dict(
             fixture["data"], authority_commit=commit, delivery_commit=commit,
             authority_tree=tree, delivery_tree=tree, release_source_commit=commit,
+            open_pr_snapshot_commit=commit,
         )
         errors = self.mirror_release_errors(fixture, data, commit=commit)
         self.assertTrue(any("parity completion record exists at the release commit" in e
