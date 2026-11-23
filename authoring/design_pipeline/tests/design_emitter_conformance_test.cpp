@@ -82,8 +82,6 @@ namespace fs = std::filesystem;
     void conformance_bind(vellum::view::View& root, vellum::view::NativeImportBindingContext& ctx);    \
     }
 VELLUM_CONFORMANCE_FIXTURE(form_controls_08)
-VELLUM_CONFORMANCE_FIXTURE(spectr)
-VELLUM_CONFORMANCE_FIXTURE(kelvin)
 VELLUM_CONFORMANCE_FIXTURE(keyed_list_18)
 VELLUM_CONFORMANCE_FIXTURE(fidelity_scene)
 #undef VELLUM_CONFORMANCE_FIXTURE
@@ -307,10 +305,6 @@ std::vector<Fixture> fixtures() {
     return {
         {"form-controls-08", dir / "form-controls-08.ir.json", false,
          c::form_controls_08::conformance_build, c::form_controls_08::conformance_bind},
-        {"spectr", dir / "spectr.ir.json", false, c::spectr::conformance_build,
-         c::spectr::conformance_bind},
-        {"kelvin", dir / "kelvin.ir.json", false, c::kelvin::conformance_build,
-         c::kelvin::conformance_bind},
         {"keyed-list-18", dir / "keyed-list-18.ir.json", false, c::keyed_list_18::conformance_build,
          c::keyed_list_18::conformance_bind},
         {"fidelity-scene", root / "fixtures/import-fidelity/scene.pulp.json", true,

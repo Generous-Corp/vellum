@@ -54,8 +54,6 @@ if(VELLUM_BUILD_TESTS)
     set(_vellum_conformance_sources)
     foreach(_spec
             "form_controls_08|ir|fixtures/emitter-conformance/form-controls-08.ir.json"
-            "spectr|ir|fixtures/emitter-conformance/spectr.ir.json"
-            "kelvin|ir|fixtures/emitter-conformance/kelvin.ir.json"
             "keyed_list_18|ir|fixtures/emitter-conformance/keyed-list-18.ir.json"
             "fidelity_scene|figma-plugin|fixtures/import-fidelity/scene.pulp.json")
         string(REPLACE "|" ";" _parts "${_spec}")
@@ -94,17 +92,10 @@ if(VELLUM_BUILD_TESTS)
         VELLUM_REPO_ROOT="${PROJECT_SOURCE_DIR}")
     set_target_properties(vellum-design-emitter-conformance PROPERTIES
         BUILD_RPATH "$<TARGET_FILE_DIR:vellum-skia-dawn-provider>")
-    # spectr and kelvin build audio displays (createMeter, createWaveform,
-    # createSpectrum); the bridge reports "audio widget unavailable: link
-    # vellum::view-audio" unless the Pulp view-audio archive registers its
-    # display providers. Nothing references those registrars by symbol, so a
-    # plain archive link would drop them: force-load the whole archive. The GPU
-    # lane supplies it (scripts/ctest_classes.json classes this test as slow
-    # for that reason).
-    if(DEFINED VELLUM_VIEW_AUDIO_ARCHIVE AND NOT VELLUM_VIEW_AUDIO_ARCHIVE STREQUAL "")
-        target_link_options(vellum-design-emitter-conformance PRIVATE
-            "LINKER:-force_load,${VELLUM_VIEW_AUDIO_ARCHIVE}")
-    endif()
+    # Vellum is audio-free. Audio-display fixtures (spectr and kelvin) stay
+    # in the source corpus for future Pulp-backed coverage, but are excluded
+    # from this Vellum conformance executable so the gate never force-loads
+    # Pulp's view-audio archive or inherits its unrelated audio dependencies.
     add_test(NAME vellum.design-emitter-conformance
         COMMAND vellum-design-emitter-conformance)
 endif()
