@@ -8,7 +8,24 @@ set(VELLUM_SKIA_DIR "" CACHE PATH
 include("${CMAKE_CURRENT_LIST_DIR}/../gpu-runtime/cmake/GpuRuntimeRendererLock.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/VellumSkiaDawnPlatform.cmake")
 vellum_skia_dawn_platform_key("${CMAKE_SYSTEM_NAME}" "${CMAKE_SYSTEM_PROCESSOR}"
-    "${ANDROID_ABI}" _vellum_platform)
+    "${ANDROID_ABI}" _vellum_platform QUIET)
+gpu_runtime_renderer_lock_has_platform("${_vellum_platform}" _vellum_platform_locked)
+if(NOT _vellum_platform_locked)
+    set(_vellum_platform "")
+endif()
+if(NOT _vellum_platform)
+    # No locked artifact for this target: the GPU is unavailable, which is an
+    # error only when it is required.
+    set(VELLUM_HAS_SKIA_DAWN OFF)
+    if(VELLUM_REQUIRE_GPU)
+        message(FATAL_ERROR
+            "Vellum: no locked Skia/Dawn artifact for ${CMAKE_SYSTEM_NAME}/"
+            "${CMAKE_SYSTEM_PROCESSOR}/${ANDROID_ABI}")
+    endif()
+    message(STATUS "Vellum: no locked Skia/Dawn artifact for "
+        "${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR}; GPU backend disabled")
+    return()
+endif()
 gpu_runtime_read_renderer_lock(PLATFORM "${_vellum_platform}" PREFIX _vellum_renderer)
 if(_vellum_platform MATCHES "^windows-")
     set(_vellum_archive_suffix ".lib")
@@ -75,10 +92,6 @@ if(VELLUM_SKIA_ARCHIVE)
 endif()
 
 set(VELLUM_HAS_SKIA_DAWN OFF)
-if(NOT APPLE AND NOT WIN32 AND NOT UNIX AND NOT ANDROID)
-    message(FATAL_ERROR "Vellum: unsupported GPU platform ${_vellum_platform}")
-endif()
-
 if(APPLE AND CMAKE_OSX_ARCHITECTURES AND
    NOT CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
     message(FATAL_ERROR
@@ -273,7 +286,7 @@ elseif(WIN32)
 elseif(ANDROID)
     target_link_libraries(vellum-skia-dawn-provider PRIVATE vulkan log android)
 else()
-    target_link_libraries(vellum-skia-dawn-provider PRIVATE Vulkan dl pthread m)
+    target_link_libraries(vellum-skia-dawn-provider PRIVATE vulkan dl pthread m)
 endif()
 
 # The provider must link to the same bytes every time: the SDK artifact is

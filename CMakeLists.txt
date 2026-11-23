@@ -587,7 +587,7 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}" -I scripts/test_check_renderer_lock.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.skia-dawn-platform-selection
-        COMMAND "${CMAKE_COMMAND}" -P
+        COMMAND "${CMAKE_COMMAND}" "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}" -P
             "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_skia_dawn_platform_selection.cmake"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.threejs-payload

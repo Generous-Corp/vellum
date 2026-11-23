@@ -11,18 +11,18 @@ set(VellumGpuRuntime_Device_FOUND FALSE)
 set(VellumGpuRuntime_SkiaLogBridge_FOUND FALSE)
 
 # The device library links the locked Dawn build, checked against the shipped
-# lock. A published package ships libdawn_combined.a beside the device library;
+# lock. A published package ships the locked Dawn library beside the device library;
 # a consumer may instead name its own copy of the locked skia-builder asset with
 # GPU_RUNTIME_SKIA_DIR or GPU_RUNTIME_RENDERER_ARCHIVE.
 if(VellumGpuRuntime_HAS_DEVICE)
-    set(_gpu_runtime_shipped_dawn "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_LIBDIR@/libdawn_combined.a")
+    set(_gpu_runtime_shipped_dawn "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_LIBDIR@/@GPU_RUNTIME_DAWN_FILE@")
     if(NOT GPU_RUNTIME_SKIA_DIR AND NOT GPU_RUNTIME_RENDERER_ARCHIVE AND
        EXISTS "${_gpu_runtime_shipped_dawn}")
-        gpu_runtime_find_dawn(PLATFORM macos-arm64
+        gpu_runtime_find_dawn(PLATFORM @GPU_RUNTIME_PLATFORM@
             LIBRARY "${_gpu_runtime_shipped_dawn}"
             LOCK "${VellumGpuRuntime_RENDERER_LOCK}")
     else()
-        gpu_runtime_find_dawn(PLATFORM macos-arm64
+        gpu_runtime_find_dawn(PLATFORM @GPU_RUNTIME_PLATFORM@
             SKIA_DIR "${GPU_RUNTIME_SKIA_DIR}"
             ARCHIVE "${GPU_RUNTIME_RENDERER_ARCHIVE}"
             LOCK "${VellumGpuRuntime_RENDERER_LOCK}")
