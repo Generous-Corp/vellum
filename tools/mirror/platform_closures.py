@@ -286,8 +286,28 @@ def contained_under(root: Path, candidate: Path) -> bool:
     return True
 
 
-def _source_strings(value: Any) -> bool:
-    return isinstance(value, list) and all(safe_relative_path(item) for item in value)
+# The one absolute location a closure source may name: the FetchContent source
+# cache a Windows runner materialises dependency sources into. The closure only
+# records these as strings; the planner never opens or copies them.
+WINDOWS_RUNNER_SOURCE_ROOT = "C:/Users/runneradmin/AppData/Local/Pulp/fetchcontent-src/"
+
+
+def windows_runner_source(value: Any) -> bool:
+    """Whether a path sits under the Windows runner's FetchContent cache.
+
+    The prefix is matched exactly (no other drive, user or directory), and the
+    remainder must itself be a safe relative path, so no '.', '..', empty,
+    backslash or NUL segment can follow it.
+    """
+    return (isinstance(value, str) and value.startswith(WINDOWS_RUNNER_SOURCE_ROOT)
+            and safe_relative_path(value[len(WINDOWS_RUNNER_SOURCE_ROOT):]))
+
+
+def _source_strings(value: Any, platform: str = "") -> bool:
+    if not isinstance(value, list):
+        return False
+    return all(safe_relative_path(item) or (platform == "windows-x64" and windows_runner_source(item))
+               for item in value)
 
 
 def _rows(value: Any) -> bool:
@@ -304,7 +324,7 @@ TARGET_LISTS = {"sources": _source_strings, "include_dirs": _strings, "link_targ
                 "compile_definitions": _strings}
 
 
-def _check_graph_shape(at: str, closure: dict[str, Any]) -> None:
+def _check_graph_shape(at: str, closure: dict[str, Any], platform: str = "") -> None:
     """Every graph field the planner reads has the shape it reads it as, so a
     malformed manifest fails here rather than deep inside planning."""
     for field, (check, shape) in CLOSURE_LISTS.items():
@@ -324,7 +344,9 @@ def _check_graph_shape(at: str, closure: dict[str, Any]) -> None:
         if not isinstance(target.get("type"), str):
             raise RecordError(f"{at}: {name} type must be a string")
         for field, check in TARGET_LISTS.items():
-            if field in target and not check(target[field]):
+            valid = (_source_strings(target[field], platform) if field == "sources"
+                     else check(target[field])) if field in target else True
+            if not valid:
                 shape = "a list of strings with safe relative paths" if field == "sources" else "a list of strings"
                 raise RecordError(f"{at}: {name} {field} must be {shape}")
         rows = target.get("external_link_inputs", [])
@@ -429,7 +451,7 @@ def load_record(repo: Path, key: str) -> tuple[dict[str, Any], list[tuple[str, d
             raise RecordError(f"{at}: {manifest}'s configure options do not match the record's digest")
         _check_options_platform(at, key, options)
         _check_options_claims(at, options)
-        _check_graph_shape(f"{at}: {manifest}", closure)
+        _check_graph_shape(f"{at}: {manifest}", closure, key)
         for target in closure.get("targets", []):
             for row in target.get("external_link_inputs", []):
                 if row.get("dependency") == "skia" and row.get("asset_sha256") != asset["sha256"]:

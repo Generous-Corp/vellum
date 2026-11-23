@@ -690,6 +690,7 @@ def copy_payload(
 ) -> dict[str, object]:
     shutil.copy2(repo / "cli/vellum_cli.py", payload / "vellum_cli.py")
     shutil.copy2(repo / "cli/vellum_illustrator.py", payload / "vellum_illustrator.py")
+    shutil.copy2(repo / "cli/vellum_import_assets.py", payload / "vellum_import_assets.py")
     shutil.copy2(repo / "cli/vellum_dev.py", payload / "vellum_dev.py")
     shutil.copy2(repo / "cli/vellum_backend.py", payload / "vellum_backend.py")
     shutil.copy2(repo / "cli/vellum_manifest.py", payload / "vellum_manifest.py")
