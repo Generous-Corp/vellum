@@ -11,6 +11,11 @@ library with RmlUi linked privately: none of RmlUi's headers or symbols reach
 a consumer. `SoftRenderer`, `DevAssets` and `VellumRenderer` (which draws
 through Vellum's GPU renderer) build on it.
 
+`VellumRenderer` uses the installed Vellum Skia/Dawn provider for offscreen or
+native-surface rendering. Generated RGBA textures are uploaded directly, and
+PNG image assets use the provider's bounded decoder by default. A host can
+replace that decoder with `set_image_decoder()` when its asset format differs.
+
 **VellumRmlUiNative** is the open entry point, for a host that drives RmlUi
 through its own API and its own render interface. `VellumRmlUi::Native` links
 RmlUi publicly, and `VellumRmlUi::Metal` is an `Rml::RenderInterface` on Metal.
