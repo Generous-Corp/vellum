@@ -177,6 +177,12 @@ if(VELLUM_ENABLE_RMLUI)
     add_subdirectory(rmlui)
 endif()
 
+option(VELLUM_ANDROID_GPU_SMOKE
+    "Build the headless Android Vulkan VellumRenderer smoke executables" OFF)
+if(VELLUM_ANDROID_GPU_SMOKE)
+    include(tools/android/AndroidGpuSmoke.cmake)
+endif()
+
 if(VELLUM_BUILD_TESTS)
     enable_testing()
     find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
