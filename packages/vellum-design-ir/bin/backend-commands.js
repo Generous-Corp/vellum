@@ -251,6 +251,7 @@ async function importDesign(project, args) {
         sourceKey,
         sourceType,
         figFrame: args.frame,
+        extraFiles: args.file,
         figPage: args.page,
     });
     const paths = projectPaths(project, sourceKey, loaded.revision);
@@ -330,6 +331,7 @@ async function reimportDesignFilesystem(project, args) {
         sourceKey,
         sourceType: lockedSource.sourceArtifactKind === 'fig' ? 'fig' : lockedSource.adapter,
         figFrame: lockedSource.figFrame,
+        extraFiles: args.file,
     });
     if ((lockedSource.sourceArtifactKind ?? 'json') !== loaded.sourceArtifact.kind) {
         fail(

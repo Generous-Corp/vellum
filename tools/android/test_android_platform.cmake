@@ -1,0 +1,12 @@
+# CMake -P check for the Android platform identity used by the canary.
+set(ANDROID TRUE)
+set(CMAKE_ANDROID_ARCH_ABI "arm64-v8a")
+set(ANDROID_PLATFORM "android-26")
+include("${CMAKE_CURRENT_LIST_DIR}/AndroidPlatform.cmake")
+vellum_android_platform_configure()
+if(NOT VELLUM_ANDROID_PLATFORM_KEY STREQUAL "android-arm64-v8a")
+    message(FATAL_ERROR "unexpected Android platform key: ${VELLUM_ANDROID_PLATFORM_KEY}")
+endif()
+if(NOT VELLUM_ANDROID_API_LEVEL EQUAL 26)
+    message(FATAL_ERROR "unexpected Android API level: ${VELLUM_ANDROID_API_LEVEL}")
+endif()
