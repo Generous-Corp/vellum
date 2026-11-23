@@ -88,6 +88,9 @@ void test_document_lowering() {
     const auto& first = headless.commands().front();
     VELLUM_RMLUI_CHECK(first.vertices && !first.vertices->empty());
     VELLUM_RMLUI_CHECK(first.indices && first.indices->size() % 3 == 0);
+    // The rendered backend that is then resized owes one new frame.
+    backend.set_dimensions(800, 600);
+    VELLUM_RMLUI_CHECK(backend.needs_render());
 }
 
 void test_model_binding() {

@@ -2,17 +2,34 @@ set(_vellum_rmlui_fixtures "${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
 function(vellum_rmlui_add_test name source)
     add_executable(${name} ${source})
+    target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(${name} PRIVATE ${ARGN})
     target_compile_definitions(${name} PRIVATE
         VELLUM_RMLUI_TEST_FIXTURES="${_vellum_rmlui_fixtures}")
+    # Windows has no rpath: a test that calls into a shared library (such as
+    # vellum-rmlui-core.dll) fails to start with STATUS_DLL_NOT_FOUND unless
+    # the DLL sits beside the executable. The executable itself is passed too
+    # so the copy never receives an empty list.
+    if(WIN32)
+        add_custom_command(TARGET ${name} POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "$<TARGET_RUNTIME_DLLS:${name}>" "$<TARGET_FILE:${name}>"
+                "$<TARGET_FILE_DIR:${name}>"
+            COMMAND_EXPAND_LISTS)
+    endif()
 endfunction()
+
+if(TARGET vellum-rmlui-plugin-view)
+    vellum_rmlui_add_test(vellum-rmlui-plugin-view-test ../plugin_view/tests/plugin_view_test.cpp vellum-rmlui-plugin-view)
+    add_test(NAME vellum.rmlui.plugin-view COMMAND vellum-rmlui-plugin-view-test)
+endif()
 
 vellum_rmlui_add_test(vellum-rmlui-backend-test backend_test.cpp VellumRmlUi::Core)
 
 # The link boundary check (cmake/VellumRmlUiLinkBoundary.cmake), on a stand-in
 # project: clean passes, and each planted violation fails it with its own
 # message, so a check that cannot see a link cannot pass.
-foreach(_case IN ITEMS clean private genex alias unlinked_renderer)
+foreach(_case IN ITEMS clean private near_match genex alias unlinked_renderer unlinked_plugin_view)
     set(_name "vellum.rmlui.link-boundary-${_case}")
     add_test(NAME "${_name}"
         COMMAND "${CMAKE_COMMAND}"
@@ -21,15 +38,19 @@ foreach(_case IN ITEMS clean private genex alias unlinked_renderer)
             "-DVELLUM_RMLUI_MODULE_DIR=${PROJECT_SOURCE_DIR}"
             "-DPLANT=${_case}")
     if(_case STREQUAL "clean")
-        set(_expect "rmlui-link-boundary: 3 targets checked; only vellum-rmlui-vellum-renderer links Vellum")
+        set(_expect "rmlui-link-boundary: [0-9]+ targets checked; only vellum-rmlui-vellum-renderer and vellum-rmlui-plugin-view may link Vellum")
     elseif(_case STREQUAL "private")
         set(_expect "rmlui-link-boundary: vellum-rmlui-native links Vellum::Gpu")
+    elseif(_case STREQUAL "near_match")
+        set(_expect "rmlui-link-boundary: vellum-rmlui-plugin-view-extra links Vellum::MirrorView_core")
     elseif(_case STREQUAL "genex")
         set(_expect "rmlui-link-boundary: vellum-rmlui-core links [^\n]*Vellum::Gpu")
     elseif(_case STREQUAL "alias")
         set(_expect "rmlui-link-boundary: vellum-rmlui-native links VellumRmlUi::Gpu \\(alias VellumRmlUi::Gpu -> Vellum::Gpu\\)")
-    else()
+    elseif(_case STREQUAL "unlinked_renderer")
         set(_expect "rmlui-link-boundary: vellum-rmlui-vellum-renderer links no Vellum target")
+    else()
+        set(_expect "rmlui-link-boundary: vellum-rmlui-plugin-view links no Vellum target")
     endif()
     set_tests_properties("${_name}" PROPERTIES PASS_REGULAR_EXPRESSION "${_expect}")
 endforeach()

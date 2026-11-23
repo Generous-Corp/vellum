@@ -1,0 +1,81 @@
+{
+  "schema": "vellum.framework-platform-closure.v1",
+  "platform": "linux-x64",
+  "pulp_repository": "Generous-Corp/pulp",
+  "pulp_sha": "a4921f08e6328585a5f4160a20969943e5818a62",
+  "tool": {
+    "path": "tools/scripts/vellum_closure.py",
+    "pulp_blob": "b9155809bd87d9eb6b0bda559f48a170ee4bbafd"
+  },
+  "configure": {
+    "identity": {
+      "build_type": "Release",
+      "gpu": true,
+      "processor": "x86_64",
+      "skia": true,
+      "system": "Linux",
+      "text_shaping": true
+    },
+    "options_sha256": "df041e84d9125e6367cf3448cd874f67b05fc2bc54e6c0f5cf1c76849ab5fa62"
+  },
+  "runner_image": {
+    "name": "ubuntu-26.04",
+    "version": "20261116.202.1"
+  },
+  "renderer_asset": {
+    "name": "skia-build-linux-x64-gpu-release.zip",
+    "sha256": "b132db47979f116a2b35720c6e4e8c7128505499e52b218cc64546f87b0bb363"
+  },
+  "units": [
+    {
+      "name": "canvas",
+      "closure_manifest": "provenance/framework/platforms/linux-x64/canvas.json",
+      "closure_sha256": "13f82c0a87bac0791953fa8cb920deea648c424b258c50192168fee771400a98"
+    },
+    {
+      "name": "dataplane",
+      "closure_manifest": "provenance/framework/platforms/linux-x64/dataplane.json",
+      "closure_sha256": "90f63f1716d35db57b5c00f585b10086a2b7932146ecbfd0318cb0bcb2d84c80"
+    },
+    {
+      "name": "design-import",
+      "closure_manifest": "provenance/framework/platforms/linux-x64/design-import.json",
+      "closure_sha256": "35143d12c20b49de05e8b4a436a26750b4438d8810c95f19f14e09b97c32faf7"
+    },
+    {
+      "name": "foundation",
+      "closure_manifest": "provenance/framework/platforms/linux-x64/foundation.json",
+      "closure_sha256": "5aea2777f1711b748c5603cf903454a127310f5c94a02e3bcce4ff29e4b07d76"
+    },
+    {
+      "name": "gpu-device-api",
+      "closure_manifest": "provenance/framework/platforms/linux-x64/gpu-device-api.json",
+      "closure_sha256": "183d6bfd6ed9656060f20be4670e77dee6480986739389a322e1bd442f68c6f4"
+    },
+    {
+      "name": "render-2d",
+      "closure_manifest": "provenance/framework/platforms/linux-x64/render-2d.json",
+      "closure_sha256": "37d27b78197016b4a5823fae461c82f9fddec442aa737a1067f8b52352ae65f8"
+    },
+    {
+      "name": "state-core",
+      "closure_manifest": "provenance/framework/platforms/linux-x64/state-core.json",
+      "closure_sha256": "a4e08b38eb1f25fc692557e5444632d48358015947cd33aa4ac993719fa59cf5"
+    },
+    {
+      "name": "view-core",
+      "closure_manifest": "provenance/framework/platforms/linux-x64/view-core.json",
+      "closure_sha256": "304829589f374bbf4022256920756041c5e2d1d660fbf23f87f24a95024c4b39"
+    },
+    {
+      "name": "view-script",
+      "closure_manifest": "provenance/framework/platforms/linux-x64/view-script.json",
+      "closure_sha256": "331b587c32eefaa91d063a5d672121989c65cf8c726f1214a7d1f18f6838c678"
+    }
+  ],
+  "export": {
+    "run_url": "https://github.com/Generous-Corp/pulp/actions/runs/45043081559",
+    "artifact_sha256": "191fc4d9488ece6b6cd22762e790faf61254e72fc51d34cc79125212874d6639",
+    "manifest_sha256": "a6400a314394fae13d640759b8a6314a27ecca2b828e3b4163d9f02bb5b83fe0"
+  }
+}

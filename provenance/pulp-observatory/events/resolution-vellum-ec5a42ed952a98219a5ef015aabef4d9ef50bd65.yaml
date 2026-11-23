@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-ec5a42ed952a98219a5ef015aabef4d9ef50bd65",
+  "kind": "resolution",
+  "created_at": "2026-11-22T15:02:08Z",
+  "resolves": "vellum-ec5a42ed952a98219a5ef015aabef4d9ef50bd65",
+  "disposition": "framework-only",
+  "rationale": "Vellum provider symbol isolation (skia_dawn_provider.exports, provider symbol census); the mapped paths are Vellum graphics tests (dawn_provider_topology_test.cpp, support/gpu_test_environment.cpp). Pulp has no copy of these tests or of the provider export list. Pulp search at origin/main a4921f08e632 (git grep -w over core tools test examples apple ship inspect packages) for dawn_provider_topology_test, gpu_test_environment, skia_dawn_provider and provider_symbol_census returns 0; control SkiaSurface on the same search returns 288 in 64 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-09, 'Classify the pending Vellum observatory events instead of raising the budget'); no schema or API delta recorded on the event. Any later resolution overrides this.",
+  "owner": "@danielraffel",
+  "linked_commits": [
+    "ec5a42ed952a98219a5ef015aabef4d9ef50bd65"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}

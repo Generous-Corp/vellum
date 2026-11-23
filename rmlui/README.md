@@ -11,6 +11,11 @@ library with RmlUi linked privately: none of RmlUi's headers or symbols reach
 a consumer. `SoftRenderer`, `DevAssets` and `VellumRenderer` (which draws
 through Vellum's GPU renderer) build on it.
 
+`VellumRenderer` uses the installed Vellum Skia/Dawn provider for offscreen or
+native-surface rendering. Generated RGBA textures are uploaded directly, and
+PNG image assets use the provider's bounded decoder by default. A host can
+replace that decoder with `set_image_decoder()` when its asset format differs.
+
 **VellumRmlUiNative** is the open entry point, for a host that drives RmlUi
 through its own API and its own render interface. `VellumRmlUi::Native` links
 RmlUi publicly, and `VellumRmlUi::Metal` is an `Rml::RenderInterface` on Metal.
@@ -26,6 +31,14 @@ which builds the release archive reproducibly. Without
 `VELLUM_RMLUI_NATIVE_PACKAGE`, Native installs into the VellumRmlUi package
 directory instead, as a component of that package.
 
+## Hosting a document in a plug-in view
+
+When the Vellum mirror view unit is available, link the in-tree
+`VellumRmlUi::PluginView` target and include `vellum/rmlui/plugin_view.hpp`.
+The adapter exposes the CPU-rendered document as a Vellum view and submits
+its frame to the host canvas. The platform's `PluginViewHost` supplies child
+window attachment, input dispatch, and presentation.
+
 ## Choosing a renderer
 
 Run `vellum rmlui renderers` to inspect this catalog. A project can select an
@@ -37,7 +50,7 @@ keeps the individual options available for compatibility.
 | --- | --- | --- | --- | --- |
 | `vellum` | vellum | Skia/Dawn | macOS, iOS, Windows, Linux, Android | planned |
 | `metal` | vellum | Metal | macOS, iOS | macOS tested, iOS planned |
-| `cpu` | vellum | CPU | macOS, iOS, Windows, Linux, Android | macOS, Linux, Windows tested; iOS, Android planned |
+| `cpu` | vellum | CPU | macOS, iOS, Windows, Linux, Android | macOS, Windows, Linux tested; iOS, Android planned |
 | `dx11` | upstream-mit | DirectX 11 | Windows | planned |
 | `dx12` | upstream-mit | DirectX 12 | Windows | planned |
 | `gl2` | upstream-mit | OpenGL 2 | Windows, Linux | planned |

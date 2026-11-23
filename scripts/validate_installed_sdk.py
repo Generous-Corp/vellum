@@ -19,6 +19,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from install_core import InstallError, RUNTIME_IMAGES_MANIFEST, runtime_images
 from verify_sdk_artifact import (
     payload_contamination_findings,
     should_scan_payload_content,
@@ -538,11 +539,13 @@ def validate_installed_mirror(
     consumer = build / "vellum-mirror-consumer"
     consumer_output = run([str(consumer), origin], cwd=root).stdout.strip()
 
+    manifest = sdk_prefix / RUNTIME_IMAGES_MANIFEST
+    images = runtime_images(manifest.read_bytes() if manifest.exists() else None)
     run([
         sys.executable, str(SUPPORT_ROOT / "graphics/tests/test_dawn_provider_topology.py"),
         str(consumer), str(sdk_prefix / "lib/libvellum-gpu.dylib"),
-        str(sdk_prefix / "lib/libvellum-skia-dawn-provider.dylib"),
-        str(mirror / "lib/libvellum-mirror-canvas.dylib"),
+        str(sdk_prefix / images["provider"]),
+        str(sdk_prefix / images["canvas"]),
     ], cwd=root)
 
     inertness_path = root / "mirror-inertness.json"
@@ -1266,7 +1269,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             args.view_audio_archive.resolve() if args.view_audio_archive else None,
             require_gpu_claims=args.require_gpu_claims,
         )
-    except (OSError, json.JSONDecodeError, ValidationError) as error:
+    except (OSError, json.JSONDecodeError, InstallError, ValidationError) as error:
         print(f"vellum-installed-sdk-validation: {error}", file=sys.stderr)
         return 1
     rendered = json.dumps(evidence, indent=2, sort_keys=True) + "\n"

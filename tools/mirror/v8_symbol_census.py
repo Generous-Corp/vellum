@@ -20,7 +20,7 @@ images with `nm -m` and fails unless:
 It also reports how many ICU, Abseil and zlib symbols the provider itself
 exports, which libv8 cannot reach under the rules above.
 
-  v8_symbol_census.py --provider lib/libvellum-skia-dawn-provider.dylib --v8 lib/libv8.dylib
+  v8_symbol_census.py --provider "$provider_path" --v8 lib/libv8.dylib
 
 `--plant` adds an exported Abseil name to libv8's set, the control that the
 allow-list check fails. Exit: 0 clean, 1 a rule fails, 3 an image shows no

@@ -45,6 +45,13 @@ vellum_add_framework_test(widget-bridge
     SOURCES widget_bridge_test.cpp
     UNITS Vellum::MirrorView_script)
 
+vellum_add_framework_test(gpu-surface-lease
+    SOURCES gpu_surface_lease_test.cpp
+    UNITS Vellum::MirrorView_core Vellum::MirrorRender_2d)
+# The test fakes a surface through the gpu_runtime header the render unit wraps.
+target_include_directories(vellum-framework-gpu-surface-lease-test PRIVATE
+    "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     vellum_add_framework_test(canvas-raster-parity
         SOURCES canvas_raster_parity_test.cpp
@@ -299,6 +306,11 @@ else()
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
         main_thread_timer_test.mm native_dialog_delivery_test.cpp)
 endif()
+
+# iOS-only: compiled by tools/mirror/consumer/ios-auv3 against the iOS simulator
+# SDK, never by this macOS tree. Naming it here keeps the guard below honest.
+set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+    ios_au_editor_controller_test.mm)
 
 # Every test file here must be registered above. A test file that no
 # vellum_add_framework_test() names would build nothing and run nothing while

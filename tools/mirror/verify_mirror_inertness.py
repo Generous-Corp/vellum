@@ -553,10 +553,21 @@ def verify(prefix: Path, consumer_build: Path, image: Path,
     # MirrorCanvas and Vellum::Gpu forward through this installed provider.
     # Include the provider image in the closure so provider-owned symbols are
     # covered by the same inertness and negative-control rules.
-    libraries += sorted(
-        path for name in ("libvellum-skia-dawn-provider.dylib", "libvellum-skia-dawn-provider.so")
-        if (path := prefix / install_libdir / name).is_file()
-    )
+    manifest = prefix / "share/vellum/runtime-images.json"
+    if manifest.exists():
+        try:
+            provider_path = json.loads(manifest.read_text(encoding="utf-8"))["provider"]
+            provider = prefix / provider_path
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            raise EvidenceError(f"invalid SDK runtime image manifest: {error}") from error
+        if provider.parent != prefix / install_libdir or not provider.is_file():
+            raise EvidenceError(f"the package carries no provider at {provider}")
+        libraries.append(provider)
+    else:
+        libraries += sorted(
+            path for suffix in (".dylib", ".so")
+            if (path := prefix / install_libdir / f"libvellum-skia-dawn-provider{suffix}").is_file()
+        )
     symbols = {}
     defined_symbols = {}
     for path in [image, *libraries]:
