@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CPU_TEST = ROOT / "rmlui/tests/metal/cpu_vs_metal_test.mm"
 METAL_IMPL = ROOT / "rmlui/src/metal_render_interface.mm"
 RMLUI_CMAKE = ROOT / "rmlui/CMakeLists.txt"
+IOS_CMAKE = ROOT / "tools/mirror/consumer/ios-auv3/CMakeLists.txt"
 
 
 def require(text: str, needle: str) -> None:
@@ -17,6 +18,7 @@ def main() -> None:
     cpu = CPU_TEST.read_text()
     metal = METAL_IMPL.read_text()
     cmake = RMLUI_CMAKE.read_text()
+    ios_cmake = IOS_CMAKE.read_text()
 
     metal_pos = cpu.index("MetalRenderInterface metal(device);")
     cpu_pos = cpu.index("CpuRenderInterface cpu;", metal_pos)
@@ -35,6 +37,16 @@ def main() -> None:
     require(metal, "newLibraryWithURL")
     require(cmake, "metallib")
     require(cmake, "xcrun")
+    require(cpu, "progress: fonts loaded")
+    require(cpu, "NSBundle mainBundle")
+    require(cpu, "resourcePath")
+    require(cpu, "std::filesystem::is_directory")
+    require(ios_cmake, "MACOSX_BUNDLE")
+    require(ios_cmake, "TARGET_BUNDLE_DIR")
+    require(ios_cmake, "LatoLatin-Regular.ttf")
+    require(ios_cmake, "fixtures")
+    if ios_cmake.count("TARGET_BUNDLE_DIR") < 2:
+        raise AssertionError("both iOS runtime apps must receive bundle resources")
 
 
 if __name__ == "__main__":
