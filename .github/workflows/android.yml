@@ -14,6 +14,7 @@ name: Android NDK
 # The probe, the unit list and what is left out are in tools/android/. Rendering,
 # canvas and view units need the Skia/Dawn artifact, and runtime's mbedTLS users
 # need mbedTLS; neither is built here.
+# The Android GPU smoke contract is checked by tools/android/test_android_gpu_smoke.cmake.
 #
 # Advisory: not a required check. It runs on pull requests and pushes that touch
 # the framework or this lane, never on merge groups.
