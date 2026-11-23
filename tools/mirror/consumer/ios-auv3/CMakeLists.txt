@@ -21,6 +21,10 @@ set(VELLUM_RMLUI_INSTALL OFF CACHE BOOL "" FORCE)
 option(VELLUM_RMLUI_IOS_METAL_RUNTIME_TEST
     "Build the linked headless iOS Metal renderer test" ON)
 add_subdirectory("${vellum_root}/rmlui" "${VELLUM_RMLUI_IOS_METAL_BUILD_DIR}")
+FetchContent_GetProperties(vellum_rmlui_rmlui SOURCE_DIR _vellum_rmlui_rmlui_src)
+if(NOT _vellum_rmlui_rmlui_src)
+    message(FATAL_ERROR "the fetched RmlUi source directory is unavailable")
+endif()
 
 set(VELLUM_RMLUI_SOURCE_DIR "${vellum_root}/rmlui" CACHE PATH
     "RmlUi module source used by the iOS compile consumer")
@@ -69,7 +73,7 @@ if(VELLUM_RMLUI_IOS_METAL_RUNTIME_TEST)
         "-framework CoreGraphics" "-framework ImageIO")
     add_test(NAME vellum.rmlui.metal-ios-runtime
         COMMAND "$<TARGET_FILE:vellum-rmlui-metal-ios-runtime>"
-            "${vellum_root}/rmlui" "${vellum_root}/rmlui/tests/fixtures")
+            "${_vellum_rmlui_rmlui_src}" "${vellum_root}/rmlui/tests/fixtures")
     set_tests_properties(vellum.rmlui.metal-ios-runtime PROPERTIES SKIP_RETURN_CODE 77)
     add_dependencies(vellum-rmlui-metal-ios-compile vellum-rmlui-metal-ios-runtime)
 endif()
@@ -93,7 +97,7 @@ if(VELLUM_RMLUI_IOS_METAL_NEGATIVE_CONTROL)
         "-framework CoreGraphics" "-framework ImageIO")
     add_test(NAME vellum.rmlui.metal-ios-runtime-control
         COMMAND "$<TARGET_FILE:vellum-rmlui-metal-ios-runtime-control>"
-            "${vellum_root}/rmlui" "${vellum_root}/rmlui/tests/fixtures")
+            "${_vellum_rmlui_rmlui_src}" "${vellum_root}/rmlui/tests/fixtures")
     set_tests_properties(vellum.rmlui.metal-ios-runtime-control PROPERTIES
         WILL_FAIL TRUE SKIP_RETURN_CODE 77)
     add_dependencies(vellum-rmlui-metal-ios-compile vellum-rmlui-metal-ios-runtime-control)
