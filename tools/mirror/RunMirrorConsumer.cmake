@@ -291,6 +291,46 @@ endif()
 _run("plug-in view host consumer run" "${_pvh_dir}/build/vellum-plugin-view-host-consumer" ${_pvh_args})
 message(STATUS "${_last_stdout}")
 
+# A native plug-in editor keeps its editor translation units on the installed
+# mirror and names GPU types only through gpu_fwd.hpp. A separate translation
+# unit includes the device definition from the installed VellumGpuRuntime
+# package and links its Device target.
+set(_native_gpu_editor_dir "${_work}/native-gpu-editor")
+file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/native-gpu-editor/"
+    DESTINATION "${_native_gpu_editor_dir}")
+_run("native GPU editor consumer configure" "${CMAKE_COMMAND}"
+    -S "${_native_gpu_editor_dir}" -B "${_native_gpu_editor_dir}/build" ${_generator}
+    -DCMAKE_BUILD_TYPE=Release
+    "-DCMAKE_PREFIX_PATH=${_prefix}"
+    -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
+    -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE)
+_run("native GPU editor consumer build"
+    "${CMAKE_COMMAND}" --build "${_native_gpu_editor_dir}/build")
+
+# The editor-side choke header remains a deliberate compile-time failure.
+set(_native_gpu_negative_dir "${_work}/native-gpu-editor-negative")
+file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/native-gpu-editor/"
+    DESTINATION "${_native_gpu_negative_dir}")
+_run("native GPU editor negative configure" "${CMAKE_COMMAND}"
+    -S "${_native_gpu_negative_dir}" -B "${_native_gpu_negative_dir}/build" ${_generator}
+    -DCMAKE_BUILD_TYPE=Release -DNATIVE_GPU_EDITOR_NEGATIVE=ON
+    "-DCMAKE_PREFIX_PATH=${_prefix}"
+    -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
+    -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE)
+execute_process(COMMAND "${CMAKE_COMMAND}" --build "${_native_gpu_negative_dir}/build"
+    RESULT_VARIABLE _native_gpu_negative_result
+    OUTPUT_VARIABLE _native_gpu_negative_out ERROR_VARIABLE _native_gpu_negative_err)
+if(_native_gpu_negative_result EQUAL 0)
+    message(FATAL_ERROR "including <vellum/render/gpu_surface.hpp> unexpectedly compiled")
+endif()
+string(FIND "${_native_gpu_negative_out}${_native_gpu_negative_err}"
+    "not part of the installed mirror's supported surface" _native_gpu_negative_hit)
+if(_native_gpu_negative_hit EQUAL -1)
+    message(FATAL_ERROR "native GPU editor negative control failed without the installed guard message:\n"
+        "${_native_gpu_negative_out}\n${_native_gpu_negative_err}")
+endif()
+message(STATUS "native GPU editor choke-header negative control: ok")
+
 # The native bootstrap entry points are provider-owned. The installed mirror
 # consumer must resolve them from that dylib, and must not carry the Dawn proc
 # table calls that the old inline header emitted into plug-in objects. The
