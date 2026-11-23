@@ -102,9 +102,13 @@ if(VELLUM_HAS_SKIA_DAWN)
     target_link_libraries(vellum-gpu
         PUBLIC Vellum::Graphics Vellum::SkiaDawnProvider)
     # Preserve the legacy direct-link ABI while the provider remains the sole
-    # owner of the GPU implementation symbols.
-    target_link_options(vellum-gpu PRIVATE
-        "LINKER:-reexport_library,$<TARGET_FILE:vellum-skia-dawn-provider>")
+    # owner of the GPU implementation symbols. Mach-O needs an explicit
+    # re-export; on ELF and PE the PUBLIC provider link above already reaches
+    # every consumer.
+    if(APPLE)
+        target_link_options(vellum-gpu PRIVATE
+            "LINKER:-reexport_library,$<TARGET_FILE:vellum-skia-dawn-provider>")
+    endif()
     add_custom_command(TARGET vellum-gpu POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E make_directory
             "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_DATADIR}/vellum/fonts"
