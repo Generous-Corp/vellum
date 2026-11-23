@@ -8,7 +8,6 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" OR
 endif()
 
 include(CTest)
-# The host-side test_metal_ios_runtime_contract.py checks this registration.
 
 get_filename_component(vellum_root "${CMAKE_CURRENT_SOURCE_DIR}/../../../.." ABSOLUTE)
 set(VELLUM_RMLUI_IOS_METAL_BUILD_DIR "${CMAKE_BINARY_DIR}/rmlui" CACHE PATH
@@ -117,8 +116,11 @@ if(VELLUM_RMLUI_IOS_METAL_RUNTIME_TEST)
     add_dependencies(vellum-rmlui-metal-ios-compile vellum-rmlui-metal-ios-runtime)
 endif()
 
+# On whenever the runtime test is on, so the wrapper's exit-code passthrough
+# is always proven alongside the runtime test it protects.
 option(VELLUM_RMLUI_IOS_METAL_NEGATIVE_CONTROL
-    "Build the deliberately failing iOS Metal pixel expectation control" OFF)
+    "Build the deliberately failing iOS Metal pixel expectation control"
+    ${VELLUM_RMLUI_IOS_METAL_RUNTIME_TEST})
 if(VELLUM_RMLUI_IOS_METAL_NEGATIVE_CONTROL)
     add_executable(vellum-rmlui-metal-ios-runtime-control
         "${vellum_root}/rmlui/tests/metal/cpu_vs_metal_test.mm")
@@ -169,12 +171,15 @@ if(VELLUM_RMLUI_IOS_METAL_NEGATIVE_CONTROL)
             "${CMAKE_BINARY_DIR}/rmlui/metal/vellum-rmlui-metal.metallib"
             "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime-control>/Resources/vellum-rmlui-metal.metallib")
     if(_vellum_ios_sdk MATCHES "simulator")
+    # Passes only when the app exits 1 AND prints the pixel-check message, so
+    # an install failure, watchdog exit or crash cannot satisfy the control.
     add_test(NAME vellum.rmlui.metal-ios-runtime-control
-        COMMAND /bin/sh "${CMAKE_CURRENT_LIST_DIR}/run_ios_sim.sh"
+        COMMAND /bin/sh "${CMAKE_CURRENT_LIST_DIR}/run_ios_sim_negative_control.sh"
+            "${CMAKE_CURRENT_LIST_DIR}/run_ios_sim.sh"
             "$<TARGET_BUNDLE_DIR:vellum-rmlui-metal-ios-runtime-control>"
             "${_vellum_rmlui_rmlui_src}" "${vellum_root}/rmlui/tests/fixtures")
     set_tests_properties(vellum.rmlui.metal-ios-runtime-control PROPERTIES
-        WILL_FAIL TRUE SKIP_RETURN_CODE 77)
+        SKIP_RETURN_CODE 77)
     endif()
     add_dependencies(vellum-rmlui-metal-ios-compile vellum-rmlui-metal-ios-runtime-control)
 endif()

@@ -35,6 +35,10 @@ def main() -> None:
     ):
         raise AssertionError("CPU progress must follow the CPU construction")
     require(metal, "newLibraryWithURL")
+    # The installed SDK ships no metallib: iOS must fall back to source compile.
+    ios_branch = metal[metal.index("#if TARGET_OS_IPHONE") : metal.index("#else", metal.index("#if TARGET_OS_IPHONE"))]
+    require(ios_branch, "newLibraryWithSource")
+    require(ios_branch, "fileExistsAtPath")
     require(cmake, "metallib")
     require(cmake, "xcrun")
     require(cpu, "progress: fonts loaded")
