@@ -110,7 +110,7 @@ function(gpu_runtime_read_renderer_lock)
     foreach(_index RANGE ${_last})
         string(JSON _name MEMBER "${_json}"
             platforms "${ARG_PLATFORM}" archives ${_index})
-        if(NOT _name MATCHES "^lib[A-Za-z0-9_]+\\.a$")
+        if(NOT _name MATCHES "^(lib[A-Za-z0-9_]+\\.a|[A-Za-z0-9_]+\\.lib)$")
             message(FATAL_ERROR
                 "gpu-runtime: renderer lock archive name is malformed: ${_name}")
         endif()
