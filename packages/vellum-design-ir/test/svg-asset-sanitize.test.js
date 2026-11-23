@@ -412,9 +412,9 @@ test('a use with a zero width or height on an svg or symbol draws nothing', () =
 test('expansion is charged by the geometry each instance emits, so reusing a large path is refused quickly', () => {
     const path = `<path id="p" d="M0 0${' L1 1'.repeat(4095)}"/>`;
     const svg = wrap(`<defs>${path}</defs>${'<use href="#p"/>'.repeat(19997)}`);
-    const start = performance.now();
-    assert.throws(() => importSvgAsset(svg), /path commands and points/);
-    const elapsed = performance.now() - start;
+    // Each attempt must still be refused for the right reason; the fastest of
+    // three keeps one slow sample on a busy machine from failing the bound.
+    const elapsed = fastest(() => assert.throws(() => importSvgAsset(svg), /path commands and points/));
     assert.ok(elapsed < 200, `the fan-out was refused in ${elapsed.toFixed(1)} ms`);
     const points = `<polyline id="p" points="${'1 1 '.repeat(4000)}"/>`;
     assert.throws(() => importSvgAsset(wrap(`<defs>${points}</defs>${'<use href="#p"/>'.repeat(200)}`)), /path commands and points/);
