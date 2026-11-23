@@ -29,6 +29,7 @@ export const SVG_ASSET_LIMITS: Readonly<{
     maxElements: number;
     maxAttributes: number;
     maxExpandedNodes: number;
+    maxExpandedGeometry: number;
     maxNumber: number;
     maxPathDataBytes: number;
     maxPathCommands: number;
@@ -40,6 +41,7 @@ export const SVG_ASSET_LIMITS: Readonly<{
     maxTotalPathDataBytes: number;
     maxSubtreeDepth: number;
     maxDashes: number;
+    maxDashSegments: number;
     maxGradientStops: number;
     maxSourceIdBytes: number;
     maxNodeBudget: number;
