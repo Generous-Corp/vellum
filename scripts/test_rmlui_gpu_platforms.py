@@ -29,6 +29,17 @@ def main() -> None:
     assert "-R '^vellum\\.rmlui\\.vellum-renderer$' --no-tests=error" in workflow
     assert "vellum\\\\.rmlui" not in workflow
 
+    gpu_job = workflow[workflow.index("\n  rmlui-gpu:"):]
+    # The GPU renderer's CPU fallback needs the native RmlUi packaging.
+    configure = gpu_job[gpu_job.index("Configure the Vellum RmlUi GPU renderer"):
+                        gpu_job.index("Build the Vellum RmlUi GPU test")]
+    assert "-DVELLUM_RMLUI_NATIVE=ON" in configure
+    assert "-DVELLUM_RMLUI_CPU=ON" in configure
+    # Git Bash on the Windows runner ships sha256sum, not shasum; the digest
+    # check must fail closed.
+    assert "sha256sum -c -" in gpu_job
+    assert "shasum" not in gpu_job
+
 
 if __name__ == "__main__":
     main()

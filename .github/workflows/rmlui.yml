@@ -309,7 +309,7 @@ jobs:
           EOF
           url="$repository/releases/download/$milestone/$asset"
           curl --fail --location --retry 8 --retry-all-errors "$url" --output "$RUNNER_TEMP/$asset"
-          printf '%s  %s\n' "$sha256" "$RUNNER_TEMP/$asset" | shasum -a 256 -c -
+          printf '%s  %s\n' "$sha256" "$RUNNER_TEMP/$asset" | sha256sum -c -
           printf 'VELLUM_SKIA_ARCHIVE=%s\n' "$RUNNER_TEMP/$asset" >> "$GITHUB_ENV"
 
       - name: Configure the Vellum RmlUi GPU renderer
@@ -326,6 +326,7 @@ jobs:
             -DVELLUM_ENABLE_RMLUI=ON \
             -DVELLUM_RMLUI_BUILD_TESTS=ON \
             -DVELLUM_RMLUI_VELLUM_RENDERER=ON \
+            -DVELLUM_RMLUI_NATIVE=ON \
             -DVELLUM_RMLUI_CPU=ON
 
       - name: Build the Vellum RmlUi GPU test
