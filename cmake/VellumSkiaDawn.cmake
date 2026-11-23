@@ -286,7 +286,7 @@ elseif(WIN32)
 elseif(ANDROID)
     target_link_libraries(vellum-skia-dawn-provider PRIVATE vulkan log android)
 else()
-    target_link_libraries(vellum-skia-dawn-provider PRIVATE Vulkan dl pthread m)
+    target_link_libraries(vellum-skia-dawn-provider PRIVATE vulkan dl pthread m)
 endif()
 
 # The provider must link to the same bytes every time: the SDK artifact is

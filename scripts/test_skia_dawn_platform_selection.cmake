@@ -41,6 +41,8 @@ if(NOT WORK_DIR)
 endif()
 set(_a "${WORK_DIR}/skia-dawn-selection-lock-a.json")
 set(_z "${WORK_DIR}/skia-dawn-selection-lock-zero.json")
+# A failed earlier run may have left these behind; every run starts clean.
+file(REMOVE "${_a}" "${_z}")
 function(_row_json out asset sha root)
     set(_names skia dawn_combined svg skresources skshaper skparagraph skunicode_core skunicode_icu)
     set(_archives "")
