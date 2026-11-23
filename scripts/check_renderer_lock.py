@@ -70,6 +70,9 @@ DOCUMENTS = ("README.md", "DEPENDENCIES.md", "NOTICE.md",
 # Documents that give the asset's digest next to its name for a reader to check.
 DOCUMENTS_WITH_DIGEST = ("README.md", "DEPENDENCIES.md")
 # Recorded evidence that legitimately holds a digest and has its own verifier.
+# The mirror-receipt verifier holds the one superseded renderer pin by design
+# (PRIOR_RENDERER_PIN), so it is not a hand copy of the current lock.
+PRIOR_PIN_HOLDER = "tools/provenance/verify_extraction.py"
 EVIDENCE = ("provenance/mirror/closures/*", "tools/provenance/testdata/*",
             "scripts/testdata/renderer_platform/*")
 
@@ -317,7 +320,7 @@ def tracked_files(root: Path) -> list[str]:
 
 
 def check_no_other_copies(root: Path, lock: dict, problems: list[str]) -> None:
-    allowed = {LOCK, evidence.EVIDENCE, *READERS, *RECORDS, *DOCUMENTS}
+    allowed = {LOCK, evidence.EVIDENCE, PRIOR_PIN_HOLDER, *READERS, *RECORDS, *DOCUMENTS}
     digests = locked_digests(lock)
     for relative in tracked_files(root):
         if relative in allowed or any(fnmatch.fnmatch(relative, pattern) for pattern in EVIDENCE):
