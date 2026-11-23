@@ -98,6 +98,10 @@ class CiLaneTests(unittest.TestCase):
                 text = runner_path.read_text(encoding="utf-8")
                 self.assertTrue(path in text or PurePosixPath(path).name in text, where)
 
+    def test_android_gpu_surface_is_run_by_android_workflow(self) -> None:
+        text = (ROOT / ".github/workflows/android.yml").read_text(encoding="utf-8")
+        self.assertIn("tools/android/test_android_gpu_surface.cmake", text)
+
     def test_each_lane_workflow_calls_the_runner_and_lists_no_tests(self) -> None:
         self.assertEqual(set(LANE_WORKFLOWS), set(self.manifest["lanes"]))
         for lane, workflow in LANE_WORKFLOWS.items():
