@@ -48,7 +48,8 @@ The Canvas2D proof shell reports `VELLUM_WEB_GRADIENT_NOT_EXPRESSIBLE` for
 each version 8 gradient and gradient stroke it cannot draw before drawing its
 base colour.
 
-Vector assets use schema version 9. A `vector` node holds a compiled vector
+Vector assets use scene schema version 9 and DesignIR schema version 6
+(`DESIGN_IR_VECTOR_ASSET_VERSION`). A `vector` node holds a compiled vector
 asset: a display list of groups (transform, clip, opacity) and paths whose
 fills and strokes carry colours or gradients, which the Skia renderer and the
 Canvas2D shell both draw. DesignIR carries it as a `vector` node with
