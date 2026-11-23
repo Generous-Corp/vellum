@@ -1,4 +1,5 @@
 # CMake -P check for the Android platform identity used by the canary.
+set(ANDROID TRUE)
 set(CMAKE_ANDROID_ARCH_ABI "arm64-v8a")
 set(ANDROID_PLATFORM "android-26")
 include("${CMAKE_CURRENT_LIST_DIR}/AndroidPlatform.cmake")
