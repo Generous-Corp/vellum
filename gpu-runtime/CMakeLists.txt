@@ -103,6 +103,10 @@ target_link_libraries(gpu-runtime-bootstrap PUBLIC VellumGpuRuntime::DeviceApi)
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/VellumSkiaDawnPlatform.cmake")
 vellum_skia_dawn_platform_key("${CMAKE_SYSTEM_NAME}" "${CMAKE_SYSTEM_PROCESSOR}"
     "${ANDROID_ABI}" _gpu_runtime_platform QUIET)
+gpu_runtime_renderer_lock_has_platform("${_gpu_runtime_platform}" _gpu_runtime_platform_locked)
+if(NOT _gpu_runtime_platform_locked)
+    set(_gpu_runtime_platform "")
+endif()
 set(GPU_RUNTIME_HAS_DEVICE OFF)
 # The installed package config checks the shipped Dawn library against this
 # platform's row of the lock, under this file name.

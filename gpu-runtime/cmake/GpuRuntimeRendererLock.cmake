@@ -54,6 +54,26 @@ function(_gpu_runtime_lock_require_sha256 value label)
     endif()
 endfunction()
 
+# gpu_runtime_renderer_lock_has_platform(<platform> <out> [LOCK <path>])
+# Sets <out> to ON when the lock has a row for <platform>, else OFF. A target the
+# lock does not cover has no locked device library; callers treat that as "GPU
+# unavailable", fatal only when the GPU is required.
+function(gpu_runtime_renderer_lock_has_platform platform out)
+    cmake_parse_arguments(ARG "" "LOCK" "" ${ARGN})
+    if(NOT ARG_LOCK)
+        set(ARG_LOCK "${_GPU_RUNTIME_RENDERER_LOCK_DEFAULT}")
+    endif()
+    set(${out} OFF PARENT_SCOPE)
+    if(NOT platform OR NOT EXISTS "${ARG_LOCK}")
+        return()
+    endif()
+    file(READ "${ARG_LOCK}" _json)
+    string(JSON _type ERROR_VARIABLE _error TYPE "${_json}" platforms "${platform}")
+    if(NOT _error AND _type STREQUAL "OBJECT")
+        set(${out} ON PARENT_SCOPE)
+    endif()
+endfunction()
+
 function(gpu_runtime_read_renderer_lock)
     cmake_parse_arguments(ARG "" "PLATFORM;PREFIX;LOCK" "" ${ARGN})
     if(NOT ARG_PLATFORM OR NOT ARG_PREFIX)

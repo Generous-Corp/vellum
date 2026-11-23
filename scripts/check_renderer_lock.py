@@ -42,8 +42,6 @@ def digests_in(text: str) -> set[str]:
 HEX_40 = re.compile(r"^[0-9a-f]{40}$")
 MILESTONE = re.compile(r"\bchrome/m[0-9]+\b")
 RELEASE = re.compile(r"chrome/m[0-9]+(-attested\.[0-9]+)?")
-EXPECTED_PLATFORMS = ("macos-arm64", "linux-x64", "linux-arm64", "windows-x64",
-                      "windows-arm64", "android-arm64-v8a", "android-x86_64")
 # The libraries cmake/VellumSkiaDawn.cmake links, by stem.
 REQUIRED_LIBRARIES = ("skia", "dawn_combined", "svg", "skresources", "skshaper",
                       "skparagraph", "skunicode_core", "skunicode_icu")
@@ -85,9 +83,6 @@ def load_lock(root: Path, problems: list[str]) -> dict | None:
     if not isinstance(platforms.get(PLATFORM), dict):
         problems.append(f"{LOCK}: platform {PLATFORM} is missing")
         return None
-    for key in EXPECTED_PLATFORMS:
-        if not isinstance(platforms.get(key), dict):
-            problems.append(f"{LOCK}: platform {key} is missing")
     seen: dict[str, str] = {}
     seen_assets: dict[str, str] = {}
     for key, platform in platforms.items():

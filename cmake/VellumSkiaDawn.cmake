@@ -9,6 +9,10 @@ include("${CMAKE_CURRENT_LIST_DIR}/../gpu-runtime/cmake/GpuRuntimeRendererLock.c
 include("${CMAKE_CURRENT_LIST_DIR}/VellumSkiaDawnPlatform.cmake")
 vellum_skia_dawn_platform_key("${CMAKE_SYSTEM_NAME}" "${CMAKE_SYSTEM_PROCESSOR}"
     "${ANDROID_ABI}" _vellum_platform QUIET)
+gpu_runtime_renderer_lock_has_platform("${_vellum_platform}" _vellum_platform_locked)
+if(NOT _vellum_platform_locked)
+    set(_vellum_platform "")
+endif()
 if(NOT _vellum_platform)
     # No locked artifact for this target: the GPU is unavailable, which is an
     # error only when it is required.
