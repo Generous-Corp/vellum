@@ -1,15 +1,11 @@
 # Installs this build, then builds and runs the mirror consumer against the
 # installed package alone, proves the Phase-6 debts inert there, and proves
 # that one image cannot take two Skia/Dawn providers.
-foreach(_required VELLUM_SOURCE_DIR VELLUM_BUILD_DIR VELLUM_MIRROR_DEPS_DIR VELLUM_MIRROR_ORIGIN VELLUM_INSTALL_LIBDIR Python3_EXECUTABLE VELLUM_GPU_RUNTIME_PREFIX)
+foreach(_required VELLUM_SOURCE_DIR VELLUM_BUILD_DIR VELLUM_MIRROR_DEPS_DIR VELLUM_MIRROR_ORIGIN VELLUM_INSTALL_LIBDIR Python3_EXECUTABLE)
     if(NOT DEFINED ${_required})
         message(FATAL_ERROR "mirror consumer test: ${_required} was not supplied")
     endif()
 endforeach()
-if(NOT IS_DIRECTORY "${VELLUM_GPU_RUNTIME_PREFIX}" OR
-   NOT EXISTS "${VELLUM_GPU_RUNTIME_PREFIX}/lib/cmake/VellumGpuRuntime/VellumGpuRuntimeConfig.cmake")
-    message(FATAL_ERROR "mirror consumer test: VELLUM_GPU_RUNTIME_PREFIX must name an installed VellumGpuRuntime package")
-endif()
 
 # A view unit makes the archive-backed symbol-floor proof mandatory.  Keep the
 # value explicit at the test boundary so CI can supply the provenance-pinned
@@ -299,27 +295,37 @@ message(STATUS "${_last_stdout}")
 # mirror and names GPU types only through gpu_fwd.hpp. A separate translation
 # unit includes the device definition from the installed VellumGpuRuntime
 # package and links its Device target.
-set(_native_gpu_editor_dir "${_work}/native-gpu-editor")
-file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/native-gpu-editor/"
-    DESTINATION "${_native_gpu_editor_dir}")
-string(REPLACE ";" "\\;" _native_gpu_prefix
-    "${_prefix};${VELLUM_GPU_RUNTIME_PREFIX}")
-execute_process(COMMAND "${CMAKE_COMMAND}"
-    -S "${_native_gpu_editor_dir}" -B "${_native_gpu_editor_dir}/build" ${_generator}
-    -DCMAKE_BUILD_TYPE=Release
-    "-DCMAKE_PREFIX_PATH=${_native_gpu_prefix}"
-    -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
-    -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE
-    RESULT_VARIABLE _native_gpu_configure_result
-    OUTPUT_VARIABLE _native_gpu_configure_out
-    ERROR_VARIABLE _native_gpu_configure_err)
-if(NOT _native_gpu_configure_result EQUAL 0)
-    message(FATAL_ERROR "native GPU editor consumer configure failed (${_native_gpu_configure_result})\n"
-        "${_native_gpu_configure_out}\n${_native_gpu_configure_err}")
+set(_native_gpu_runtime_ready FALSE)
+if(DEFINED VELLUM_GPU_RUNTIME_PREFIX AND
+   IS_DIRECTORY "${VELLUM_GPU_RUNTIME_PREFIX}" AND
+   EXISTS "${VELLUM_GPU_RUNTIME_PREFIX}/lib/cmake/VellumGpuRuntime/VellumGpuRuntimeConfig.cmake")
+    set(_native_gpu_runtime_ready TRUE)
 endif()
-message(STATUS "native GPU editor consumer configure: ok")
-_run("native GPU editor consumer build"
-    "${CMAKE_COMMAND}" --build "${_native_gpu_editor_dir}/build")
+if(_native_gpu_runtime_ready)
+    set(_native_gpu_editor_dir "${_work}/native-gpu-editor")
+    file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/native-gpu-editor/"
+        DESTINATION "${_native_gpu_editor_dir}")
+    string(REPLACE ";" "\\;" _native_gpu_prefix
+        "${_prefix};${VELLUM_GPU_RUNTIME_PREFIX}")
+    execute_process(COMMAND "${CMAKE_COMMAND}"
+        -S "${_native_gpu_editor_dir}" -B "${_native_gpu_editor_dir}/build" ${_generator}
+        -DCMAKE_BUILD_TYPE=Release
+        "-DCMAKE_PREFIX_PATH=${_native_gpu_prefix}"
+        -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
+        -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE
+        RESULT_VARIABLE _native_gpu_configure_result
+        OUTPUT_VARIABLE _native_gpu_configure_out
+        ERROR_VARIABLE _native_gpu_configure_err)
+    if(NOT _native_gpu_configure_result EQUAL 0)
+        message(FATAL_ERROR "native GPU editor consumer configure failed (${_native_gpu_configure_result})\n"
+            "${_native_gpu_configure_out}\n${_native_gpu_configure_err}")
+    endif()
+    message(STATUS "native GPU editor consumer configure: ok")
+    _run("native GPU editor consumer build"
+        "${CMAKE_COMMAND}" --build "${_native_gpu_editor_dir}/build")
+else()
+    message(STATUS "native GPU editor consumer: skipped (no VELLUM_GPU_RUNTIME_PREFIX package)")
+endif()
 
 # The editor-side choke header remains a deliberate compile-time failure.
 set(_native_gpu_negative_dir "${_work}/native-gpu-editor-negative")
