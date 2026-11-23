@@ -325,6 +325,22 @@ constexpr unsigned char kTinyPng[] = {
     0x9c, 0x63, 0x68, 0x68, 0x68, 0xf8, 0x0f, 0x00, 0x05, 0x84, 0x02, 0x80, 0x8c, 0xcd,
     0x66, 0x26, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82};
 
+/// A staged asset path must stay beneath the staging directory: relative, no
+/// root name, and no `..` component after lexical normalisation. Fixture
+/// asset paths are author-controlled, so anything else is skipped, never
+/// written.
+bool is_contained_relative(const fs::path& path) {
+    if (path.empty() || path.is_absolute() || path.has_root_name() || path.has_root_directory())
+        return false;
+    const auto normal = path.lexically_normal();
+    if (normal.empty() || normal == ".")
+        return false;
+    for (const auto& part : normal)
+        if (part == "..")
+            return false;
+    return true;
+}
+
 /// The fixtures do not commit their captured bitmaps: the gate compares
 /// structure, not pixels. Every image a fixture references is staged as a tiny
 /// valid PNG instead, so an image node lowers as an image in every lane rather
@@ -346,7 +362,7 @@ class StagedAssets {
                 paths.insert(*asset.local_path);
         for (const auto& relative : paths) {
             const fs::path path(relative);
-            if (path.empty() || path.is_absolute())
+            if (!is_contained_relative(path))
                 continue;
             fs::create_directories((dir_ / path).parent_path());
             std::ofstream(dir_ / path, std::ios::binary)
@@ -794,6 +810,28 @@ TEST_CASE("ui.js leaves a theme-painted control it has no case for as a plain fr
         CHECK(lane.at(control).count("state.skin") == 0);
         CHECK(native.at(control).at("kind") == "vellum::view::View");
     }
+}
+
+TEST_CASE("staged assets never write outside the staging directory",
+          "[view][import][emitter-conformance]") {
+    CHECK(is_contained_relative("images/a.png"));
+    CHECK(is_contained_relative("./a.png"));
+    CHECK_FALSE(is_contained_relative("../escape.png"));
+    CHECK_FALSE(is_contained_relative("a/../../escape.png"));
+    CHECK_FALSE(is_contained_relative("/abs/escape.png"));
+    CHECK_FALSE(is_contained_relative(""));
+
+    DesignIR ir;
+    ir.root.type = "frame";
+    ir.root.stable_anchor_id = "root";
+    ir.root.attributes["asset_path"] = "../vellum-traversal-probe.png";
+    fs::path escaped;
+    {
+        const StagedAssets assets(ir);
+        escaped = assets.dir().parent_path() / "vellum-traversal-probe.png";
+        CHECK_FALSE(fs::exists(escaped));
+    }
+    CHECK_FALSE(fs::exists(escaped));
 }
 
 TEST_CASE("the conformance comparison reports planted divergences",
