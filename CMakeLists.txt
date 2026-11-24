@@ -586,6 +586,9 @@ if(VELLUM_BUILD_TESTS)
     add_test(NAME vellum.renderer-lock-drift-unit
         COMMAND "${Python3_EXECUTABLE}" -I scripts/test_check_renderer_lock.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.renderer-platform-evidence-unit
+        COMMAND "${Python3_EXECUTABLE}" -I scripts/test_renderer_platform_evidence.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.skia-dawn-platform-selection
         COMMAND "${CMAKE_COMMAND}" "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}" -P
             "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_skia_dawn_platform_selection.cmake"

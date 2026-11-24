@@ -160,7 +160,12 @@ endif()
 _lock_case(mac-same macos-arm64 OK RELEASE chrome/m158)
 _lock_case(mac-other-milestone macos-arm64 "macos-arm64 release chrome/m999-attested.7 is not of"
     RELEASE chrome/m999-attested.7)
-_lock_case(mac-attested macos-arm64 "macos-arm64 release is chrome/m158-attested.2, expected chrome/m158")
+# An attested release of the milestone is the macOS row's release too.
+_lock("${_work}/mac-attested.json" KEY macos-arm64)
+gpu_runtime_read_renderer_lock(PLATFORM macos-arm64 PREFIX _a LOCK "${_work}/mac-attested.json")
+if(NOT _a_RELEASE STREQUAL "chrome/m158-attested.2" OR NOT _a_MILESTONE STREQUAL "chrome/m158")
+    message(FATAL_ERROR "macOS attested release: ${_a_RELEASE} / ${_a_MILESTONE}")
+endif()
 _lock_case(mac-malformed macos-arm64 "release is malformed" RELEASE latest)
 _lock_case(mac-null macos-arm64 "macos-arm64 release is malformed" RELEASE NULL)
 # Only Release rows are consumed.

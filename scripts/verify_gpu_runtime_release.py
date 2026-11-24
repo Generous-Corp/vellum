@@ -94,11 +94,15 @@ def renderer_asset(lock_path: Path) -> tuple[str, str, str]:
     lock = json.loads(lock_path.read_text(encoding="utf-8"))
     platform = lock["platforms"]["macos-arm64"]
     repository, milestone = lock["builder"]["repository"], lock["milestone"]
+    # The macOS row may name its own release of the milestone.
+    release = platform.get("release", milestone)
     asset, sha256 = platform["asset"], platform["sha256"]
     require(repository == BUILDER and bool(re.fullmatch(r"chrome/m[0-9]+", milestone))
+            and isinstance(release, str)
+            and bool(re.fullmatch(re.escape(milestone) + r"(-attested\.[0-9]+)?", release))
             and bool(re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", asset)) and bool(SHA.fullmatch(sha256)),
             "renderer lock names an unexpected skia-builder asset")
-    return "/".join((repository, "releases/download", milestone, asset)), asset, sha256
+    return "/".join((repository, "releases/download", release, asset)), asset, sha256
 
 
 def fetch_renderer(lock_path: Path, directory: Path, opener: Callable[[str], Any] = urllib.request.urlopen) -> Path:
