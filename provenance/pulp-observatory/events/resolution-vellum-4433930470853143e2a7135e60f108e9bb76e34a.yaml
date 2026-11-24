@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-4433930470853143e2a7135e60f108e9bb76e34a",
+  "kind": "resolution",
+  "created_at": "2026-11-24T13:43:29Z",
+  "resolves": "vellum-4433930470853143e2a7135e60f108e9bb76e34a",
+  "disposition": "port-required",
+  "rationale": "Tightens the flat-cap fader crop tolerance in the authored-fader conformance case. Vellum's framework/ view code and conformance test descend from Pulp's core/view and test/test_design_emitter_conformance.cpp, and Pulp has none of this. Debt to port into Pulp: the authored-fader designed overlay. Pulp's ui.js lanes in core/view/src/design_codegen.cpp put only toggle, stepper and selector behind setDesignedOverlay under a browser control overlay; faders keep their theme skin calls. Port the fader overlay (Fader::set_designed_overlay, the captured thumb size in design_import_native_common.cpp, the cap-only setFaderSkin emission with the per-control thumb colour else design accent, and the C++ tree lane) together with the authored-fader conformance cases and fixture. Evidence, Pulp main b0ee92d21944d5c956603afd1108b575e50c1302 (full clone): [absent] `git -C <pulp> grep -c -F -e 'authored-faders' b0ee92d21944 -- test core` = 0; [absent] `git -C <pulp> grep -c -F -e 'fader_cap_over_static_capture' b0ee92d21944 -- core` = 0; [absent] `git -C <pulp> grep -c -F -e 'emit_fader_cap_skin' b0ee92d21944 -- core` = 0; [control] `git -C <pulp> grep -c -F -e 'setDesignedOverlay(' b0ee92d21944 -- core/view/src/design_codegen.cpp` = 2; [control] `git -C <pulp> grep -c -F -e 'setFaderSkin' b0ee92d21944 -- core` = 9. [control] searches show the instrument finds the nearest Pulp counterpart. Classified by the Vellum lead under the owner's one-time delegation of 2026-11-24 (pulp-planning vellum-move/DECISIONS.md); any later resolution overrides it.",
+  "owner": "@vellum-lead",
+  "linked_commits": [
+    "4433930470853143e2a7135e60f108e9bb76e34a"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}
