@@ -2465,14 +2465,22 @@ class RepeatedGenericFixWindowTests(unittest.TestCase):
 
     def test_without_the_window_key_every_fix_counts(self) -> None:
         budgets = {key: value for key, value in self.BUDGETS.items() if key != "repeated_generic_fix_window_days"}
-        report = self.report(self.events(["2026-08-01T00:00:00Z"] * 3), budgets=budgets)
-        self.assertEqual(report["repeated_generic_fixes"], {"render": 3})
-        self.assertIn("repeated-generic-fix-threshold-exceeded", report["budget_violations"])
+        self.assert_legacy_fix_counts(budgets=budgets)
 
     def test_without_a_time_every_fix_counts(self) -> None:
-        report = self.report(self.events(["2026-08-01T00:00:00Z"] * 3), now=None)
-        self.assertEqual(report["repeated_generic_fixes"], {"render": 3})
-        self.assertIn("repeated-generic-fix-threshold-exceeded", report["budget_violations"])
+        self.assert_legacy_fix_counts(now=None)
+
+    def assert_legacy_fix_counts(self, **options: object) -> None:
+        for direction in ("Pulp-to-framework", "framework-to-Pulp"):
+            for disposition in ("port-required", "ported"):
+                with self.subTest(direction=direction, disposition=disposition):
+                    report = self.report(self.events(
+                        ["2026-08-01T00:00:00Z"] * 3,
+                        direction=direction, disposition=disposition,
+                    ), **options)
+                    self.assertEqual(report["repeated_generic_fixes"], {"render": 3})
+                    self.assertIn("repeated-generic-fix-threshold-exceeded", report["budget_violations"])
+                    self.assertEqual(report["health"], "fail")
 
     def test_the_window_key_is_optional_and_must_be_positive(self) -> None:
         required = "".join(

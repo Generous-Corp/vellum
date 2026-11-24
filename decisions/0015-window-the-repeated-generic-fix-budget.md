@@ -31,7 +31,8 @@ time budgets Decision 0013 reports instead of enforcing.
    stale-report check still loads, therefore judges exactly as it did, and a
    missing key can never loosen the budget. A window below one day is refused.
 
-4. Only Pulp-to-framework events count. The extraction spec (pulp-planning
+4. When the window key and a judged time are present, only Pulp-to-framework
+   events count. The extraction spec (pulp-planning
    `2026-07-22-native-gpu-application-framework-extraction-v3-spec.md`) states
    the stop signal as repeated independent fixes to the same generic behavior,
    that is, general framework development continuing in Pulp. It also says a

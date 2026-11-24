@@ -110,10 +110,13 @@ def build_report(
     for event in effective:
         if event["disposition"] not in {"port-required", "ported"}:
             continue
-        # Only a generic fix made in Pulp is a repeated independent fix: a
-        # framework-to-Pulp event follows the framework-first rule, and the
-        # Pulp copy it names is legacy debt until Pulp consumes the framework.
-        if event["direction"] != "Pulp-to-framework":
+        # Windowed reports count independent Pulp fixes. Legacy reports without
+        # a window or judgment time retain their count across both directions.
+        if (
+            budgets.get("repeated_generic_fix_window_days") is not None
+            and now is not None
+            and event["direction"] != "Pulp-to-framework"
+        ):
             continue
         if not counts_as_recent_fix(event, budgets, now):
             continue
