@@ -1146,6 +1146,7 @@ TEST_CASE("authored faders render close to their browser capture",
         const float width = entry["width"].getWithDefault<float>(0.0f);
         const float height = entry["height"].getWithDefault<float>(0.0f);
         const float scale = entry["scale"].getWithDefault<float>(2.0f);
+        const double limit = entry["max_mismatch_fraction"].getWithDefault<double>(tolerance);
         const auto panel = parse_design_ir_json(choc::json::toString(entry["panel"]));
         const auto browser = parse_design_ir_json(choc::json::toString(entry["browser"]));
         const auto truth = render_ir(browser, width, height, scale);
@@ -1162,9 +1163,9 @@ TEST_CASE("authored faders render close to their browser capture",
         live.root.children[0].attributes.erase("fader_body_includes_static_track");
         const double defect = mismatch_fraction(truth, render_ir(live, width, height, scale), threshold);
         std::printf("    %s: cap-only residual %.2f%%, live-track control %.2f%%, tolerance %.2f%%\n",
-                    name.c_str(), residual * 100.0, defect * 100.0, tolerance * 100.0);
-        CHECK(residual <= tolerance);
-        CHECK(defect > tolerance);
+                    name.c_str(), residual * 100.0, defect * 100.0, limit * 100.0);
+        CHECK(residual <= limit);
+        CHECK(defect > limit);
     }
 }
 

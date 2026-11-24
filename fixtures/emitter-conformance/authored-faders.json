@@ -201,7 +201,8 @@
       }
      ]
     }
-   }
+   },
+   "max_mismatch_fraction": 0.06
   },
   {
    "name": "subbass-param_9",
@@ -401,7 +402,8 @@
       }
      ]
     }
-   }
+   },
+   "max_mismatch_fraction": 0.06
   },
   {
    "name": "strings-param_7",
@@ -787,5 +789,6 @@
     }
    }
   }
- ]
+ ],
+ "tolerance_note": "max_mismatch_fraction sits strictly between the cap-only floor and the pre-fix stock render on every crop (floor 2.15-3.48% and 9.45-9.65%, stock 22.53-31.34%). The flat-cap cases also hold the cap geometry: a stock 0.62 pill there measures 7.74-8.19%."
 }
