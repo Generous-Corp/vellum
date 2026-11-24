@@ -81,15 +81,28 @@ class WebCompatPackagingTests(unittest.TestCase):
             globalThis.__nativeRegistered__ = {};
             globalThis.__callbacks__ = {};
             globalThis.__eventListeners__ = {};
+            globalThis.registerFocus = function() {};
+            globalThis.on = function(id, type, fn) {
+                globalThis.__callbacks__[id + ":" + type] = fn;
+            };
+            globalThis.__dispatch__ = function(id, type, data) {
+                const el = __nativeElements__[id];
+                if (el && (type === "focus" || type === "blur"))
+                    __pulpApplyNativeFocus__(el, type === "focus", data || {});
+                const cb = __callbacks__[id + ":" + type];
+                if (cb) cb(data || {});
+            };
             function Element() { this._id = "focus-target"; }
             globalThis.Element = Element;
             vm.runInThisContext(fs.readFileSync(
                 "framework/core/view/js/web-compat-element-events.js", "utf8"));
             const target = new Element();
+            __nativeElements__[target._id] = target;
             const events = [];
             target.addEventListener("focus", () => events.push("focus"));
             target.addEventListener("focusin", () => events.push("focusin"));
-            __pulpApplyNativeFocus__(target, true,
+            target._registerNativeEvent("focus");
+            __dispatch__(target._id, "focus",
                 {cause: "keyboard", focusVisible: true});
             if (events.join(",") !== "focus,focusin" || !target._hasFocus ||
                 !target._focusVisible || document.activeElement !== target)

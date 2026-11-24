@@ -7,6 +7,7 @@
 #include <vellum/state/store.hpp>
 #include <vellum/view/script_engine.hpp>
 #include <vellum/view/view.hpp>
+#include <vellum/view/pointer_dispatch.hpp>
 #include <vellum/view/widget_bridge.hpp>
 #include <vellum/view/widgets.hpp>
 
@@ -70,6 +71,33 @@ FRAMEWORK_TEST(click_outside_the_toggle_does_not_reach_the_handler) {
 
     h.root.simulate_click({300, 250});
     CHECK(h.js_string("flips.length") == "0");
+}
+
+FRAMEWORK_TEST(native_focus_transfer_notifies_target_and_ancestors) {
+    view::View root;
+    root.set_bounds({0, 0, 200, 100});
+    auto child = std::make_unique<view::View>();
+    child->set_id("focus-target");
+    child->set_focusable(true);
+    auto* target = child.get();
+    root.add_child(std::move(child));
+    int focus = 0;
+    int focusin = 0;
+    int blur = 0;
+    int focusout = 0;
+    target->on_focus_event = [&](bool gained, view::FocusCause) {
+        gained ? ++focus : ++blur;
+    };
+    root.on_descendant_focus_event = [&](view::View&, bool gained, view::FocusCause) {
+        gained ? ++focusin : ++focusout;
+    };
+    CHECK(view::transfer_input_focus(root, target, view::FocusCause::keyboard));
+    CHECK(target->focus_visible());
+    CHECK(focus == 1);
+    CHECK(focusin == 1);
+    CHECK(view::transfer_input_focus(root, nullptr, view::FocusCause::keyboard) == false);
+    CHECK(blur == 1);
+    CHECK(focusout == 1);
 }
 
 FRAMEWORK_TEST(failing_script_throws_and_keeps_the_built_tree) {
