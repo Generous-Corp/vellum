@@ -204,7 +204,7 @@ struct ScriptedUiSession::DiskFontCache {
         std::filesystem::file_time_type write_time;
         std::shared_ptr<const std::vector<unsigned char>> bytes;
     };
-    std::unordered_map<std::string, Entry> by_name;
+    std::unordered_map<std::string, Entry> by_path;
     std::vector<std::shared_ptr<const std::vector<unsigned char>>> retained;
 };
 
@@ -251,7 +251,9 @@ ScriptedUiSession::sealed_assets_for(const std::filesystem::path& script) {
             break;
         const auto name = path.lexically_relative(dir).generic_string();
         const auto write_time = fs::last_write_time(real, entry_ec);
-        auto& entry = disk_fonts_->by_name[name];
+        if (entry_ec)
+            continue;
+        auto& entry = disk_fonts_->by_path[real.generic_string()];
         if (!entry.bytes || entry.write_time != write_time) {
             std::ifstream in(real, std::ios::binary);
             auto bytes = std::make_shared<std::vector<unsigned char>>(
@@ -948,6 +950,11 @@ bool ScriptedUiSession::rebuild_from_code(
             ? last_good_effective_theme_
             : (preserve_state ? base_theme_ : root_.theme());
         check_deadline();
+        // Recovery uses only the last successfully loaded snapshot. Directory
+        // traversal and font reads belong to ordinary loads, outside the deadline.
+        const auto sealed_assets = deadline ? last_good_sealed_assets_
+                                            : sealed_assets_for(source_path);
+        check_deadline();
         // The probe realm exists to protect a LIVE editor: a reload evaluates
         // the new code on a throwaway tree first so a script that throws leaves
         // the current UI untouched. The first load has no live editor to
@@ -995,8 +1002,9 @@ bool ScriptedUiSession::rebuild_from_code(
             probe_bridge->set_asset_roots(asset_roots_);
             probe_bridge->set_script_base_dir(source_path.parent_path());
             probe_bridge->set_allow_unreviewed_file_paths(allow_unreviewed_file_paths_);
-            probe_bridge->set_embedded_assets(sealed_assets_for(source_path));
+            probe_bridge->set_embedded_assets(sealed_assets);
             probe_bridge->set_storage_identity(storage_identity_);
+            probe_bridge->set_anonymous_font_owner("session/" + std::to_string(identity_));
             probe_bridge->set_host_kind(host_kind_);
             probe_bridge->set_time_source(time_source_);
             load_script_before_deadline(*probe_bridge, *probe_engine, code, deadline);
@@ -1073,8 +1081,9 @@ bool ScriptedUiSession::rebuild_from_code(
         next_bridge->set_asset_roots(asset_roots_);
         next_bridge->set_script_base_dir(source_path.parent_path());
         next_bridge->set_allow_unreviewed_file_paths(allow_unreviewed_file_paths_);
-        next_bridge->set_embedded_assets(sealed_assets_for(source_path));
+        next_bridge->set_embedded_assets(sealed_assets);
         next_bridge->set_storage_identity(storage_identity_);
+        next_bridge->set_anonymous_font_owner("session/" + std::to_string(identity_));
         next_bridge->set_host_kind(host_kind_);
         next_bridge->set_time_source(time_source_);
         if (repaint_callback_) {
@@ -1128,8 +1137,10 @@ bool ScriptedUiSession::rebuild_from_code(
         last_reload_metrics_.total_ms = ms(t0, t_restore);
         last_good_code_ = code;
         last_good_script_path_ = source_path;
-        if (!deadline)
+        if (!deadline) {
             last_good_effective_theme_ = root_.theme();
+            last_good_sealed_assets_ = sealed_assets;
+        }
         if (!deadline) {
             // The pre-clear will-change barrier already made every old native
             // node inert. Republishing the replacement tree is best-effort and

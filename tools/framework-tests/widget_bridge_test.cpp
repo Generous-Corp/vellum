@@ -249,6 +249,123 @@ FRAMEWORK_TEST(a_panel_cannot_rebind_a_family_another_owner_registered) {
     CHECK(!register_embedded(a, host_family, "assets/face.ttf"));
 }
 
+FRAMEWORK_TEST(anonymous_bridges_cannot_share_sealed_font_ownership) {
+    const auto bytes = read_test_font();
+    Harness a(view::CapabilitySet{}), b(view::CapabilitySet{});
+    for (auto* h : {&a, &b})
+        h->bridge.set_embedded_assets({{"face.ttf", bytes.data(), bytes.size()}});
+    CHECK(a.bridge.storage_identity().empty());
+    CHECK(b.bridge.storage_identity().empty());
+    const auto family = probe_family("anonymous");
+    CHECK(register_embedded(a, family, "face.ttf"));
+    CHECK(!register_embedded(b, family, "face.ttf"));
+    CHECK(register_embedded(a, family, "face.ttf"));
+}
+
+FRAMEWORK_TEST(anonymous_sessions_keep_private_font_ownership_across_reload) {
+    const auto bytes = read_test_font();
+    const auto family = probe_family("anonymous-session");
+    view::ScriptedUiOptions options;
+    options.script_source = "if (!registerEmbeddedFont('" + family +
+        "', 'face.ttf')) throw new Error('owner lost');";
+    options.embedded_assets = {{"face.ttf", bytes.data(), bytes.size()}};
+    options.granted_capabilities = view::CapabilitySet{};
+    options.enable_hot_reload = options.enable_theme_reload = false;
+    view::View root_a, root_b;
+    vellum::state::StateStore store_a, store_b;
+    view::ScriptedUiSession a(root_a, store_a, options);
+    std::string error;
+    CHECK(a.load(&error));
+    CHECK(a.reload(&error));
+    options.script_source = "if (registerEmbeddedFont('" + family +
+        "', 'face.ttf')) throw new Error('another owner accepted');";
+    view::ScriptedUiSession b(root_b, store_b, options);
+    CHECK(b.load(&error));
+    CHECK(a.reload(&error));
+}
+
+class ResetTestPort final : public view::ScriptInspectorPort {
+public:
+    static inline std::function<std::string(EvaluationDeadline)> reset;
+    void attach(view::ScriptEngine*) override {}
+    void detach() override {}
+    bool pump() override { return false; }
+    void set_post_evaluation_reset(std::function<std::string(EvaluationDeadline)> cb) override {
+        reset = std::move(cb);
+    }
+    std::string run_pending_post_evaluation_reset() override { return {}; }
+};
+
+FRAMEWORK_TEST(deadline_recovery_reuses_last_good_sealed_fonts) {
+    const auto dir = fresh_temp_dir("recovery");
+    std::filesystem::copy_file(VELLUM_TEST_FONT_PATH, dir / "face.ttf");
+    const auto family = probe_family("recovery");
+    write_file(dir / "ui.js", "if (!registerEmbeddedFont('" + family +
+        "', 'face.ttf')) throw new Error('last good font lost');");
+    view::ScriptedUiOptions options;
+    options.script_path = dir / "ui.js";
+    options.granted_capabilities = view::CapabilitySet{};
+    options.enable_hot_reload = options.enable_theme_reload = false;
+    view::View root;
+    vellum::state::StateStore store;
+    struct FactoryGuard {
+        view::ScriptInspectorPortFactory previous = view::script_inspector_port_factory();
+        FactoryGuard() {
+            view::set_script_inspector_port_factory([]() -> std::unique_ptr<view::ScriptInspectorPort> {
+                return std::make_unique<ResetTestPort>();
+            });
+        }
+        ~FactoryGuard() {
+            view::set_script_inspector_port_factory(previous);
+            ResetTestPort::reset = {};
+        }
+    } guard;
+    view::ScriptedUiSession session(root, store, options);
+    std::string error;
+    CHECK(session.load(&error));
+    CHECK(vellum::canvas::is_font_registered(family));
+    // An ordinary failed reload must not replace the successful asset snapshot.
+    std::filesystem::remove(dir / "face.ttf");
+    CHECK(!session.reload(&error));
+    CHECK(static_cast<bool>(ResetTestPort::reset));
+    if (ResetTestPort::reset) {
+        const auto reset_error = ResetTestPort::reset(
+            std::chrono::steady_clock::now() + std::chrono::seconds(2));
+        if (!reset_error.empty()) std::fprintf(stderr, "  reset error: %s\n", reset_error.c_str());
+        CHECK(reset_error.empty());
+    }
+    std::filesystem::remove_all(dir);
+}
+
+FRAMEWORK_TEST(directory_switch_does_not_reuse_same_timestamp_font_bytes) {
+    const auto first = fresh_temp_dir("cache-first");
+    const auto second = fresh_temp_dir("cache-second");
+    std::filesystem::copy_file(VELLUM_TEST_FONT_PATH, first / "face.ttf");
+    write_file(second / "face.ttf", "not a font");
+    std::filesystem::last_write_time(second / "face.ttf",
+                                    std::filesystem::last_write_time(first / "face.ttf"));
+    const auto family_a = probe_family("cache-first");
+    const auto family_b = probe_family("cache-second");
+    write_file(first / "ui.js", "if (!registerEmbeddedFont('" + family_a +
+        "', 'face.ttf')) throw new Error('positive control failed');");
+    write_file(second / "ui.js", "if (registerEmbeddedFont('" + family_b +
+        "', 'face.ttf')) throw new Error('stale bytes reused');");
+    view::ScriptedUiOptions options;
+    options.script_path = first / "ui.js";
+    options.granted_capabilities = view::CapabilitySet{};
+    options.enable_hot_reload = options.enable_theme_reload = false;
+    view::View root;
+    vellum::state::StateStore store;
+    view::ScriptedUiSession session(root, store, options);
+    std::string error;
+    CHECK(session.load(&error));
+    CHECK(vellum::canvas::is_font_registered(family_a));
+    CHECK(session.reload_from(second / "ui.js", &error));
+    CHECK(!vellum::canvas::is_font_registered(family_b));
+    std::filesystem::remove_all(first);
+    std::filesystem::remove_all(second);
+}
+
 FRAMEWORK_TEST(a_path_backed_session_seals_the_fonts_beside_its_script) {
     const auto dir = fresh_temp_dir("session");
     const auto outside = fresh_temp_dir("session-outside");

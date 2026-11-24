@@ -73,7 +73,7 @@ bool register_sealed_font(WidgetBridge& self, const WidgetBridge::EmbeddedAsset&
                           const std::string& family,
                           const std::optional<std::pair<int, int>>& declared) {
     auto& owners = sealed_family_owners();
-    const auto owner = self.storage_identity();
+    const auto owner = self.sealed_font_owner();
     {
         std::lock_guard lock(owners.mutex);
         const auto it = owners.owner_by_family.find(family);
@@ -398,6 +398,11 @@ std::string WidgetBridge::storage_identity() const {
     if (!storage_identity_.empty())
         return storage_identity_;
     return script_base_dir_.generic_string();
+}
+
+std::string WidgetBridge::sealed_font_owner() const {
+    const auto stored = storage_identity();
+    return stored.empty() ? "anonymous/" + anonymous_font_owner_ : "storage/" + stored;
 }
 
 std::string WidgetBridge::font_weight_scope() const {

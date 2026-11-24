@@ -385,6 +385,7 @@ private:
     std::shared_ptr<DiskFontCache> disk_fonts_;
     std::vector<WidgetBridge::EmbeddedAsset> sealed_assets_for(const std::filesystem::path& script);
     std::string storage_identity_;
+    std::vector<WidgetBridge::EmbeddedAsset> last_good_sealed_assets_;
     std::string last_good_code_;
     std::filesystem::path last_good_script_path_;
     std::vector<std::filesystem::path> asset_roots_;
