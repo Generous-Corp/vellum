@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-4a91b70dd67d14b0592f35403a63621f8651ffec",
+  "kind": "resolution",
+  "created_at": "2026-11-24T13:43:23Z",
+  "resolves": "vellum-4a91b70dd67d14b0592f35403a63621f8651ffec",
+  "disposition": "framework-only",
+  "rationale": "Merge of main into the SVG importer branch. Most observed paths carry one parent's blob. Four differ from both parents and `git show --cc` is empty for them, because the merge keeps the branch's (first parent's) hunks over main's removal of the SVG importer in c001cd3633a9c9ea245cc8078b9b642743fe4c05: the SVG_ASSET_LIMITS, SvgAssetRefusal and svgAssetToDesignIR exports in packages/vellum-design-ir/src/index.d.ts and index.js, and doc comments naming the importer in rendered_tree_materializer.mm and graphics/tests/CMakeLists.txt. That is this merge's own content. The SVG asset importer is Vellum-native, with no Pulp counterpart. Nothing to port. Evidence, Pulp main b0ee92d21944d5c956603afd1108b575e50c1302 (full clone): [absent] `git -C <pulp> grep -c -F -e 'SVG_ASSET_LIMITS' b0ee92d21944 -- core tools test examples apple ship inspect` = 0; [absent] `git -C <pulp> grep -c -F -e 'svgAssetToDesignIR' b0ee92d21944 -- core tools test examples apple ship inspect` = 0; [absent] `git -C <pulp> grep -c -F -e 'SvgAssetRefusal' b0ee92d21944 -- core tools test examples apple ship inspect` = 0; [control] `git -C <pulp> grep -c -F -e 'inline_declaration' b0ee92d21944 -- tools/import-design/svg_shape_lowering.cpp` = 2. [control] searches show the instrument finds the nearest Pulp counterpart. Classified by the Vellum lead under the owner's one-time delegation of 2026-11-24 (pulp-planning vellum-move/DECISIONS.md); any later resolution overrides it.",
+  "owner": "@vellum-lead",
+  "linked_commits": [
+    "4a91b70dd67d14b0592f35403a63621f8651ffec"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}

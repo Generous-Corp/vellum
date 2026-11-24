@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-d7ea03b07a55015eb97f44ab39f3fbe01962295e",
+  "kind": "resolution",
+  "created_at": "2026-11-24T13:43:13Z",
+  "resolves": "vellum-d7ea03b07a55015eb97f44ab39f3fbe01962295e",
+  "disposition": "superseded",
+  "rationale": "Integration merge (parents b63424aee 8469d090c). Of its 6 observed paths, 4 carry one parent's blob exactly; the other 2 (packages/vellum-design-ir/src/fig-file/import.js, packages/vellum-design-ir/test/fig-import.test.js) are textual unions of both sides. `git diff-tree --cc --name-only d7ea03b07a55015eb97f44ab39f3fbe01962295e` lists packages/vellum-design-ir/src/fig-file/import.js, packages/vellum-design-ir/test/fig-import.test.js. Both files had a textual conflict, and the resolution keeps both sides: fig-file/import.js keeps the side-1 embedded-asset loop that records content hashes (50643e9f) and the side-2 frame return value (7a13ade0); fig-import.test.js keeps both sides' test cases. The resolution lines combine the two sides' edits and add no behaviour of their own. The content comes from side commits (found with git log over merge-base --all) that carry their own observation events: vellum-4ce89ce861ea97c0fec0c13b043f833b1dd0617f, vellum-50643e9f96bb927cfe0ff765dc0501723b98a5f4, vellum-7a13ade0e48657e695f174569acc2a138889047d. Superseded by those events. Classified by the Vellum lead under the owner's one-time delegation of 2026-11-24 (pulp-planning vellum-move/DECISIONS.md); any later resolution overrides it.",
+  "owner": "@vellum-lead",
+  "linked_commits": [
+    "4ce89ce861ea97c0fec0c13b043f833b1dd0617f",
+    "50643e9f96bb927cfe0ff765dc0501723b98a5f4",
+    "7a13ade0e48657e695f174569acc2a138889047d",
+    "d7ea03b07a55015eb97f44ab39f3fbe01962295e"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}
