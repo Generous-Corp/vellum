@@ -574,6 +574,52 @@ inline ResolvedLayoutConstraints resolve_layout_constraints(
     return r;
 }
 
+/// A browser-captured fader whose captured body already holds its authored
+/// track: the body is painted beneath the control (`designed_body` is
+/// `underlay` or `capture`) and the author declared the track static
+/// (`fader_body_includes_static_track`). The static-track declaration also
+/// promises that nothing on the track moves with the value, so no value fill
+/// exists and the live control contributes only its cap. Every lane gates its
+/// cap-only fader on this one predicate.
+inline bool fader_cap_over_static_capture(const IRNode& node) {
+    const auto body = attr(node, "designed_body");
+    return body && (*body == "underlay" || *body == "capture") &&
+           attr_bool(node, "fader_body_includes_static_track");
+}
+
+/// The authored cap of a browser-captured fader in layout units. The capture
+/// records the indicator and the control in device pixels, so the indicator's
+/// natural size is scaled by the control box over the control's natural size,
+/// the same transform `Fader::paint` applies to captured indicator art. Without
+/// the control's natural size the capture DPR divides instead. nullopt when the
+/// capture recorded no indicator dimensions.
+struct CapturedFaderCap {
+    float width = 0.0f;
+    float height = 0.0f;
+};
+
+inline std::optional<CapturedFaderCap> captured_fader_cap_size(const IRNode& node) {
+    const auto number = [&](std::string_view key) -> float {
+        const auto value = attr(node, key);
+        if (!value || value->empty()) return 0.0f;
+        char* end = nullptr;
+        const float parsed = std::strtof(value->c_str(), &end);
+        if (end == value->c_str() || !(parsed > 0.0f) || parsed > 1.0e6f) return 0.0f;
+        return parsed;
+    };
+    const float indicator_w = number("fader_indicator_natural_w");
+    const float indicator_h = number("fader_indicator_natural_h");
+    if (indicator_w <= 0.0f || indicator_h <= 0.0f) return std::nullopt;
+    const float dpr = number("captured_raster_dpr");
+    const auto scale = [&](std::optional<float> box, float natural) {
+        if (box && *box > 0.0f && natural > 0.0f) return *box / natural;
+        return dpr > 0.0f ? 1.0f / dpr : 1.0f;
+    };
+    return CapturedFaderCap{
+        indicator_w * scale(node.style.width, number("fader_control_natural_w")),
+        indicator_h * scale(node.style.height, number("fader_control_natural_h"))};
+}
+
 /// How an imported text node sits vertically in its slot. The native lowering
 /// and the baked C++ lane both read it, and design_codegen.cpp applies the same
 /// rule to the JS lanes, so every lane paints the label at one height.
