@@ -85,7 +85,8 @@ bool register_sealed_font(WidgetBridge& self, const WidgetBridge::EmbeddedAsset&
         std::lock_guard lock(owners.mutex);
         const auto it = owners.owner_by_family.find(family_key);
         const bool ours = it != owners.owner_by_family.end() && it->second == owner;
-        if (!ours && vellum::canvas::is_font_registered(family)) {
+        if (!ours &&
+            (it != owners.owner_by_family.end() || vellum::canvas::is_font_registered(family))) {
             if (sealed_font_diagnostic_allowed())
                 vellum::runtime::log_warn("WidgetBridge: registerEmbeddedFont refused '{}': the "
                                           "family is already registered by another owner",
