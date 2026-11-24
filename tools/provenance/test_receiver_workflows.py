@@ -117,15 +117,22 @@ class ReceiverWorkflowTests(unittest.TestCase):
         self.assertIn('--vellum-main "$(git rev-parse HEAD)"', text)
         self.assertIn('--vellum-target "$(git rev-parse HEAD)"', text)
 
-    def test_receiver_can_reconcile_base_pending_debt_but_rejects_new_overflow(self) -> None:
+    def test_receiver_judges_its_reconcile_against_main_and_holds_no_release_key(self) -> None:
         text = self.text("pulp-observatory-receiver.yml")
         reconcile = text.split("- name: Reconcile through the latest verified durable event head", 1)[1]
         verify = reconcile.split("- name: Prepare the evidence-only coalescing PR", 1)[0]
-        self.assertIn("--pending-event-scope introduced", verify)
-        # This job only prepares evidence; release signing and tagging remain
-        # outside the receiver and therefore cannot run while health is bad.
-        self.assertNotIn("--sign", verify)
-        self.assertNotIn("git tag", verify)
+        verify = verify.split("tools/provenance/observatory.py verify", 1)[1]
+        # The base is main's head, never a value the evidence chooses; the
+        # budget flags themselves are exercised by test_observatory.py's
+        # ReceiverBaseDebtTests, which read them from this step.
+        self.assertIn('--git-base "$(git rev-parse HEAD)"', verify)
+        self.assertNotIn("--no-git-base", verify)
+        self.assertNotIn("--pending-event-scope introduced", verify)
+        # Signing a release or dry-run tag lives in release-tag.yml, whose
+        # dry-run plan refuses an unhealthy ledger; the receiver can reach
+        # neither the release environment nor its key.
+        self.assertNotIn("environment: release", text)
+        self.assertNotIn("RELEASE_TAG_SIGNING_KEY", text)
 
     def test_watchdog_builds_its_state_with_the_tested_module(self) -> None:
         text = (ROOT / ".github/workflows/pulp-observatory-watchdog.yml").read_text()

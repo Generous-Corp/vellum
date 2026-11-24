@@ -202,16 +202,21 @@ jobs:
             --now "$now" \
             --write --include-main-commits \
             --output "$RUNNER_TEMP/receiver-reconcile.json"
-          # Existing pending observations are base debt; new observations
-          # remain subject to the full pending-event budget. This receiver
-          # only prepares evidence and never signs or tags a release.
+          # The reconcile is judged against main, its base. Debt already on
+          # main cannot fail it, or nothing could ever land the evidence that
+          # lets main drain: overdue and pending-age debt is reported (an event
+          # this run adds that is already late still fails), and the pending
+          # count may not end above the larger of the budget and main's own
+          # pending count. Main's push verify keeps enforcing every budget
+          # ledger-wide, and so does every release tag.
           python3 -I tools/provenance/observatory.py verify \
             --pulp-repo .receiver-pulp \
             --vellum-repo . \
             --git-base "$(git rev-parse HEAD)" \
             --pulp-target "$RECONCILE_TARGET" \
             --vellum-target "$(git rev-parse HEAD)" \
-            --pending-event-scope introduced
+            --time-budgets report \
+            --pending-event-scope non-increasing
 
       - name: Prepare the evidence-only coalescing PR
         if: steps.plan.outputs.status == 'reconcile'
