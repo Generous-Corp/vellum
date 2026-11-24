@@ -1,7 +1,8 @@
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
-#include <CommonCrypto/CommonDigest.h>
+#include "sha256.hpp"
+
 
 #include "include/codec/SkCodec.h"
 #include "include/codec/SkPngDecoder.h"
@@ -10,7 +11,6 @@
 
 #include <array>
 #include <cstdio>
-#include <limits>
 #include <optional>
 #include <string>
 
@@ -22,15 +22,7 @@ void set_error(std::string* error, std::string message) {
 }
 
 std::string content_hash_of(std::span<const std::uint8_t> bytes) {
-    CC_SHA256_CTX context;
-    CC_SHA256_Init(&context);
-    constexpr std::size_t chunk = std::numeric_limits<CC_LONG>::max() / 2U;
-    for (std::size_t offset = 0; offset < bytes.size(); offset += chunk) {
-        const std::size_t size = std::min(chunk, bytes.size() - offset);
-        CC_SHA256_Update(&context, bytes.data() + offset, static_cast<CC_LONG>(size));
-    }
-    std::array<unsigned char, CC_SHA256_DIGEST_LENGTH> digest{};
-    CC_SHA256_Final(digest.data(), &context);
+    const auto digest = detail::sha256_digest(bytes);
     std::string hash = "sha256:";
     char hex[3];
     for (const auto byte : digest) {

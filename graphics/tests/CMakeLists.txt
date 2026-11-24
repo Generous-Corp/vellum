@@ -191,9 +191,10 @@ set_target_properties(vellum-layer-text-extent-test PROPERTIES
 add_test(NAME vellum.layer-text-extent
     COMMAND vellum-layer-text-extent-test "${PROJECT_SOURCE_DIR}/assets/fonts")
 
-# Vector assets: the static rendered vector fixtures, materialized and drawn
-# on the GPU, with pixel oracles and damage sweeps. The same binary prints
-# the canvas shell's plans for the browser oracle.
+# Vector assets: SVG fixtures imported through DesignIR and the authoring
+# runtime, materialized and drawn on the GPU, with pixel oracles and damage
+# sweeps. The same binary prints the canvas shell's plans for the browser
+# oracle.
 if(VELLUM_ENABLE_AUTHORING AND APPLE)
     add_executable(vellum-vector-asset-gpu-test vector_asset_gpu_test.cpp)
     target_link_libraries(vellum-vector-asset-gpu-test PRIVATE
@@ -270,3 +271,10 @@ set_target_properties(vellum-frame-debug-test PROPERTIES
     BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
 add_test(NAME vellum.gpu.frame-debug
     COMMAND vellum-frame-debug-test)
+
+add_executable(vellum-portable-sha256-test portable_sha256_test.cpp)
+target_link_libraries(vellum-portable-sha256-test PRIVATE vellum-scene-capture-harness)
+target_include_directories(vellum-portable-sha256-test PRIVATE
+    ${PROJECT_SOURCE_DIR}/graphics/src)
+add_test(NAME vellum.gpu.portable-sha256
+    COMMAND vellum-portable-sha256-test)

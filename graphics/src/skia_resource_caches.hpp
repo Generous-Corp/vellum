@@ -5,11 +5,11 @@
 // hit draws the same pixels as a miss.
 
 #include "render_cache.hpp"
+#include "sha256.hpp"
 
 #include <vellum/graphics/render_telemetry.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
-#include <CommonCrypto/CommonDigest.h>
 
 #include "include/core/SkImage.h"
 #include "include/core/SkRefCnt.h"
@@ -19,7 +19,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <memory>
 #include <span>
 #include <string>
@@ -40,15 +39,9 @@ struct CachedParagraph final {
 
 /// The SHA-256 of `bytes`.
 [[nodiscard]] inline TextureDigest sha256(std::span<const std::uint8_t> bytes) noexcept {
-    CC_SHA256_CTX context;
-    CC_SHA256_Init(&context);
-    constexpr std::size_t chunk = std::numeric_limits<CC_LONG>::max() / 2U;
-    for (std::size_t offset = 0; offset < bytes.size(); offset += chunk) {
-        const std::size_t size = std::min(chunk, bytes.size() - offset);
-        CC_SHA256_Update(&context, bytes.data() + offset, static_cast<CC_LONG>(size));
-    }
+    const auto portable = sha256_digest(bytes);
     TextureDigest digest{};
-    CC_SHA256_Final(digest.data(), &context);
+    std::copy(portable.begin(), portable.end(), digest.begin());
     return digest;
 }
 

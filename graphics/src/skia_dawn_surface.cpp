@@ -23,7 +23,6 @@
 #include "text_paragraph.hpp"
 #include "utf8_text.hpp"
 
-#import <QuartzCore/CAMetalLayer.h>
 
 #include "dawn/dawn_proc.h"
 #include "dawn/native/DawnNative.h"
@@ -63,7 +62,17 @@
 #include "include/gpu/graphite/Surface.h"
 #include "include/gpu/graphite/dawn/DawnBackendContext.h"
 #include "include/gpu/graphite/dawn/DawnGraphiteTypes.h"
+#if defined(__APPLE__)
 #include "include/ports/SkFontMgr_mac_ct.h"
+#elif defined(_WIN32)
+#include "include/ports/SkFontMgr_directwrite.h"
+#elif defined(__ANDROID__)
+#include "include/ports/SkFontMgr_android.h"
+#include "include/ports/SkFontScanner_FreeType.h"
+#elif defined(__linux__)
+#include "include/ports/SkFontMgr_fontconfig.h"
+#include "include/ports/SkFontScanner_FreeType.h"
+#endif
 #include "modules/skparagraph/include/FontCollection.h"
 #include "modules/skparagraph/include/Paragraph.h"
 #include "modules/skparagraph/include/ParagraphBuilder.h"
@@ -73,7 +82,6 @@
 #include "modules/skunicode/include/SkUnicode_icu.h"
 #include "webgpu/webgpu_cpp.h"
 
-#include <dlfcn.h>
 
 #include <algorithm>
 #include <functional>
@@ -159,6 +167,26 @@ std::string backend_name(wgpu::BackendType backend) {
         case wgpu::BackendType::WebGPU: return "WebGPU";
         default: return "Unknown";
     }
+}
+
+wgpu::BackendType platform_backend() {
+#if defined(__APPLE__)
+    return wgpu::BackendType::Metal;
+#elif defined(_WIN32)
+    return wgpu::BackendType::D3D12;
+#else
+    return wgpu::BackendType::Vulkan;
+#endif
+}
+
+const char* platform_backend_name() {
+#if defined(__APPLE__)
+    return "Metal";
+#elif defined(_WIN32)
+    return "D3D12";
+#else
+    return "Vulkan";
+#endif
 }
 
 std::string string_view(wgpu::StringView value) {
@@ -2077,7 +2105,7 @@ public:
         }
         wgpu::RequestAdapterOptions adapter_options{};
         adapter_options.powerPreference = wgpu::PowerPreference::HighPerformance;
-        adapter_options.backendType = wgpu::BackendType::Metal;
+        adapter_options.backendType = platform_backend();
         if (compatible) {
             adapter_options.compatibleSurface = compatible;
         } else if (compatible_surface_) {
@@ -2099,11 +2127,13 @@ public:
             });
         instance_.ProcessEvents();
         if (adapter_status != wgpu::RequestAdapterStatus::Success || !adapter) {
-            set_error(error, "Dawn Metal adapter unavailable: " + adapter_message);
+            set_error(error, "Dawn " + std::string(platform_backend_name()) +
+                      " adapter unavailable: " + adapter_message);
             return false;
         }
         if (take_injection(failing_device_requests)) {
-            set_error(error, "Dawn Metal device unavailable: failed by test injection");
+            set_error(error, "Dawn " + std::string(platform_backend_name()) +
+                      " device unavailable: failed by test injection");
             return false;
         }
 
@@ -2146,7 +2176,8 @@ public:
         instance_.ProcessEvents();
         if (device_status != wgpu::RequestDeviceStatus::Success || !device) {
             loss_->activate(current);
-            set_error(error, "Dawn Metal device unavailable: " + device_message);
+            set_error(error, "Dawn " + std::string(platform_backend_name()) +
+                      " device unavailable: " + device_message);
             return false;
         }
         if (current > 0 && take_injection(losing_recreations)) {
@@ -2379,13 +2410,37 @@ public:
         core_ = std::move(core);
 
         if (config_.native_surface_handle != nullptr) {
+            wgpu::SurfaceDescriptor descriptor{};
+#if defined(__APPLE__)
             wgpu::SurfaceSourceMetalLayer source{};
             source.layer = config_.native_surface_handle;
-            wgpu::SurfaceDescriptor descriptor{};
             descriptor.nextInChain = &source;
+#elif defined(_WIN32)
+            wgpu::SurfaceSourceWindowsHWND source{};
+            source.hwnd = config_.native_surface_handle;
+            descriptor.nextInChain = &source;
+#elif defined(__ANDROID__)
+            wgpu::SurfaceSourceAndroidNativeWindow source{};
+            source.window = config_.native_surface_handle;
+            descriptor.nextInChain = &source;
+#elif defined(__linux__)
+            const auto* x11 = static_cast<const Config::X11NativeHandle*>(
+                config_.native_surface_handle);
+            if (x11 == nullptr || x11->display == nullptr || x11->window == 0) {
+                set_error(error, "Linux native surface needs an X11 display and window");
+                return false;
+            }
+            wgpu::SurfaceSourceXlibWindow source{};
+            source.display = x11->display;
+            source.window = static_cast<std::uint64_t>(x11->window);
+            descriptor.nextInChain = &source;
+#else
+            set_error(error, "native GPU surfaces are unavailable on this platform");
+            return false;
+#endif
             surface_ = core_->instance().CreateSurface(&descriptor);
             if (!surface_) {
-                set_error(error, "Dawn could not create a Metal surface from CAMetalLayer");
+                set_error(error, "Dawn could not create the native GPU surface");
                 return false;
             }
         }
@@ -2454,8 +2509,9 @@ public:
             evidence_.adapter = "Dawn " + evidence_.backend + " adapter";
         }
         evidence_.texture_format = "bgra8unorm";
-        if (evidence_.backend != "Metal") {
-            set_error(error, "requested Metal backend but Dawn selected " + evidence_.backend);
+        if (evidence_.backend != platform_backend_name()) {
+            set_error(error, "requested " + std::string(platform_backend_name()) +
+                      " backend but Dawn selected " + evidence_.backend);
             return false;
         }
         return true;
