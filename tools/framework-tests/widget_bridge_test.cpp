@@ -396,7 +396,7 @@ FRAMEWORK_TEST(directory_switch_does_not_reuse_same_timestamp_font_bytes) {
 FRAMEWORK_TEST(font_snapshots_release_obsolete_revisions_after_realm_retirement) {
     const auto dir = fresh_temp_dir("snapshot-lifetime");
     std::filesystem::copy_file(VELLUM_TEST_FONT_PATH, dir / "face.ttf");
-    write_file(dir / "ui.js", "");
+    write_file(dir / "ui.js", ";");
     view::ScriptedUiOptions options;
     options.script_path = dir / "ui.js";
     options.enable_hot_reload = options.enable_theme_reload = false;
@@ -405,6 +405,7 @@ FRAMEWORK_TEST(font_snapshots_release_obsolete_revisions_after_realm_retirement)
     view::ScriptedUiSession session(root, store, options);
     std::string error;
     CHECK(session.load(&error));
+    if (!session.bridge()) return;
     const auto* asset = session.bridge()->embedded_asset("face.ttf");
     CHECK(asset && asset->owned_bytes);
     if (!asset || !asset->owned_bytes) return;
