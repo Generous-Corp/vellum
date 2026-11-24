@@ -892,6 +892,8 @@ extern "C" void vellum_mac_text_input_client_category_anchor();
             else
                 next = vellum::view::View::focus_next(*self.rootView, old);
             if (next && next != old) {
+                vellum::view::ViewCapture next_capture;
+                next_capture.set(next);
                 auto* liveRoot = self.rootView;
                 if (!liveRoot) {
                     _focusedView = nullptr;
@@ -904,12 +906,9 @@ extern "C" void vellum_mac_text_input_client_category_anchor();
                     [self setNeedsDisplay:YES];
                     return;
                 }
-                if (!vellum::view::transfer_input_focus(*liveRoot, next,
-                                                         vellum::view::FocusCause::keyboard)) {
-                    _focusedView = vellum::view::focused_input_under_root(*liveRoot);
-                } else {
-                    _focusedView = vellum::view::focused_input_under_root(*liveRoot);
-                }
+                (void)vellum::view::transfer_input_focus(*liveRoot, next,
+                                                         vellum::view::FocusCause::keyboard);
+                _focusedView = vellum::view::focused_input_under_root(*liveRoot);
             }
             [self setNeedsDisplay:YES];
             return;
