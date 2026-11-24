@@ -26,7 +26,7 @@ struct Harness {
     view::WidgetBridge bridge;
 
     explicit Harness(view::CapabilitySet capabilities = view::CapabilitySet::all())
-        : bridge(engine, root, store, capabilities) { root.set_bounds({0, 0, 400, 300}); }
+        : bridge(engine, root, store, nullptr, capabilities) { root.set_bounds({0, 0, 400, 300}); }
 
     std::string js_string(const std::string& expression) {
         return engine.evaluate("String(" + expression + ")").toString();

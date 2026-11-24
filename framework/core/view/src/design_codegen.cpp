@@ -21,6 +21,7 @@
 #include <vellum/view/input_events.hpp>
 #include <vellum/canvas/font_resolver.hpp>
 #include <vellum/canvas/text_utf8.hpp>
+#include <vellum/runtime/safe_relative_path.hpp>
 
 #include "design_import_internal.hpp"
 #include "design_import_native_common.hpp"
@@ -33,6 +34,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstdio>
+#include <filesystem>
 #include <functional>
 #include <sstream>
 #include <unordered_map>
@@ -3092,6 +3094,20 @@ static void generate_native_node(std::ostringstream& ss, const IRNode& node,
 
 // ── Public code generation ──────────────────────────────────────────────
 
+std::string sealed_font_asset_name(const DesignIR& ir, const IRFontAsset& face) {
+    const auto safe = [](const std::string& candidate) -> std::string {
+        if (candidate.empty() || candidate.find("://") != std::string::npos) return {};
+        const std::filesystem::path raw(candidate);
+        for (const auto& part : raw) if (part == "..") return {};
+        const auto normal = raw.lexically_normal();
+        if (!vellum::runtime::is_safe_relative_path(normal)) return {};
+        return normal.generic_string();
+    };
+    if (const auto* asset = ir.asset_manifest.resolve(face.asset_id); asset && asset->local_path)
+        if (auto name = safe(*asset->local_path); !name.empty()) return name;
+    return safe(face.resolved_path);
+}
+
 std::string generate_pulp_js(const DesignIR& ir, const CodeGenOptions& opts) {
     std::ostringstream ss;
 
@@ -3146,19 +3162,22 @@ std::string generate_pulp_js(const DesignIR& ir, const CodeGenOptions& opts) {
     ss << "if (typeof setSubpixelLayout === 'function') setSubpixelLayout('', true);\n"
        << "if (typeof setCapturedFrameRoot === 'function') setCapturedFrameRoot('', true);\n\n";
 
-    // Register bundled fonts, with each @font-face rule's declared weight range,
-    // BEFORE any setFontFamily, so a family resolves to the shipped face rather
-    // than a same-named system font. resolved_path is the absolute file the CLI's
-    // asset-resolution pass stamped; entries that did not resolve are skipped.
+    // Register bundled fonts before any setFontFamily. Localized faces use the
+    // sealed, script-relative bridge API and need no Filesystem capability.
     if (!ir.font_family_assets.empty()) {
         bool any = false;
         for (const auto& fa : ir.font_family_assets) {
-            if (fa.family.empty() || fa.resolved_path.empty()) continue;
+            if (fa.family.empty()) continue;
+            const auto sealed = sealed_font_asset_name(ir, fa);
+            if (sealed.empty() && fa.resolved_path.empty()) continue;
             if (!any && opts.include_comments) ss << "// Bundled fonts\n";
             any = true;
-            ss << "registerFont('" << js_single_quote_escape(fa.family) << "', '"
-               << js_single_quote_escape(fa.resolved_path) << "', " << fa.weight << ", "
-               << (fa.weight_max > 0 ? fa.weight_max : fa.weight) << ");\n";
+            const auto weight_max = fa.weight_max > 0 ? fa.weight_max : fa.weight;
+            const auto fn = sealed.empty() ? "registerFont" : "registerEmbeddedFont";
+            const auto& name = sealed.empty() ? fa.resolved_path : sealed;
+            ss << "if (typeof " << fn << " === 'function') " << fn << "('"
+               << js_single_quote_escape(fa.family) << "', '" << js_single_quote_escape(name)
+               << "', " << fa.weight << ", " << weight_max << ");\n";
         }
         if (any) ss << "\n";
     }

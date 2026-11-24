@@ -72,6 +72,7 @@ struct CodeGenOptions {
 /// Native mode (default) uses createCol/createRow/createKnob + setFlex.
 /// Web-compat mode uses document.createElement + el.style.
 std::string generate_pulp_js(const DesignIR& ir, const CodeGenOptions& opts = {});
+std::string sealed_font_asset_name(const DesignIR& ir, const IRFontAsset& face);
 
 struct CppExportOptions {
     std::string function_name = "build_imported_ui";

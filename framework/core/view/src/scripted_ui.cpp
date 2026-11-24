@@ -3,6 +3,8 @@
 #include <vellum/view/accessibility_provider.hpp>
 #include <vellum/view/value_channel_set.hpp>
 #include <vellum/runtime/log.hpp>
+#include <vellum/runtime/safe_relative_path.hpp>
+#include <vellum/view/font_container.hpp>
 #include <vellum/value/param_metadata.hpp>
 #include <optional>
 #include <vellum/runtime/trace.hpp>
@@ -10,6 +12,10 @@
 #include <chrono>
 #include <condition_variable>
 #include <fstream>
+#include <iterator>
+#include <algorithm>
+#include <cctype>
+#include <unordered_map>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
@@ -108,6 +114,12 @@ void load_script_before_deadline(WidgetBridge& bridge, ScriptEngine& engine,
         std::rethrow_exception(load_error);
 }
 
+bool is_panel_font_file(const std::filesystem::path& path) {
+    auto ext = path.extension().string();
+    for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return ext == ".ttf" || ext == ".otf" || ext == ".woff" || ext == ".woff2";
+}
+
 // A ParamModel that reads through to another and drops every write: values,
 // gestures and plain writes do nothing, and a subscription never fires. A
 // reload probe runs over it so the probe script cannot move a parameter or
@@ -178,6 +190,46 @@ std::unique_ptr<value::ParamModel> read_only_view(value::ParamModel& source,
 }
 
 } // namespace
+
+struct ScriptedUiSession::DiskFontCache {
+    struct Entry { std::filesystem::file_time_type write_time; std::shared_ptr<const std::vector<unsigned char>> bytes; };
+    std::unordered_map<std::string, Entry> by_name;
+    std::vector<std::shared_ptr<const std::vector<unsigned char>>> retained;
+};
+
+std::vector<WidgetBridge::EmbeddedAsset> ScriptedUiSession::sealed_assets_for(const std::filesystem::path& script) {
+    auto assets = embedded_assets_;
+    if (!script_source_.empty() || script.empty()) return assets;
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const auto dir = fs::weakly_canonical(script.parent_path(), ec);
+    if (ec || dir.empty()) return assets;
+    if (!disk_fonts_) disk_fonts_ = std::make_shared<DiskFontCache>();
+    std::size_t files = 0; std::uintmax_t total = 0;
+    for (auto it = fs::recursive_directory_iterator(dir, fs::directory_options::skip_permission_denied, ec);
+         !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        const auto& path = it->path();
+        std::error_code entry_ec;
+        if (it->is_directory(entry_ec)) { if (path.filename().string().starts_with('.') || path.filename() == "node_modules") it.disable_recursion_pending(); continue; }
+        if (!is_panel_font_file(path) || !it->is_regular_file(entry_ec)) continue;
+        const auto real = fs::weakly_canonical(path, entry_ec);
+        if (entry_ec || !runtime::is_within_directory(dir, real)) continue;
+        const auto size = fs::file_size(real, entry_ec);
+        if (entry_ec || size == 0 || size > kMaxShippedFontBytes || ++files > 256 || (total += size) > 128u * 1024u * 1024u) continue;
+        const auto name = path.lexically_relative(dir).generic_string();
+        const auto write_time = fs::last_write_time(real, entry_ec);
+        auto& entry = disk_fonts_->by_name[name];
+        if (!entry.bytes || entry.write_time != write_time) {
+            std::ifstream in(real, std::ios::binary);
+            auto bytes = std::make_shared<std::vector<unsigned char>>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+            if (bytes->empty()) continue;
+            entry = {write_time, bytes}; disk_fonts_->retained.push_back(std::move(bytes));
+        }
+        const bool embedded = std::any_of(assets.begin(), assets.end(), [&](const auto& a) { return a.name == name; });
+        if (!embedded) assets.push_back({name, entry.bytes->data(), entry.bytes->size()});
+    }
+    return assets;
+}
 
 ScriptedUiSession::ScriptedUiSession(View& root, state::StateStore& store,
                                      ScriptedUiOptions options)
@@ -904,7 +956,7 @@ bool ScriptedUiSession::rebuild_from_code(
             probe_bridge->set_asset_roots(asset_roots_);
             probe_bridge->set_script_base_dir(source_path.parent_path());
             probe_bridge->set_allow_unreviewed_file_paths(allow_unreviewed_file_paths_);
-            probe_bridge->set_embedded_assets(embedded_assets_);
+            probe_bridge->set_embedded_assets(sealed_assets_for(source_path));
             probe_bridge->set_storage_identity(storage_identity_);
             probe_bridge->set_host_kind(host_kind_);
             probe_bridge->set_time_source(time_source_);
@@ -982,7 +1034,7 @@ bool ScriptedUiSession::rebuild_from_code(
         next_bridge->set_asset_roots(asset_roots_);
         next_bridge->set_script_base_dir(source_path.parent_path());
         next_bridge->set_allow_unreviewed_file_paths(allow_unreviewed_file_paths_);
-        next_bridge->set_embedded_assets(embedded_assets_);
+        next_bridge->set_embedded_assets(sealed_assets_for(source_path));
         next_bridge->set_storage_identity(storage_identity_);
         next_bridge->set_host_kind(host_kind_);
         next_bridge->set_time_source(time_source_);

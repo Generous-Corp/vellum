@@ -1078,7 +1078,9 @@
       "pulp_commits": [],
       "framework_blob": null,
       "reason": "Vellum-owned Android GPU surface lifecycle boundary over Pulp's Dawn Vulkan path.",
-      "platforms": ["android-arm64-v8a"]
+      "platforms": [
+        "android-arm64-v8a"
+      ]
     },
     {
       "framework_path": "framework/core/render/platform/android/android_gpu_surface_jni.cpp",
@@ -1089,7 +1091,9 @@
       "pulp_commits": [],
       "framework_blob": null,
       "reason": "Vellum-owned JNI bridge for Android SurfaceView lifecycle callbacks.",
-      "platforms": ["android-arm64-v8a"]
+      "platforms": [
+        "android-arm64-v8a"
+      ]
     },
     {
       "framework_path": "framework/core/render/src/render_loop_android.cpp",
@@ -1100,7 +1104,19 @@
       "pulp_commits": [],
       "framework_blob": null,
       "reason": "AChoreographer frame pacing for Vellum's Android render loop.",
-      "platforms": ["android-arm64-v8a"]
+      "platforms": [
+        "android-arm64-v8a"
+      ]
+    },
+    {
+      "framework_path": "framework/core/view/include/vellum/view/font_container.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Path-free validation and registration of sealed panel font containers."
     }
   ]
 }
