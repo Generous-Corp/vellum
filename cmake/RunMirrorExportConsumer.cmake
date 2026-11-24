@@ -1,3 +1,5 @@
+cmake_minimum_required(VERSION 3.24)
+
 # This consumer proves the installed package from a real consumer project:
 # the Darwin export resolves through find_package(Vellum CONFIG REQUIRED), each
 # declared non-Darwin platform is refused by the package's platform guard (the

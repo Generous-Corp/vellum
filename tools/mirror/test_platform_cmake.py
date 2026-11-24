@@ -142,5 +142,41 @@ class ConfigureDependsTest(unittest.TestCase):
         )
 
 
+class ExportConsumerScriptTest(unittest.TestCase):
+    def test_script_reaches_the_freebsd_packaging_guard(self) -> None:
+        # A package stand-in exercises the script without building a GPU SDK.
+        # The real platform module must produce the final FreeBSD refusal.
+        repo = MODULE.parents[2]
+        with tempfile.TemporaryDirectory() as tmp:
+            build = Path(tmp)
+            (build / "cmake_install.cmake").write_text('''
+file(MAKE_DIRECTORY "${CMAKE_INSTALL_PREFIX}/lib/cmake/Vellum"
+    "${CMAKE_INSTALL_PREFIX}/mirror/lib/cmake/VellumMirror")
+file(WRITE "${CMAKE_INSTALL_PREFIX}/mirror/lib/cmake/VellumMirror/VellumMirrorTargets.cmake" "")
+file(WRITE "${CMAKE_INSTALL_PREFIX}/lib/image.stub" "")
+file(WRITE "${CMAKE_INSTALL_PREFIX}/lib/cmake/Vellum/VellumConfig.cmake" [=[
+if(CMAKE_CROSSCOMPILING)
+    message(FATAL_ERROR "unsupported target platform")
+endif()
+add_library(Vellum::Value INTERFACE IMPORTED)
+add_library(Vellum::SkiaDawnProvider INTERFACE IMPORTED)
+add_library(Vellum::MirrorView_core SHARED IMPORTED)
+set_target_properties(Vellum::MirrorView_core PROPERTIES
+    INTERFACE_LINK_LIBRARIES Vellum::Value
+    IMPORTED_LOCATION_RELEASE "${CMAKE_CURRENT_LIST_DIR}/../../image.stub")
+add_library(Vellum::MirrorCanvas INTERFACE IMPORTED)
+set_target_properties(Vellum::MirrorCanvas PROPERTIES
+    INTERFACE_LINK_LIBRARIES Vellum::SkiaDawnProvider)
+]=])
+''', encoding="utf-8")
+            result = subprocess.run(
+                ["cmake", f"-DVELLUM_BUILD_DIR={build}", "-DVELLUM_INSTALL_LIBDIR=lib",
+                 f"-DVELLUM_SOURCE_DIR={repo}", "-P",
+                 str(repo / "cmake/RunMirrorExportConsumer.cmake")],
+                capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("FreeBSD packaging control: ok", result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
