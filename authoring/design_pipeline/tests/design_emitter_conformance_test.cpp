@@ -82,11 +82,53 @@ namespace fs = std::filesystem;
     void conformance_bind(vellum::view::View& root, vellum::view::NativeImportBindingContext& ctx);    \
     }
 VELLUM_CONFORMANCE_FIXTURE(form_controls_08)
+VELLUM_CONFORMANCE_FIXTURE(spectr)
+VELLUM_CONFORMANCE_FIXTURE(kelvin)
 VELLUM_CONFORMANCE_FIXTURE(keyed_list_18)
 VELLUM_CONFORMANCE_FIXTURE(fidelity_scene)
 #undef VELLUM_CONFORMANCE_FIXTURE
 
 namespace {
+
+// The conformance executable supplies Vellum-owned display widgets so audio
+// fixture emitters can be checked without linking Pulp's audio provider.
+class ConformanceLevelDisplay final : public View, public LevelDisplay {
+  public:
+    void set_levels(float, float) override {}
+    void set_level_orientation(Orientation) override {}
+    void set_level_fill(std::optional<vellum::canvas::Color>,
+                        std::vector<vellum::canvas::Color>) override {}
+    void clear_level_fill() override {}
+    void set_level_bar_ratio(float) override {}
+    void set_level_render_style(WidgetRenderStyle) override {}
+};
+
+class ConformanceSeriesDisplay final : public View, public SeriesDisplay {
+  public:
+    void set_series(const float*, std::size_t) override {}
+    void set_series_preview(std::string_view) override {}
+};
+
+class ConformanceBinDisplay final : public View, public BinDisplay {
+  public:
+    void set_bins(const float*, std::size_t) override {}
+};
+
+std::unique_ptr<View> make_conformance_level_display() {
+    return std::make_unique<ConformanceLevelDisplay>();
+}
+std::unique_ptr<View> make_conformance_series_display() {
+    return std::make_unique<ConformanceSeriesDisplay>();
+}
+std::unique_ptr<View> make_conformance_bin_display() {
+    return std::make_unique<ConformanceBinDisplay>();
+}
+
+void register_conformance_displays() {
+    register_data_display({"pulp.level", make_conformance_level_display, {}});
+    register_data_display({"pulp.series", make_conformance_series_display, {}});
+    register_data_display({"pulp.bins", make_conformance_bin_display, {}});
+}
 
 // ── projection ──────────────────────────────────────────────────────────────
 
@@ -662,25 +704,11 @@ std::string describe(const Divergence& d) {
            "', " + d.lane + " '" + d.actual + "'";
 }
 
-/// Audio display widgets need Pulp's view-audio provider, which this audio-free
-/// gate never links, so no fixture it loads may carry one.
-bool has_display_widget(const IRNode& node) {
-    if (node.audio_widget == AudioWidgetType::meter ||
-        node.audio_widget == AudioWidgetType::waveform ||
-        node.audio_widget == AudioWidgetType::spectrum)
-        return true;
-    for (const auto& child : node.children)
-        if (has_display_widget(child))
-            return true;
-    return false;
-}
-
 std::vector<Divergence> all_divergences() {
     std::vector<Divergence> out;
     for (const auto& fixture : fixtures()) {
         INFO("fixture " << fixture.name);
         const auto ir = load(fixture);
-        REQUIRE_FALSE(has_display_widget(ir.root));
         const StagedAssets assets(ir);
         const auto native = native_lane(ir, assets.dir());
         REQUIRE_FALSE(native.empty());
@@ -911,7 +939,6 @@ TEST_CASE("the JS lane records only bindings the bridge accepted, and a rejected
     const auto fixture = fixtures().back();
     REQUIRE(fixture.name == "fidelity-scene");
     const auto ir = load(fixture);
-    REQUIRE_FALSE(has_display_widget(ir.root));
     const StagedAssets assets(ir);
 
     const auto run = js_run(ir, assets.dir());
@@ -979,4 +1006,7 @@ TEST_CASE("the conformance comparison reports planted divergences",
     }
 }
 
-int main() { return mini_test::run_all(); }
+int main() {
+    register_conformance_displays();
+    return mini_test::run_all();
+}
