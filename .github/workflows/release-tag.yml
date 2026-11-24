@@ -63,6 +63,7 @@ jobs:
     outputs:
       # Set only by the last step, after every content check has passed.
       tag: ${{ steps.release.outputs.tag }}
+      snapshot-sha256: ${{ steps.snapshot.outputs.sha256 }}
     steps:
       - name: Check out the pushed commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -122,19 +123,33 @@ jobs:
           set -euo pipefail
           python3 -I scripts/pretag_checks.py --tag "$TAG" --commit "$GITHUB_SHA" \
             --snapshot-output "$RUNNER_TEMP/open-pr-snapshot.json" \
-            --bump-evidence-output "$RUNNER_TEMP/release-bump-evidence.json"
+            --release-bump-output "$RUNNER_TEMP/release-bump-evidence.json" \
+            --pretag-replay
 
       # The tag's own provenance run judges the open-PR audit against exactly
       # what this selection judged, signed into the tag: the snapshot and the
       # release-bump content evidence read with it.
+      - name: Stage the audited release inputs
+        if: steps.select.outputs.tag != ''
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/release-snapshot"
+          cp "$RUNNER_TEMP/open-pr-snapshot.json" "$RUNNER_TEMP/release-snapshot/open-pr-snapshot.json"
+          cp "$RUNNER_TEMP/release-bump-evidence.json" "$RUNNER_TEMP/release-snapshot/release-bump-evidence.json"
+
+      - name: Bind the selection snapshot to the signing job
+        id: snapshot
+        if: steps.select.outputs.tag != ''
+        run: |
+          set -euo pipefail
+          sha256sum "$RUNNER_TEMP/release-snapshot/open-pr-snapshot.json" | awk '{print "sha256=" $1}' >> "$GITHUB_OUTPUT"
+
       - name: Preserve the selection open-PR snapshot for signing
         if: steps.select.outputs.tag != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: release-open-pr-snapshot
-          path: |
-            ${{ runner.temp }}/open-pr-snapshot.json
-            ${{ runner.temp }}/release-bump-evidence.json
+          path: ${{ runner.temp }}/release-snapshot
           if-no-files-found: error
           retention-days: 1
 
@@ -196,7 +211,7 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: release-open-pr-snapshot
-          path: ${{ runner.temp }}
+          path: ${{ runner.temp }}/release-snapshot
 
       # Every repository script runs with `python3 -I`: isolated mode keeps the
       # script's own directory and the working directory off sys.path, so no
@@ -342,8 +357,8 @@ jobs:
           python3 -I scripts/release_request.py freeze --tag "$tag" > "$RUNNER_TEMP/freeze.json"
           python3 -I scripts/release_request.py attestation --commit "$GITHUB_SHA" \
             --attested-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --tag "$tag" \
-            --open-pr-snapshot-json "$RUNNER_TEMP/open-pr-snapshot.json" \
-            --release-bump-evidence-json "$RUNNER_TEMP/release-bump-evidence.json" \
+            --open-pr-snapshot-json "$RUNNER_TEMP/release-snapshot/open-pr-snapshot.json" \
+            --release-bump-evidence-json "$RUNNER_TEMP/release-snapshot/release-bump-evidence.json" \
             > "$RUNNER_TEMP/promotion-attestation.json"
           printf 'tag=%s\nversion=%s\n' "$tag" "$version" >> "$GITHUB_OUTPUT"
 
@@ -352,10 +367,12 @@ jobs:
         env:
           RELEASE_TAG_SIGNING_KEY: ${{ secrets.RELEASE_TAG_SIGNING_KEY }}
           TAG: ${{ steps.decision.outputs.tag }}
+          SNAPSHOT_SHA256: ${{ needs.select-release-commit.outputs.snapshot-sha256 }}
           PRINCIPAL: ${{ steps.decision.outputs.principal }}
         run: |
           set -euo pipefail
           test -n "$RELEASE_TAG_SIGNING_KEY"
+          test "$(sha256sum "$RUNNER_TEMP/release-snapshot/open-pr-snapshot.json" | awk '{print $1}')" = "$SNAPSHOT_SHA256"
           key="$RUNNER_TEMP/release-signing-key"
           trap 'rm -f "$key"' EXIT
           (umask 077 && printf '%s\n' "$RELEASE_TAG_SIGNING_KEY" > "$key")

@@ -784,10 +784,10 @@ def main(argv: list[str]) -> int:
             bound: list[Any] = []
             for path, what in ((args.open_pr_snapshot_json, "open-PR snapshot"),
                                (args.release_bump_evidence_json, "release-bump evidence")):
-                try:
-                    bound.append(None if path is None else json.loads(path.read_text(encoding="utf-8")))
-                except (OSError, ValueError) as error:
-                    raise ReleaseRequestError(f"cannot read {what}: {error}") from error
+                value = None if path is None else load(path)
+                if path is not None and not isinstance(value, dict):
+                    raise ReleaseRequestError(f"{what} must be an object")
+                bound.append(value)
             data = attestation(ROOT, args.commit, args.attested_at, args.tag, *bound)
             if args.dry_run_tag is not None:
                 data = dry_run_attestation(data, args.dry_run_tag, args.tag)

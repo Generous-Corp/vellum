@@ -311,9 +311,19 @@ def main(argv: list[str]) -> int:
                         "(for a rehearsal on a commit that exists only locally)")
     parser.add_argument("--snapshot-output", type=Path,
                         help="copy the pre-tag authority open-PR snapshot to this path")
-    parser.add_argument("--bump-evidence-output", type=Path,
+    parser.add_argument("--release-bump-output", "--bump-evidence-output", dest="bump_evidence_output", type=Path,
                         help="copy the release-bump evidence judged with that snapshot to this path")
+    parser.add_argument("--pretag-replay", action="store_true",
+                        help="require both audited inputs for the selection-to-signing handoff")
     args = parser.parse_args(argv)
+    # Every Runner invocation rehearses a temporary tag, including canary
+    # callers without this flag. The selector additionally promises both
+    # audited inputs to the signing job; refuse an incomplete handoff here.
+    if args.pretag_replay and (args.snapshot_output is None or args.bump_evidence_output is None):
+        parser.error("--pretag-replay requires --snapshot-output and --release-bump-output")
+    if (args.snapshot_output is not None and args.bump_evidence_output is not None
+            and args.snapshot_output.resolve() == args.bump_evidence_output.resolve()):
+        parser.error("the snapshot and release-bump output paths must differ")
     try:
         with tempfile.TemporaryDirectory(prefix="pretag-") as temporary:
             return Runner(args.root.resolve(), args.tag, args.commit, Path(temporary), args.check_runs_commit,

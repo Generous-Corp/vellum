@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pretag_checks as pc  # noqa: E402
@@ -122,6 +123,38 @@ class Fixture(unittest.TestCase):
         (self.root / ".github/workflows/provenance.yml").write_text(text)
         self.assertEqual(runner.main(), 0)
         self.assertNotIn("Verify active repository documentation", self.ran())
+
+    def test_approved_selector_cli_exports_both_audited_inputs(self) -> None:
+        self.runner()
+        snapshot = self.temp / "open-pr-snapshot.json"
+        evidence = self.temp / "release-bump-evidence.json"
+        snapshot.write_text('{"repositories": []}\n')
+        evidence.write_text('{"pulls": []}\n')
+        output = self.root / "selected"
+
+        def runner(*args):
+            replay = Runner(*args[:3], self.temp, *args[4:])
+            replay.environment.update(LOG=str(self.log), CURSOR=self.cursor)
+            return replay
+
+        with mock.patch.object(pc, "Runner", side_effect=runner):
+            self.assertEqual(pc.main([
+                "--root", str(self.root), "--tag", "v0.1.10", "--commit", self.commit,
+                "--snapshot-output", str(output / snapshot.name),
+                "--release-bump-output", str(output / evidence.name), "--pretag-replay",
+            ]), 0)
+        self.assertEqual((output / snapshot.name).read_bytes(), snapshot.read_bytes())
+        self.assertEqual((output / evidence.name).read_bytes(), evidence.read_bytes())
+        self.assertEqual(self.ran(), [check.step for check in pc.CHECKS])
+
+    def test_explicit_selector_replay_requires_both_destinations(self) -> None:
+        for missing in ("--snapshot-output", "--release-bump-output"):
+            remaining = "--release-bump-output" if missing == "--snapshot-output" else "--snapshot-output"
+            with self.subTest(missing=missing), mock.patch.object(pc, "Runner") as runner:
+                with self.assertRaises(SystemExit):
+                    pc.main(["--tag", "v0.1.10", "--commit", self.commit,
+                             "--pretag-replay", remaining, str(self.root / "output")])
+                runner.assert_not_called()
 
 
 class CheckRunsCommit(unittest.TestCase):
