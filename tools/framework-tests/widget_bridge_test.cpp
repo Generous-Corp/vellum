@@ -25,7 +25,8 @@ struct Harness {
     vellum::state::StateStore store;
     view::WidgetBridge bridge;
 
-    Harness() : bridge(engine, root, store) { root.set_bounds({0, 0, 400, 300}); }
+    explicit Harness(view::CapabilitySet capabilities = view::CapabilitySet::all())
+        : bridge(engine, root, store, capabilities) { root.set_bounds({0, 0, 400, 300}); }
 
     std::string js_string(const std::string& expression) {
         return engine.evaluate("String(" + expression + ")").toString();
@@ -43,6 +44,14 @@ FRAMEWORK_TEST(script_creates_a_label_and_sets_its_text) {
     CHECK(label->parent() == &h.root);
     CHECK(label->text() == "hello");
     CHECK(h.js_string("getText('title')") == "hello");
+}
+
+FRAMEWORK_TEST(sealed_font_api_is_available_without_filesystem) {
+    Harness h(view::CapabilitySet{});
+    h.bridge.load_script("globalThis.embeddedType = typeof registerEmbeddedFont; globalThis.pathType = typeof registerFont;");
+    CHECK(h.js_string("embeddedType") == "function");
+    CHECK(h.js_string("pathType") == "undefined");
+    CHECK(h.js_string("registerEmbeddedFont('sealed-family', '/etc/hosts')") == "false");
 }
 
 FRAMEWORK_TEST(native_click_reaches_the_script_toggle_handler) {
