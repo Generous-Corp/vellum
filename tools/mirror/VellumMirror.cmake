@@ -540,7 +540,7 @@ endif()
 
 # The remaining packaging rules share one platform split. Darwin keeps its
 # symbol-list and re-export controls. Other declared platforms use ordinary
-# shared-library exports until slice 0b supplies equivalent controls.
+# shared-library exports; equivalent export controls are not implemented.
 vellum_mirror_require_packaging()
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     set(_vellum_mirror_install_rpath "@loader_path;@loader_path/../../${CMAKE_INSTALL_LIBDIR}")
@@ -555,8 +555,8 @@ endif()
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     message(STATUS
         "Vellum: ${CMAKE_SYSTEM_NAME} mirror libraries omit Darwin "
-        "-exported_symbols_list, -unexported_symbols_list, and re-export controls; "
-        "slice 0b owns equivalent export controls")
+        "-exported_symbols_list, -unexported_symbols_list, and re-export controls, "
+        "and have no equivalent export controls yet")
 endif()
 
 # ── Package libraries ──────────────────────────────────────────────────────
