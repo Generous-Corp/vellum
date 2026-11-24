@@ -727,16 +727,24 @@ std::string describe(const Divergence& d) {
            "', " + d.lane + " '" + d.actual + "'";
 }
 
-std::vector<Divergence> all_divergences() {
+/// `compared`, when given, receives "<lane>/<fixture>" for every comparison made,
+/// so a test can prove no emitter or fixture silently dropped out.
+std::vector<Divergence> all_divergences(std::set<std::string>* compared = nullptr) {
     std::vector<Divergence> out;
+    const auto note = [&](const char* lane, const Fixture& fixture) {
+        if (compared)
+            compared->insert(std::string(lane) + "/" + fixture.name);
+    };
     for (const auto& fixture : fixtures()) {
         INFO("fixture " << fixture.name);
         const auto ir = load(fixture);
         const StagedAssets assets(ir);
         const auto native = native_lane(ir, assets.dir());
         REQUIRE_FALSE(native.empty());
+        note("js", fixture);
         for (auto&& d : compare("js", fixture.name, native, js_lane(ir, assets.dir())))
             out.push_back(std::move(d));
+        note("cpp", fixture);
         for (auto&& d : compare("cpp", fixture.name, native, cpp_lane(fixture, ir, assets.dir())))
             out.push_back(std::move(d));
         // SwiftUI compares only the anchors that bind on at least one side.
@@ -744,6 +752,7 @@ std::vector<Divergence> all_divergences() {
         for (const auto& [anchor, fields] : native)
             if (fields.count("binding"))
                 native_bindings[anchor]["binding"] = fields.at("binding");
+        note("swiftui", fixture);
         for (auto&& d :
              compare("swiftui", fixture.name, native_bindings, swift_lane(ir), {"binding"}))
             out.push_back(std::move(d));
@@ -976,6 +985,17 @@ TEST_CASE("every generated fixture is compared, by exact name", "[emitter-confor
     }
     CHECK(generated == compared);
     CHECK(fixtures().back().name == "fidelity-scene");
+}
+
+TEST_CASE("every emitter lane is compared for every fixture", "[emitter-conformance]") {
+    std::set<std::string> compared;
+    (void)all_divergences(&compared);
+    std::set<std::string> expected;
+    for (const char* lane : {"js", "cpp", "swiftui"})
+        for (const char* fixture :
+             {"form-controls-08", "spectr", "kelvin", "keyed-list-18", "fidelity-scene"})
+            expected.insert(std::string(lane) + "/" + fixture);
+    CHECK(compared == expected);
 }
 
 TEST_CASE("the display stand-ins are reached through the ids the emitters use",
