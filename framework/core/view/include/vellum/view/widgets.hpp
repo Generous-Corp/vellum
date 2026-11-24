@@ -1647,8 +1647,9 @@ public:
     }
     float skin_track_width() const { return skin_track_width_; }
     bool has_skin_track_width() const { return has_skin_track_width_; }
-    /// The imported body already paints the track and its fill. Keep the
-    /// native thumb live while leaving those authored pixels untouched.
+    /// The imported body beneath already paints a static track with no value
+    /// fill, so paint only the live cap and leave those authored pixels alone.
+    /// For a design whose track shows the value, leave this off.
     void set_authored_body_only(bool enabled = true) {
         authored_body_only_ = enabled;
         request_repaint();
