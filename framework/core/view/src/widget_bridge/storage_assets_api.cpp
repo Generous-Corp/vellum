@@ -95,7 +95,7 @@ bool register_sealed_font(WidgetBridge& self, const WidgetBridge::EmbeddedAsset&
                                           family);
             return false;
         }
-        if (!vellum::view::register_font_container(embedded.data, embedded.size, family_key))
+        if (!vellum::view::register_font_container(embedded.data, embedded.size, family))
             return false;
         owners.owner_by_family.emplace(family_key, owner);
     }

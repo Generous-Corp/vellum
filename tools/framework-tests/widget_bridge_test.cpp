@@ -243,6 +243,10 @@ FRAMEWORK_TEST(a_panel_cannot_rebind_a_family_another_owner_registered) {
 
     const auto case_variant = probe_family("case-variant");
     CHECK(register_embedded(a, case_variant, "assets/face.ttf"));
+    bool sealed_display_name_preserved = false;
+    for (const auto& registered : vellum::canvas::registered_typefaces_snapshot())
+        sealed_display_name_preserved |= registered.family == case_variant;
+    CHECK(sealed_display_name_preserved);
     auto lower_case_variant = case_variant;
     std::transform(lower_case_variant.begin(), lower_case_variant.end(), lower_case_variant.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
