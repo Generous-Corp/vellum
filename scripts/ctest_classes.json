@@ -207,6 +207,7 @@
       "vellum.gpu.path_fill_rule_and_stroke",
       "vellum.gpu.per_corner_radii",
       "vellum.gpu.plots",
+      "vellum.gpu.portable-sha256",
       "vellum.gpu.radii_overflow_scaling",
       "vellum.gpu.rectangle-batches",
       "vellum.gpu.render-cache",
