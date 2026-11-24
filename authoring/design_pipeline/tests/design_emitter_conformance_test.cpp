@@ -938,8 +938,14 @@ std::vector<std::string> fader_skin_calls(const std::string& js) {
 
 TEST_CASE("authored faders use the designed overlay in every generated lane",
           "[view][import][emitter-conformance][fader]") {
+  // Both ui.js lanes: the bridge-native emitter and the web-compat DOM
+  // emitter that generated panels use.
+  for (const auto mode : {CodeGenMode::bridge_native_js, CodeGenMode::web_compat}) {
+    INFO((mode == CodeGenMode::web_compat ? "web-compat" : "bridge-native"));
+    CodeGenOptions opts;
+    opts.mode = mode;
     const auto ir = authored_fader_ir(true, false);
-    const auto js = generate_pulp_js(ir, CodeGenOptions{});
+    const auto js = generate_pulp_js(ir, opts);
     CHECK(js.find("setDesignedOverlay(") != std::string::npos);
     // Exactly one skin call: the cap in the isolated thumb colour, with no
     // track or fill colour, because the capture beneath holds the track.
@@ -949,20 +955,23 @@ TEST_CASE("authored faders use the designed overlay in every generated lane",
         calls[0], std::regex(R"(setFaderSkin\([^,]+, '', '', '#a93d10ff', '', 0, 0, 0, true\);)")));
     CHECK(js.find("'#111111'") == std::string::npos);
 
+    // Without the static-track declaration a value fill may exist, so every
+    // lane keeps the live track and fill.
+    const auto live = authored_fader_ir(false, false);
+    const auto live_js = generate_pulp_js(live, opts);
+    CHECK(live_js.find("setDesignedOverlay(") == std::string::npos);
+    const auto live_calls = fader_skin_calls(live_js);
+    REQUIRE(!live_calls.empty());
+    CHECK(live_calls[0].find("'#111111', '#222222'") != std::string::npos);
+  }
+
+    const auto ir = authored_fader_ir(true, false);
     const auto cpp = generate_pulp_cpp(ir, {});
     CHECK(cpp.source.find("set_designed_overlay(true)") != std::string::npos);
     CHECK(cpp.source.find("set_skin_thumb_color(vellum::view::Color::rgba8(169, 61, 16, 255))") !=
           std::string::npos);
 
-    // Without the static-track declaration a value fill may exist, so every
-    // lane keeps the live track and fill.
-    const auto live = authored_fader_ir(false, false);
-    const auto live_js = generate_pulp_js(live, CodeGenOptions{});
-    CHECK(live_js.find("setDesignedOverlay(") == std::string::npos);
-    const auto live_calls = fader_skin_calls(live_js);
-    REQUIRE(!live_calls.empty());
-    CHECK(live_calls[0].find("'#111111', '#222222'") != std::string::npos);
-    CHECK(generate_pulp_cpp(live, {}).source.find("set_designed_overlay(true)") ==
+    CHECK(generate_pulp_cpp(authored_fader_ir(false, false), {}).source.find("set_designed_overlay(true)") ==
           std::string::npos);
 }
 
@@ -970,9 +979,13 @@ TEST_CASE("a captured fader cap is sized in layout units in every lane",
           "[view][import][emitter-conformance][fader]") {
     // 40x24 device pixels over a 48x176 control drawn in a 24x88 box.
     auto ir = authored_fader_ir(true, true);
-    const auto calls = fader_skin_calls(generate_pulp_js(ir, CodeGenOptions{}));
-    REQUIRE(calls.size() == 1);
-    CHECK(calls[0].find(", 20, 12, 0, true);") != std::string::npos);
+    CodeGenOptions web;
+    web.mode = CodeGenMode::web_compat;
+    for (const auto& opts : {CodeGenOptions{}, web}) {
+        const auto calls = fader_skin_calls(generate_pulp_js(ir, opts));
+        REQUIRE(calls.size() == 1);
+        CHECK(calls[0].find(", 20, 12, 0, true);") != std::string::npos);
+    }
     CHECK(generate_pulp_cpp(ir, {}).source.find("set_thumb_size(20.0f, 12.0f)") != std::string::npos);
     auto root = build_native_view_tree(ir, ir.asset_manifest, {});
     REQUIRE(root != nullptr);
@@ -989,9 +1002,11 @@ TEST_CASE("a captured fader cap is sized in layout units in every lane",
     // Without the control's natural size the capture DPR scales instead.
     ir.root.children[0].attributes.erase("fader_control_natural_w");
     ir.root.children[0].attributes.erase("fader_control_natural_h");
-    const auto dpr_calls = fader_skin_calls(generate_pulp_js(ir, CodeGenOptions{}));
-    REQUIRE(dpr_calls.size() == 1);
-    CHECK(dpr_calls[0].find(", 20, 12, 0, true);") != std::string::npos);
+    for (const auto& opts : {CodeGenOptions{}, web}) {
+        const auto dpr_calls = fader_skin_calls(generate_pulp_js(ir, opts));
+        REQUIRE(dpr_calls.size() == 1);
+        CHECK(dpr_calls[0].find(", 20, 12, 0, true);") != std::string::npos);
+    }
 }
 
 /// The bounding box of the pixels within `tolerance` (sum of channel deltas)
@@ -1019,8 +1034,12 @@ TEST_CASE("a generated script paints the same authored fader cap as the native l
           "[view][import][emitter-conformance][fader][render]") {
     if (!raw_rgba_render_available())
         return;
+    for (const auto mode : {CodeGenMode::bridge_native_js, CodeGenMode::web_compat})
     for (const bool captured_cap : {false, true}) {
+        INFO((mode == CodeGenMode::web_compat ? "web-compat" : "bridge-native"));
         INFO((captured_cap ? "captured cap geometry" : "no captured cap geometry"));
+        CodeGenOptions codegen;
+        codegen.mode = mode;
         const auto ir = authored_fader_ir(true, captured_cap);
         auto native = build_native_view_tree(ir, ir.asset_manifest, {});
         REQUIRE(native != nullptr);
@@ -1032,7 +1051,7 @@ TEST_CASE("a generated script paints the same authored fader cap as the native l
         root.set_bounds({0.0f, 0.0f, 48.0f, 120.0f});
         vellum::state::StateStore store;
         ScriptedUiOptions options;
-        options.script_source = generate_pulp_js(ir, CodeGenOptions{});
+        options.script_source = generate_pulp_js(ir, codegen);
         options.script_name = "fader.ui.js";
         options.enable_hot_reload = false;
         options.enable_theme_reload = false;
