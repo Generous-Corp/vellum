@@ -52,14 +52,18 @@ if(VELLUM_BUILD_TESTS)
     target_link_libraries(vellum-emitter-conformance-gen PRIVATE Vellum::MirrorDesign_import)
     set(_vellum_conformance_dir "${CMAKE_CURRENT_BINARY_DIR}/emitter_conformance")
     set(_vellum_conformance_sources)
+    set(_vellum_conformance_stems)
     foreach(_spec
             "form_controls_08|ir|fixtures/emitter-conformance/form-controls-08.ir.json"
+            "spectr|ir|fixtures/emitter-conformance/spectr.ir.json"
+            "kelvin|ir|fixtures/emitter-conformance/kelvin.ir.json"
             "keyed_list_18|ir|fixtures/emitter-conformance/keyed-list-18.ir.json"
             "fidelity_scene|figma-plugin|fixtures/emitter-conformance/fidelity-scene-no-display.pulp.json")
         string(REPLACE "|" ";" _parts "${_spec}")
         list(GET _parts 0 _stem)
         list(GET _parts 1 _kind)
         list(GET _parts 2 _input)
+        list(APPEND _vellum_conformance_stems ${_stem})
         set(_outputs
             "${_vellum_conformance_dir}/${_stem}.hpp"
             "${_vellum_conformance_dir}/${_stem}.cpp"
@@ -88,18 +92,14 @@ if(VELLUM_BUILD_TESTS)
         tests/design_emitter_conformance_test.cpp)
     target_link_libraries(vellum-design-emitter-conformance
         PRIVATE vellum-emitter-conformance-baked Vellum::MirrorDesign_import)
+    # The generated fixture set, so the test can prove it compares every
+    # fixture the build generates and links.
+    string(REPLACE ";" "," _vellum_conformance_stem_csv "${_vellum_conformance_stems}")
     target_compile_definitions(vellum-design-emitter-conformance PRIVATE
-        VELLUM_REPO_ROOT="${PROJECT_SOURCE_DIR}")
+        VELLUM_REPO_ROOT="${PROJECT_SOURCE_DIR}"
+        VELLUM_CONFORMANCE_STEMS="${_vellum_conformance_stem_csv}")
     set_target_properties(vellum-design-emitter-conformance PROPERTIES
         BUILD_RPATH "$<TARGET_FILE_DIR:vellum-skia-dawn-provider>")
-    # Vellum is audio-free. Audio-display fixtures (spectr and kelvin) stay
-    # in the source corpus for future Pulp-backed coverage, but are excluded
-    # from this Vellum conformance executable so the gate never force-loads
-    # Pulp's view-audio archive or inherits its unrelated audio dependencies.
-    # The fidelity scene is loaded as fidelity-scene-no-display.pulp.json: the
-    # shared scene minus its meter node, whose display widget needs that
-    # archive. Its knob and fader keep their parameter bindings. The test
-    # refuses any fixture node that carries an audio display widget.
     add_test(NAME vellum.design-emitter-conformance
         COMMAND vellum-design-emitter-conformance)
 endif()
