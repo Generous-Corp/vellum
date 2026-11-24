@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import hashlib
+import contextlib
+import io
 import json
 import os
 import re
@@ -14,6 +16,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import release_request as rr  # noqa: E402
@@ -626,6 +629,66 @@ class Attestation(unittest.TestCase):
         head = rr.git(root, "rev-parse", "HEAD")
         with self.assertRaisesRegex(rr.ReleaseRequestError, "no mirror export receipt"):
             rr.attestation(root, head, "2026-10-31T12:00:00Z", "v0.1.10")
+
+    def test_the_attestation_signs_the_selection_snapshot_with_its_bump_evidence(self) -> None:
+        root, head = self.fixture()
+        snapshot = {"schema_version": 3, "kind": "github-open-pull-request-snapshot", "repositories": [],
+                    "captured_at": "2026-10-31T12:00:00Z"}
+        evidence = {"schema": "vellum.release-bump-evidence.v1", "repository": "Generous-Corp/vellum", "pulls": []}
+        data = rr.attestation(root, head, "2026-10-31T12:00:00Z", "v0.1.10", snapshot, evidence)
+        self.assertEqual(data["open_pr_snapshot"], snapshot)
+        self.assertEqual(data["open_pr_snapshot_commit"], head)
+        self.assertEqual(data["open_pr_release_bump_evidence"], evidence)
+        self.assertEqual(data["open_pr_release_bump_evidence_sha256"], hashlib.sha256(
+            (json.dumps(evidence, sort_keys=True) + "\n").encode()).hexdigest())
+        for half in ((snapshot, None), (None, evidence)):
+            with self.subTest(half=half), self.assertRaisesRegex(rr.ReleaseRequestError, "signed together"):
+                rr.attestation(root, head, "2026-10-31T12:00:00Z", "v0.1.10", *half)
+
+    def test_attestation_cli_requires_objects_in_both_supplied_evidence_files(self) -> None:
+        root, head = self.fixture()
+        snapshot = root / "snapshot.json"
+        evidence = root / "evidence.json"
+        args = ["attestation", "--commit", head, "--tag", "v0.1.10",
+                "--attested-at", "2026-10-31T12:00:00Z", "--open-pr-snapshot-json", str(snapshot),
+                "--release-bump-evidence-json", str(evidence)]
+        good_snapshot = {"schema_version": 3, "kind": "github-open-pull-request-snapshot", "repositories": [],
+                         "captured_at": "2026-10-31T12:00:00Z"}
+        good_evidence = {"schema": "vellum.release-bump-evidence.v1", "repository": "Generous-Corp/vellum", "pulls": []}
+        for left, right in ((good_snapshot, good_evidence), (None, None),
+                            *[(bad, good_evidence) for bad in (None, [], True, "x", 3)],
+                            *[(good_snapshot, bad) for bad in (None, [], True, "x", 3)]):
+            snapshot.write_text(json.dumps(left))
+            evidence.write_text(json.dumps(right))
+            out, err = io.StringIO(), io.StringIO()
+            with self.subTest(snapshot=left, evidence=right), mock.patch.object(rr, "ROOT", root), \
+                    contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                result = rr.main(args)
+                if isinstance(left, dict) and isinstance(right, dict):
+                    self.assertEqual(result, 0, err.getvalue())
+                    signed = json.loads(out.getvalue())
+                    self.assertEqual(signed["open_pr_snapshot"], left)
+                    self.assertEqual(signed["open_pr_release_bump_evidence"], right)
+                else:
+                    self.assertEqual(result, 1)
+                    self.assertEqual(out.getvalue(), "")
+
+    def test_attestation_refuses_stale_or_unprovable_selection_time(self) -> None:
+        root, head = self.fixture()
+        evidence = {"schema": "vellum.release-bump-evidence.v1", "repository": "Generous-Corp/vellum", "pulls": []}
+        for captured, accepted in (("2026-10-31T12:00:00Z", True), ("2026-10-30T12:00:00Z", True),
+                                   ("2026-10-30T11:59:59Z", False), ("2026-10-31T12:00:01Z", False),
+                                   ("2026-10-31T12:00:00", False), ("invalid", False), (None, False)):
+            snapshot = {"schema_version": 3, "kind": "github-open-pull-request-snapshot", "repositories": []}
+            if captured is not None:
+                snapshot["captured_at"] = captured
+            with self.subTest(captured=captured):
+                if accepted:
+                    signed = rr.attestation(root, head, "2026-10-31T12:00:00Z", "v0.1.10", snapshot, evidence)
+                    self.assertEqual(signed["open_pr_snapshot"]["captured_at"], captured)
+                else:
+                    with self.assertRaisesRegex(rr.ReleaseRequestError, "snapshot.*(time|24 hours)"):
+                        rr.attestation(root, head, "2026-10-31T12:00:00Z", "v0.1.10", snapshot, evidence)
 
     def test_with_parity_the_attestation_binds_the_completion(self) -> None:
         root, head = self.fixture(parity=True)
@@ -1334,6 +1397,11 @@ class ReleaseTagWorkflow(unittest.TestCase):
         checks = self.select_job[order[3]:order[4]]
         self.assertIn("if: steps.select.outputs.tag != ''", checks)
         self.assertIn('python3 -I scripts/pretag_checks.py --tag "$TAG" --commit "$GITHUB_SHA"', checks)
+        self.assertIn('--snapshot-output "$RUNNER_TEMP/open-pr-snapshot.json"', checks)
+        self.assertIn('--release-bump-output "$RUNNER_TEMP/release-bump-evidence.json"', checks)
+        self.assertIn("--pretag-replay", checks)
+        self.assertIn("path: ${{ runner.temp }}/release-snapshot", checks)
+        self.assertIn("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", checks)
         self.assertNotIn("continue-on-error", self.select_job)
         self.assertIn("path: .exact-boundary-pulp", self.select_job)
         self.assertIn("ref: ${{ steps.select.outputs.pulp-cursor }}", self.select_job)
@@ -1342,9 +1410,42 @@ class ReleaseTagWorkflow(unittest.TestCase):
 
     def test_the_tag_and_attestation_bind_the_pushed_commit(self) -> None:
         self.assertIn('attestation --commit "$GITHUB_SHA"', self.sign_job)
+        self.assertIn('--open-pr-snapshot-json "$RUNNER_TEMP/release-snapshot/open-pr-snapshot.json"', self.sign_job)
+        self.assertIn('--release-bump-evidence-json "$RUNNER_TEMP/release-snapshot/release-bump-evidence.json"', self.sign_job)
+        self.assertIn("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", self.sign_job)
         self.assertIn('tag -s -F "$RUNNER_TEMP/promotion-attestation.json" "$TAG" "$GITHUB_SHA"', self.sign_job)
         self.assertIn('--source-commit "$GITHUB_SHA"', self.sign_job)
         self.assertIn("ref: ${{ github.sha }}", self.sign_job)
+
+    def test_signing_refuses_a_snapshot_that_differs_from_selection(self) -> None:
+        import pretag_checks as pc
+        step = pc.read_step(self.text, "sign-release-tag", "Sign the tag")
+        self.assertEqual(step.env["SNAPSHOT_SHA256"],
+                         "${{ needs.select-release-commit.outputs.snapshot-sha256 }}")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "release-snapshot").mkdir()
+            snapshot = root / "release-snapshot/open-pr-snapshot.json"
+            snapshot.write_text('{"repositories": []}\n')
+            digest = hashlib.sha256(snapshot.read_bytes()).hexdigest()
+            bindir = root / "bin"
+            bindir.mkdir()
+            git = bindir / "git"
+            git.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$RUNNER_TEMP/git-calls"\necho object\n')
+            git.chmod(0o755)
+            calls = root / "git-calls"
+            env = {**os.environ, "PATH": str(bindir) + os.pathsep + os.environ["PATH"],
+                   "RUNNER_TEMP": str(root), "RELEASE_TAG_SIGNING_KEY": "test-key",
+                   "TAG": "v0.1.10", "PRINCIPAL": "test@invalid", "GITHUB_SHA": COMMIT,
+                   "GITHUB_OUTPUT": str(root / "output"), "SNAPSHOT_SHA256": digest}
+            good = subprocess.run(["bash", "-c", step.run], env=env, capture_output=True, text=True)
+            self.assertEqual(good.returncode, 0, good.stderr)
+            self.assertIn("tag -s", calls.read_text())
+            calls.unlink()
+            snapshot.write_text('{"repositories": ["changed"]}\n')
+            bad = subprocess.run(["bash", "-c", step.run], env=env, capture_output=True, text=True)
+            self.assertNotEqual(bad.returncode, 0)
+            self.assertFalse(calls.exists(), "a changed snapshot must fail before git signs anything")
 
 
 class Freeze(unittest.TestCase):
