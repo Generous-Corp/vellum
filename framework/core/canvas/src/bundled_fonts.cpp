@@ -298,6 +298,12 @@ std::unordered_map<std::string, RegisteredEntry>& registered_fonts() {
     return map;
 }
 
+std::string canonical_family(std::string family) {
+    for (auto& c : family)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return family;
+}
+
 // Monotonic counter exposed via `font_registration_generation()`. Every
 // successful mutation of process-global font state bumps it so downstream
 // typeface caches (skia_canvas.cpp, text_shaper.cpp) can invalidate
@@ -669,8 +675,12 @@ FontProbe probe_font_glyph(const std::string& family,
 bool is_font_registered(const std::string& family) {
     if (family.empty()) return false;
     std::lock_guard<std::mutex> guard(registered_mutex());
-    auto& map = registered_fonts();
-    return map.find(family) != map.end();
+    const auto wanted = canonical_family(family);
+    for (const auto& [registered, entry] : registered_fonts()) {
+        if (!entry.faces.empty() && canonical_family(registered) == wanted)
+            return true;
+    }
+    return false;
 }
 
 // WOFF2 runtime decoding.

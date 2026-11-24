@@ -248,6 +248,14 @@ FRAMEWORK_TEST(a_panel_cannot_rebind_a_family_another_owner_registered) {
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     CHECK(!register_embedded(b, lower_case_variant, "assets/face.ttf"));
 
+    const auto host_case_variant = probe_family("host-case-variant");
+    CHECK(vellum::canvas::register_font(bytes.data(), bytes.size(), host_case_variant));
+    auto host_lower_case_variant = host_case_variant;
+    std::transform(host_lower_case_variant.begin(), host_lower_case_variant.end(),
+                   host_lower_case_variant.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    CHECK(!register_embedded(a, host_lower_case_variant, "assets/face.ttf"));
+
     // The owning panel adds faces, and another instance of it shares them.
     CHECK(register_embedded(a, family, "assets/face.ttf"));
     CHECK(register_embedded(a2, family, "assets/face.ttf"));
