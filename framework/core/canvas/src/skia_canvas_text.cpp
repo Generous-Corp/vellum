@@ -1090,23 +1090,16 @@ float SkiaCanvas::measure_text(const std::string& text) {
     if (!font.getTypeface()) return font_size_ * text.size() * 0.5f;
 
 #ifdef PULP_HAS_TEXT_SHAPING
-    // SkParagraph is the only working shape path in our Skia prebuilt
-    // (legacy SkShaper APIs return zero-width). Hot-path labels (plain
-    // ASCII, no features, no tracking) skip it to avoid the per-call
-    // `ParagraphBuilder + Build + layout` cost — they're consistent
-    // with the per-glyph fallback below that fill_text also takes on
-    // the same input. Anything emoji-bearing or feature-tagged still
-    // goes through SkParagraph so the measured width matches what
-    // fill_text actually draws.
-    const bool needs_paragraph = needs_paragraph_for_text_metrics(
-        text, font_features_, letter_spacing_, font.getTypeface(), font_size_);
-    if (needs_paragraph) {
-        auto prepared = make_paragraph(
-            text, font_family_, font_size_, font_weight_, font_slant_, letter_spacing_,
-            /*ltr=*/direction_ != TextDirection::rtl, font_features_, glyph_hinting());
-        if (prepared) {
-            return prepared->advance;
-        }
+    // Use the same paragraph shaping path as fill_text. The per-glyph fast
+    // path can resolve a different face for generic families such as
+    // `system`, so its advance can disagree with the glyphs that are painted.
+    // That disagreement is visible in centered controls because the label's
+    // origin is computed from this value.
+    auto prepared = make_paragraph(
+        text, font_family_, font_size_, font_weight_, font_slant_, letter_spacing_,
+        /*ltr=*/direction_ != TextDirection::rtl, font_features_, glyph_hinting());
+    if (prepared) {
+        return prepared->advance;
     }
 #endif
 
