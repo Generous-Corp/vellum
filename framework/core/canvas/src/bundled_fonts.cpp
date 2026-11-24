@@ -31,6 +31,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -298,6 +299,11 @@ std::unordered_map<std::string, RegisteredEntry>& registered_fonts() {
     return map;
 }
 
+std::unordered_set<std::string>& registered_family_keys() {
+    static std::unordered_set<std::string> keys;
+    return keys;
+}
+
 std::string canonical_family(std::string family) {
     for (auto& c : family)
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -447,8 +453,10 @@ bool register_font(const std::uint8_t* data, std::size_t size,
         if (const auto it = map.find(family_override); it != map.end()) {
             for (const auto& source : it->second.sources) {
                 if (source && source->size() == size
-                    && std::memcmp(source->data(), data, size) == 0)
+                    && std::memcmp(source->data(), data, size) == 0) {
+                    registered_family_keys().insert(canonical_family(family_override));
                     return true;
+                }
             }
         }
     }
@@ -491,6 +499,7 @@ bool register_font(const std::uint8_t* data, std::size_t size,
         }
         entry.faces.push_back(std::move(face));
         entry.sources.push_back(std::move(sk_data));
+        registered_family_keys().insert(canonical_family(family));
     }
 #if defined(__APPLE__)
     // The CoreGraphics canvas paints and measures through CoreText, which
@@ -675,12 +684,7 @@ FontProbe probe_font_glyph(const std::string& family,
 bool is_font_registered(const std::string& family) {
     if (family.empty()) return false;
     std::lock_guard<std::mutex> guard(registered_mutex());
-    const auto wanted = canonical_family(family);
-    for (const auto& [registered, entry] : registered_fonts()) {
-        if (!entry.faces.empty() && canonical_family(registered) == wanted)
-            return true;
-    }
-    return false;
+    return registered_family_keys().count(canonical_family(family)) != 0;
 }
 
 // WOFF2 runtime decoding.
