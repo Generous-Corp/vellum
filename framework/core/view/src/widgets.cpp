@@ -976,27 +976,37 @@ void Fader::paint_stock_thumb(canvas::Canvas& canvas, float pos, canvas::Color t
     const bool skin_rect_thumb = skinned; // captured faders use a slab thumb
     canvas.set_fill_color({thumb_color.r, thumb_color.g, thumb_color.b, thumb_color.a});
     if (!has_captured_indicator_art() &&
-        (thumb_shape_ == ThumbShape::rectangle || skin_rect_thumb)) {
+        (thumb_shape_ == ThumbShape::rectangle || skin_rect_thumb || authored_body_only_)) {
         const float scale = hover_thumb_scale_.value();
         // Skinned faders default to a wide rounded slab (matching the
         // captured Figma thumb) when explicit dimensions weren't given.
         // When the importer derived a thin track width, it also sized the
         // widget box to the captured thumb width — so the thumb fills the
         // box (no 0.62 shrink), and the track is the thin line.
-        const float skin_thumb_frac = has_skin_track_width_ ? 1.0f : 0.62f;
-        const float skin_default_w = vert ? std::min(b.width, track_width) * skin_thumb_frac
-                                          : std::max(10.0f, track_length * 0.10f);
+        // An authored cap over a static captured track: without captured cap
+        // geometry, a flat slab across about 0.85 of the slot and 0.6 as tall
+        // as it is wide, the proportions of a typical browser-authored cap.
+        const float skin_thumb_frac =
+            authored_body_only_ ? 0.85f : has_skin_track_width_ ? 1.0f : 0.62f;
+        const float skin_default_w =
+            vert ? std::min(b.width, track_width) * skin_thumb_frac
+            : authored_body_only_ ? std::min(b.height, track_width) * 0.85f * 0.6f
+                                  : std::max(10.0f, track_length * 0.10f);
         // A captured fader thumb is a flat slab — wider than tall (~2:1).
         // Default the cross-axis extent to ~half the long-axis so the thumb
         // reads as a slab, not the near-square/circle that
         // track_length*0.10 produced on tall faders. (Vertical fader: thumb
         // is wide & short, so its height ≈ half its width.)
         const float skin_default_h =
-            vert ? std::max(8.0f, skin_default_w * 0.5f) : std::min(b.height, track_width) * 0.62f;
+            authored_body_only_
+                ? (vert ? skin_default_w * 0.6f : std::min(b.height, track_width) * 0.85f)
+            : vert ? std::max(8.0f, skin_default_w * 0.5f)
+                   : std::min(b.height, track_width) * 0.62f;
+        const bool slab_default = skinned || authored_body_only_;
         const float default_w =
-            skinned ? skin_default_w : (vert ? std::min(b.width, track_width) : 10.0f);
+            slab_default ? skin_default_w : (vert ? std::min(b.width, track_width) : 10.0f);
         const float default_h =
-            skinned ? skin_default_h : (vert ? 9.0f : std::min(b.height, track_width));
+            slab_default ? skin_default_h : (vert ? 9.0f : std::min(b.height, track_width));
         const float thumb_w =
             std::max(1.0f, (thumb_width_ > 0.0f ? thumb_width_ : default_w) * scale);
         const float thumb_h =
@@ -1006,7 +1016,9 @@ void Fader::paint_stock_thumb(canvas::Canvas& canvas, float pos, canvas::Color t
         const float axis_center = axis_half + (vert ? (1.0f - pos) : pos) * usable;
         // Skinned slab defaults to a generously rounded corner when none
         // was provided (the captured thumb is a pill).
-        const float skin_radius = std::min(thumb_w, thumb_h) * 0.5f;
+        // An authored cap keeps its captured corner (square when none was
+        // recorded); a pill is the stock captured-skin handle, not the author's.
+        const float skin_radius = authored_body_only_ ? 0.0f : std::min(thumb_w, thumb_h) * 0.5f;
         const float radius =
             thumb_corner_radius_ > 0.0f
                 ? std::min(thumb_corner_radius_, std::min(thumb_w, thumb_h) * 0.5f)
@@ -1173,7 +1185,7 @@ void Fader::paint(canvas::Canvas& canvas) {
         // goes on top.
         if (chart_only)
             paint_stock_thumb(canvas, pos, thumb_color);
-    } else if (render_style_ == WidgetRenderStyle::minimal) {
+    } else if (render_style_ == WidgetRenderStyle::minimal && !authored_body_only_) {
         // ── Minimal: thin track only, no fill, no thumb (matches design tools) ──
         auto track_color = resolve_color("control.track", canvas::Color::rgba8(69, 71, 90));
         canvas.set_fill_color(track_color);
@@ -1196,6 +1208,13 @@ void Fader::paint(canvas::Canvas& canvas) {
         // full-image sprite. Falls back to theme tokens when unset.
         const bool skinned = has_skin();
 
+        // A captured body with a declared static track already holds the
+        // authored track, and the declaration rules out a value fill, so the
+        // live control paints only its cap. Faders without that declaration
+        // keep the live track and fill below.
+        if (authored_body_only_) {
+            paint_stock_thumb(canvas, pos, thumb_color);
+        } else {
         // Track
         auto track_color = has_skin_track_
             ? track_color_
@@ -1256,6 +1275,7 @@ void Fader::paint(canvas::Canvas& canvas) {
         // value-driven, so the result is still a working fader rather than a
         // static screenshot.
         paint_stock_thumb(canvas, pos, thumb_color);
+        }
     }
 
     // Captured indicator art is a final compositing layer, independent of the

@@ -141,6 +141,116 @@ class InstalledFigImportTests(unittest.TestCase):
 
 
 class ImportBackendTests(unittest.TestCase):
+    def test_standalone_only_flags_rejected_for_backend_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "design.fig"
+            source.write_bytes(b"not a real fig")
+            for flags in (["--validate-only"], ["--manifest", "m.json"], ["--source-out", "out"],
+                          ["--emit", "ir-json"], ["--mode", "baked"]):
+                completed = invoke("import", str(source), *flags, cwd=root)
+                self.assertNotEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+                self.assertIn("apply only to --source-type jsx or preconverted-svg", completed.stdout + completed.stderr)
+                self.assertEqual(list(root.iterdir()), [source])
+
+    def test_standalone_jsx_modes_and_svg_control_map_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            jsx = root / "panel.jsx"
+            jsx.write_text("export default function Panel() { return <div>ok</div>; }\n", encoding="utf-8")
+            svg = root / "panel.svg"
+            svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="80"><rect id="mix" x="10" y="10" width="20" height="20"/></svg>', encoding="utf-8")
+            digest = hashlib.sha256(svg.read_bytes()).hexdigest()
+            manifest = root / "controls.json"
+            manifest.write_text(json.dumps({
+                "provenance": {"source": "synthetic"},
+                "svg_sha256": digest,
+                "canvas": {"width": 100, "height": 80},
+                "elements": [{"selector": "#mix", "kind": "knob", "geometry": {"cx": 20, "cy": 20, "hit_radius": 10}}],
+            }), encoding="utf-8")
+            live = root / "live.js"
+            for mode, emit, output in (("live", "js", live), ("baked", "ir-json", root / "baked.json")):
+                completed = invoke("import", "jsx", str(jsx), "--mode", mode, "--emit", emit, "--out", str(output), cwd=root)
+                self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+                self.assertTrue(output.is_file())
+            materialized = root / "runtime"
+            completed = invoke("import", "jsx", str(jsx), "--mode", "live", "--emit", "materialized-runtime", "--source-out", str(materialized), cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("not implemented", completed.stdout)
+            self.assertFalse(materialized.exists())
+            completed = invoke("import", "jsx", str(jsx), "--manifest", "missing.json", "--out", str(root / "m.js"), cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("--manifest do not apply", completed.stdout)
+            self.assertFalse((root / "m.js").exists())
+            completed = invoke("import", "preconverted-svg", str(svg), "--validate-only", "--manifest", str(manifest), "--out", str(root / "x.svg"), cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("--out do not apply", completed.stdout)
+            ignored = root / "ignored.js"
+            completed = invoke("import", "jsx", str(jsx), "--out", str(ignored), "--source-out", str(root / "src"), cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("--source-out", completed.stdout)
+            self.assertFalse(ignored.exists())
+            bad_utf8 = root / "bad.jsx"
+            bad_utf8.write_bytes(b"\xff\xfe export")
+            completed = invoke("import", "jsx", str(bad_utf8), "--mode", "baked", "--emit", "ir-json", "--out", str(root / "o.json"), cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertNotIn("Traceback", completed.stderr)
+            self.assertIn("valid UTF-8", completed.stdout)
+            completed = invoke("import", "jsx", str(bad_utf8), "--mode", "live", "--emit", "js", "--out", str(root / "o.js"), cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertFalse((root / "o.js").exists())
+            completed = invoke("import", "jsx", str(jsx), "--validate-only", "--emit", "js", "--out", str(root / "v.js"), cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertFalse((root / "v.js").exists())
+            directory_out = root / "adir"
+            directory_out.mkdir()
+            completed = invoke("import", "jsx", str(jsx), "--mode", "live", "--emit", "js", "--out", str(directory_out), cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertNotIn("Traceback", completed.stderr)
+            dangling = root / "dangling.js"
+            dangling.symlink_to(root / "nowhere")
+            completed = invoke("import", "jsx", str(jsx), "--mode", "live", "--emit", "js", "--out", str(dangling), cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("symlink", completed.stdout)
+            (root / "real").mkdir()
+            (root / "link").symlink_to(root / "real")
+            completed = invoke("import", "jsx", str(jsx), "--mode", "live", "--emit", "js", "--out", "link/result.js", cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertFalse((root / "real/result.js").exists())
+            nan_manifest = root / "nan.json"
+            nan = json.loads(manifest.read_text())
+            nan["elements"][0] = {"selector": "#mix", "kind": "rect", "geometry": {"x": True, "y": 0, "w": 1, "h": 1}}
+            nan_manifest.write_text(json.dumps(nan), encoding="utf-8")
+            completed = invoke("import", "preconverted-svg", str(svg), "--manifest", str(nan_manifest), "--validate-only", cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            nan["elements"][0]["geometry"] = {"x": float("nan"), "y": 0, "w": 1, "h": 1}
+            nan_manifest.write_text(json.dumps(nan), encoding="utf-8")
+            completed = invoke("import", "preconverted-svg", str(svg), "--manifest", str(nan_manifest), "--validate-only", cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            nan["elements"][0]["geometry"] = {"x": 10**1000, "y": 0, "w": 1, "h": 1}
+            nan_manifest.write_text(json.dumps(nan), encoding="utf-8")
+            completed = invoke("import", "preconverted-svg", str(svg), "--manifest", str(nan_manifest), "--validate-only", cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertNotIn("Traceback", completed.stderr)
+            nan["canvas"]["width"] = 10**1000
+            nan_manifest.write_text(json.dumps(nan), encoding="utf-8")
+            completed = invoke("import", "preconverted-svg", str(svg), "--manifest", str(nan_manifest), "--validate-only", cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertNotIn("Traceback", completed.stderr)
+            bad_side = root / "badside.json"
+            bad_side.write_bytes(b"\xff\xfe")
+            completed = invoke("import", "preconverted-svg", str(svg), "--manifest", str(bad_side), "--validate-only", cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertNotIn("Traceback", completed.stderr)
+            completed = invoke("import", "preconverted-svg", str(svg), "--manifest", str(manifest), "--validate-only", cwd=root)
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            bad = json.loads(manifest.read_text())
+            bad["elements"][0]["selector"] = "#missing"
+            manifest.write_text(json.dumps(bad), encoding="utf-8")
+            completed = invoke("import", "preconverted-svg", str(svg), "--manifest", str(manifest), "--validate-only", cwd=root)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("absent from SVG", completed.stdout)
+
     def test_archive_staging_parser_ignores_backend_handshake_and_capture_options(self) -> None:
         arguments = [
             "--project", "/tmp/project", "--json",

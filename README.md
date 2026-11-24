@@ -48,7 +48,8 @@ The Canvas2D proof shell reports `VELLUM_WEB_GRADIENT_NOT_EXPRESSIBLE` for
 each version 8 gradient and gradient stroke it cannot draw before drawing its
 base colour.
 
-Vector assets use schema version 9. A `vector` node holds a compiled vector
+Vector assets use scene schema version 9 and DesignIR schema version 6
+(`DESIGN_IR_VECTOR_ASSET_VERSION`). A `vector` node holds a compiled vector
 asset: a display list of groups (transform, clip, opacity) and paths whose
 fills and strokes carry colours or gradients, which the Skia renderer and the
 Canvas2D shell both draw. DesignIR carries it as a `vector` node with
@@ -56,6 +57,22 @@ Canvas2D shell both draw. DesignIR carries it as a `vector` node with
 primitive and the native materializer refuse an asset the native renderer
 would refuse; DesignIR checks versions and field gating, not the asset's
 contents.
+
+Vector assets can come from SVG. `importSvgAsset` in `@vellum/design-ir`
+turns a sanitized SVG into a canonical subtree of path and group nodes when
+it can, so colours bound through `colorTokens` keep following their tokens,
+every element keeps a stable identity, and a change redraws only its node.
+An asset over its node or path-data budget, or one using what only the
+compiled form carries (user-space or transformed gradients, focal radial
+gradients, diagonal linear gradients, coincident stops), becomes one
+`vector` node holding a compiled display list that the Skia renderer and
+the Canvas2D shell both draw. Nothing is rasterized: what only a rasterizer
+draws (text, images, patterns, filters, markers) is dropped as a loss. Every
+dropped or approximated feature is a loss in the DesignIR `lossReport`.
+Document types, entities, scripts, event handlers, external or data
+references, reference cycles, expansion past 50,000 nodes or 262,144 path
+commands and points, and numbers beyond one million are refused before any
+lowering.
 
 A DesignIR document is written at the oldest schema version that carries every
 field it uses: version 1 without any of the later fields, version 2 for the

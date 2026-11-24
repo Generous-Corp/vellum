@@ -235,6 +235,9 @@ RENAMED_MIRROR_EXEMPT_PATHS = {
     "tools/mirror/consumer/direct_main.cpp",
     "tools/mirror/consumer/main.cpp",
     "tools/mirror/consumer/plugin_view_host_main.mm",
+    "tools/mirror/consumer/native-gpu-editor/editor.cpp",
+    "tools/mirror/consumer/native-gpu-editor/gpu_runtime.cpp",
+    "tools/mirror/consumer/native-gpu-editor/negative_editor.cpp",
     "tools/mirror/consumer/runtime_image_census_main.cpp",
     "tools/mirror/consumer/threejs_v8_main.cpp",
     "tools/mirror/consumer/v8_main.cpp",
@@ -949,6 +952,17 @@ def mirror_edge_findings(root: Path, table: dict | None = None, prefix: str = MI
 
 PULP_DEPENDENCY_MANIFEST = "tools/deps/manifest.json"
 RENDERER_ASSET_KEY = "mac-universal"
+# The one renderer pin a Pulp export receipt may still carry after Vellum's lock
+# moved to the attested release of the same milestone: Pulp's own determinism
+# pin names the bare chrome/m158 asset and its builder. It is accepted only as
+# this exact triple, and only for these three fields; every other field, and
+# any other asset, builder or URL, is judged against the lock as before.
+PRIOR_RENDERER_PIN = {
+    "archive_sha256": "dca73c0eee5b0f6d129fe357d0754f7165c6b436051e0de947aeedd3e1bde250",
+    "archive_url": "https://github.com/danielraffel/skia-builder/releases/download/chrome/m158/"
+                   "skia-build-mac-universal-gpu-release.zip",
+    "skia_builder_ref": "312f05e24a5d5a45d4a3e70ca70ff3ccff1b4d97",
+}
 RENDERER_LOCK = "gpu-runtime/renderer-lock.json"
 # The one record that binds Vellum's renderer lock to Pulp's own statement of
 # the mirror renderer: {"pulp_commit": <40 hex>} under this key of the lock.
@@ -1061,6 +1075,11 @@ def renderer_pin_errors(
         actual = {key: pin.get(key) for key in ("skia_branch", "skia_commit", "built_dawn", "skia_builder_ref")}
         actual.update(archive_url=asset.get("url"), archive_sha256=asset.get("sha256"))
         mismatched = sorted(key for key in expected if key not in bound_keys and actual[key] != expected[key])
+        # A receipt whose archive, URL and builder are all the prior pin is the
+        # superseded renderer, not a different one. Partial matches are not.
+        if (all(actual[key] == value for key, value in PRIOR_RENDERER_PIN.items())
+                and set(mismatched) <= set(PRIOR_RENDERER_PIN)):
+            mismatched = []
         rows.append({"receipt": receipt_path, "pulp_sha": pulp_sha, "matches_lock": not mismatched})
         if mismatched:
             errors.append(

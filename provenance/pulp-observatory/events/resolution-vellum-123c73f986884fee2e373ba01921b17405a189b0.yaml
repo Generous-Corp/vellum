@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-123c73f986884fee2e373ba01921b17405a189b0",
+  "kind": "resolution",
+  "created_at": "2026-11-24T07:21:00Z",
+  "resolves": "vellum-123c73f986884fee2e373ba01921b17405a189b0",
+  "disposition": "framework-only",
+  "rationale": "Vellum graphics package: replaces the provider's include of vellum/runtime/crypto.hpp with a package-local SHA-256 (graphics/src/sha256.hpp, private). canvas-kernel is vellum-authoritative-transferred; Pulp has no graphics/ tree (0 files) and its ownership record (.github/vellum-ownership.json) assigns graphics/ sources to Generous-Corp/vellum. Pulp search at origin/main 25e27ae8ce96 (git grep -w -F over the whole tree, integrations/ included) for sha256_impl, Sha256Digest, sha256_digest and skia_resource_caches.hpp returns 0; control SkiaSurface on the same search returns 389 in 112 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-09, 'Classify the pending Vellum observatory events instead of raising the budget'); no schema or API delta recorded on the event. Any later resolution overrides this.",
+  "owner": "@danielraffel",
+  "linked_commits": [
+    "123c73f986884fee2e373ba01921b17405a189b0"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}

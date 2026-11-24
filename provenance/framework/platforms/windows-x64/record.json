@@ -1,0 +1,81 @@
+{
+  "schema": "vellum.framework-platform-closure.v1",
+  "platform": "windows-x64",
+  "pulp_repository": "Generous-Corp/pulp",
+  "pulp_sha": "bb5c9cd5a348f3a1560bb2be141befd83d42b857",
+  "tool": {
+    "path": "tools/scripts/vellum_closure.py",
+    "pulp_blob": "5104adcda872ec516aeb05174287773c56112fe5"
+  },
+  "configure": {
+    "identity": {
+      "build_type": "Release",
+      "gpu": true,
+      "processor": "AMD64",
+      "skia": true,
+      "system": "Windows",
+      "text_shaping": true
+    },
+    "options_sha256": "0f1b8904c20d783f4a5d03e7c1ed9cb8fffd97a815d472966975c5f69089f16c"
+  },
+  "runner_image": {
+    "name": "windows-2022",
+    "version": "20261116.370.1"
+  },
+  "renderer_asset": {
+    "name": "skia-build-win-x64-gpu-release.zip",
+    "sha256": "9480972c67f07d0762183e962ec3483210eb446ff10ca4e9ddf83ad188f0d11b"
+  },
+  "units": [
+    {
+      "name": "canvas",
+      "closure_manifest": "provenance/framework/platforms/windows-x64/canvas.json",
+      "closure_sha256": "818087cf38ad504b5687321e083ad6a889a179899d60ffa8a7c7cd741cd3893a"
+    },
+    {
+      "name": "dataplane",
+      "closure_manifest": "provenance/framework/platforms/windows-x64/dataplane.json",
+      "closure_sha256": "41025b4d3e1d0d7c66f6a8aee849a35ea9bbe3e46539bfb50aeccc2ce9ccba4d"
+    },
+    {
+      "name": "design-import",
+      "closure_manifest": "provenance/framework/platforms/windows-x64/design-import.json",
+      "closure_sha256": "29b38b1dcaa4e28fd8d4f55a98ab9531088e818b5b7850e36cc5abd33b32cf13"
+    },
+    {
+      "name": "foundation",
+      "closure_manifest": "provenance/framework/platforms/windows-x64/foundation.json",
+      "closure_sha256": "a6b016597e240cc13ed2aab7c4c52ab24025321ff9d2ebb61e6a04561c0b38bd"
+    },
+    {
+      "name": "gpu-device-api",
+      "closure_manifest": "provenance/framework/platforms/windows-x64/gpu-device-api.json",
+      "closure_sha256": "3a7fabe30970f7c95fdc8b9707d710c6133dadac7bb0a9c3a0fee2f4c5c271bf"
+    },
+    {
+      "name": "render-2d",
+      "closure_manifest": "provenance/framework/platforms/windows-x64/render-2d.json",
+      "closure_sha256": "37d28739d8e7f6a0c4d27bb25c688998e446f6edbea2907a4bb53df529c7e155"
+    },
+    {
+      "name": "state-core",
+      "closure_manifest": "provenance/framework/platforms/windows-x64/state-core.json",
+      "closure_sha256": "153b947e7427cc8f86977e7115b5e6762faf75bd5cf281b72b91529ee9328e97"
+    },
+    {
+      "name": "view-core",
+      "closure_manifest": "provenance/framework/platforms/windows-x64/view-core.json",
+      "closure_sha256": "56c2fb6fffd95441acf41a6dde62acef33a5dfc6904f5999064f507d4926ab6a"
+    },
+    {
+      "name": "view-script",
+      "closure_manifest": "provenance/framework/platforms/windows-x64/view-script.json",
+      "closure_sha256": "6f6cfc13f46f422b68c19226203e86068ce0a88cfe866e8de3a682357db5e84a"
+    }
+  ],
+  "export": {
+    "run_url": "https://github.com/Generous-Corp/pulp/actions/runs/45075548801",
+    "artifact_sha256": "d046106a58c3d5fd127fd6cd21ec6f194f1eb2c5f7e77a13e59410e81fadafb5",
+    "manifest_sha256": "f4fa219c1a84b4a463157f2847237d7e1eef468a422d14903dfb79a4f2986fd6"
+  }
+}

@@ -316,7 +316,7 @@ jobs:
               record = json.load(open("provenance/renderer-attestation.json"))
               artifact = record["artifact"]
               tag = artifact.get("release_tag")
-              if artifact.get("repository") != builder or not re.fullmatch(r"chrome/m[0-9]+", str(tag)):
+              if artifact.get("repository") != builder or not re.fullmatch(r"chrome/m[0-9]+(-attested\.[0-9]+)?", str(tag)):
                   sys.exit("the renderer record does not name a danielraffel/skia-builder chrome/mNNN release")
               for flag, name in (("archive", artifact.get("name")),
                                  ("legal-manifest", record["legal_inventory"]["manifest"]["name"]),

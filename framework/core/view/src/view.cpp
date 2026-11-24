@@ -299,6 +299,15 @@ std::atomic<bool>& tracing_badge_visible_flag() {
     return visible;
 }
 }  // namespace
+
+bool View::focus_within() const {
+    const RootInteractionState* state = const_cast<View*>(this)->existing_interaction();
+    const View* focused = state ? state->focused_input : nullptr;
+    for (const View* v = focused; v != nullptr; v = v->parent_)
+        if (v == this)
+            return true;
+    return false;
+}
 // warn_capability_fallback_once lives in <vellum/view/capability_fallback.hpp>
 // (the one shared warn-once vocabulary, also used by ImageView).
 

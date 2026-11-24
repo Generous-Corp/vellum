@@ -144,6 +144,7 @@ copy_payload() {
   mkdir -p "$library" "$bindir"
   cp "$payload/vellum_cli.py" "$library/vellum_cli.py"
   cp "$payload/vellum_illustrator.py" "$library/vellum_illustrator.py"
+  cp "$payload/vellum_import_assets.py" "$library/vellum_import_assets.py"
   cp "$payload/vellum_dev.py" "$library/vellum_dev.py"
   cp "$payload/vellum_backend.py" "$library/vellum_backend.py"
   cp "$payload/vellum_manifest.py" "$library/vellum_manifest.py"
@@ -280,6 +281,7 @@ if [ -n "$local_root" ]; then
   fi
   [ -f "$local_root/cli/vellum_cli.py" ] && [ -f "$local_root/cli/vellum_dev.py" ] && \
     [ -f "$local_root/cli/vellum_illustrator.py" ] && \
+    [ -f "$local_root/cli/vellum_import_assets.py" ] && \
     [ -f "$local_root/cli/vellum_backend.py" ] && \
     [ -f "$local_root/cli/vellum_manifest.py" ] && \
     [ -f "$local_root/cli/vellum_png.py" ] && \
@@ -310,6 +312,7 @@ if [ -n "$local_root" ]; then
   trap 'rm -rf "$temporary"; rmdir "$local_lock" 2>/dev/null || true' EXIT HUP INT TERM
   cp "$local_root/cli/vellum_cli.py" "$temporary/vellum_cli.py"
   cp "$local_root/cli/vellum_illustrator.py" "$temporary/vellum_illustrator.py"
+  cp "$local_root/cli/vellum_import_assets.py" "$temporary/vellum_import_assets.py"
   cp "$local_root/cli/vellum_dev.py" "$temporary/vellum_dev.py"
   cp "$local_root/cli/vellum_backend.py" "$temporary/vellum_backend.py"
   cp "$local_root/cli/vellum_manifest.py" "$temporary/vellum_manifest.py"

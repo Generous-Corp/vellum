@@ -586,6 +586,13 @@ if(VELLUM_BUILD_TESTS)
     add_test(NAME vellum.renderer-lock-drift-unit
         COMMAND "${Python3_EXECUTABLE}" -I scripts/test_check_renderer_lock.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.renderer-platform-evidence-unit
+        COMMAND "${Python3_EXECUTABLE}" -I scripts/test_renderer_platform_evidence.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.skia-dawn-platform-selection
+        COMMAND "${CMAKE_COMMAND}" "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}" -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_skia_dawn_platform_selection.cmake"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.threejs-payload
         COMMAND "${Python3_EXECUTABLE}" -I scripts/check_threejs_payload.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -696,6 +703,12 @@ if(VELLUM_BUILD_TESTS)
             set(_vellum_view_audio_archive_arg
                 "-DVELLUM_VIEW_AUDIO_ARCHIVE=${VELLUM_VIEW_AUDIO_ARCHIVE}")
         endif()
+        set(_vellum_gpu_runtime_prefix_arg)
+        if(DEFINED VELLUM_GPU_RUNTIME_PREFIX AND
+           NOT VELLUM_GPU_RUNTIME_PREFIX STREQUAL "")
+            set(_vellum_gpu_runtime_prefix_arg
+                "-DVELLUM_GPU_RUNTIME_PREFIX=${VELLUM_GPU_RUNTIME_PREFIX}")
+        endif()
         add_test(NAME vellum.mirror-install-consumer
             COMMAND "${CMAKE_COMMAND}"
                 "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
@@ -708,6 +721,7 @@ if(VELLUM_BUILD_TESTS)
                 "-DVELLUM_V8_VERSION=${VELLUM_V8_VERSION}"
                 "-DVELLUM_INSTALL_THREEJS=${VELLUM_INSTALL_THREEJS}"
                 "-DVELLUM_PULP_CENSUS_LIBRARIES=${VELLUM_PULP_CENSUS_LIBRARIES}"
+                ${_vellum_gpu_runtime_prefix_arg}
                 ${_vellum_view_audio_archive_arg}
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/mirror/RunMirrorConsumer.cmake")
         # An installed consumer reaches Vellum's value model through the view

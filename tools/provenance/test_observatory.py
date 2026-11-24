@@ -8,6 +8,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -3193,6 +3194,151 @@ class ReportReceiverOnlyTests(unittest.TestCase):
             self.verify(self.base)
             with self.assertRaisesRegex(observatory.ObservatoryError, "reports/current.json is stale"):
                 self.verify(self.base, policy="reconciled")
+
+
+def receiver_budget_flags() -> list[str]:
+    """The budget flags the receiver's reconcile verify passes, read from its workflow."""
+    text = (observatory.ROOT / ".github/workflows/pulp-observatory-receiver.yml").read_text(encoding="utf-8")
+    step = text.split("- name: Reconcile through the latest verified durable event head", 1)[1]
+    step = step.split("\n      - name: ", 1)[0]
+    verify = step.split("tools/provenance/observatory.py verify", 1)[1]
+    flags: list[str] = []
+    for name in ("--time-budgets", "--pending-event-scope"):
+        match = re.search(rf"{name} (\S+)", verify)
+        if match:
+            flags += [name, match.group(1)]
+    return flags
+
+
+def main_push_budget_flags() -> list[str]:
+    """The budget flags provenance.yml's observatory verify passes on a push to main.
+
+    The defaults are assigned once, and only the pull_request and merge_group
+    branch reassigns them; anything else reassigning them fails here.
+    """
+    text = (observatory.ROOT / ".github/workflows/provenance.yml").read_text(encoding="utf-8")
+    flags: list[str] = []
+    for variable, flag in (("observatory_time_budgets", "--time-budgets"),
+                           ("observatory_pending_event_scope", "--pending-event-scope")):
+        assignments = re.findall(rf"^( *){variable}=(\S+)$", text, flags=re.MULTILINE)
+        default = assignments[0]
+        overrides = assignments[1:]
+        if len(overrides) != 1:
+            raise AssertionError(f"{variable} is reassigned {len(overrides)} times")
+        guard = text.split(f"{variable}={overrides[0][1]}", 1)[0].rsplit("\n          if ", 1)[1]
+        if not guard.startswith('[[ "$GITHUB_EVENT_NAME" == pull_request || "$GITHUB_EVENT_NAME" == merge_group ]]'):
+            raise AssertionError(f"{variable} is reassigned outside the pull-request branch: {guard[:120]}")
+        flags += [flag, default[1]]
+    return flags
+
+
+class ReceiverBaseDebtTests(unittest.TestCase):
+    """The receiver's reconcile, judged as the workflow judges it: on-disk
+    events against git-base HEAD, with the budget flags its workflow passes."""
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        top = Path(temporary.name)
+        self.pulp, self.vellum, self.root = top / "pulp", top / "vellum", top / "state"
+        pulp_base, self.pulp_head = init_repo(self.pulp, "core/render/render.cpp")
+        self.vellum_base, _ = init_repo(self.vellum, "graphics/render.cpp")
+        make_state(self.root, pulp_base, self.vellum_base)
+        run(self.root, "git", "init", "-q", "-b", "main")
+        run(self.root, "git", "config", "user.email", "observatory@example.invalid")
+        run(self.root, "git", "config", "user.name", "Observatory Test")
+        commit_all(self.root, "state without events")
+        self.counter = 0
+        self.now = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(minutes=1)
+
+    def pulp_commits(self, count: int, *, mapped: bool = True) -> None:
+        for _ in range(count):
+            self.counter += 1
+            path = "core/render/render.cpp" if mapped else "README.md"
+            write(self.pulp / path, f"int value = {self.counter + 100};\n")
+            self.pulp_head = commit_all(self.pulp, f"pulp change {self.counter}")
+
+    def reconcile(self) -> None:
+        observatory.reconcile(
+            root=self.root, pulp_repo=self.pulp, vellum_repo=self.vellum,
+            pulp_target=self.pulp_head, vellum_target=self.vellum_base,
+            now_text=self.now.strftime("%Y-%m-%dT%H:%M:%SZ"), write=True,
+        )
+
+    def land_base(self, pending: int) -> None:
+        """Main with `pending` reconciled pending observations (init_repo's mapped change is one)."""
+        self.pulp_commits(pending - 1)
+        self.reconcile()
+        commit_all(self.root, "main's reconciled ledger")
+        self.assertEqual(self.pending(), pending)
+
+    def pending(self) -> int:
+        return sum(1 for event in observatory.effective_observations(observatory.load_events(self.root))
+                   if event["disposition"] == "pending")
+
+    def verify(self, flags: list[str], *, at: datetime | None = None) -> tuple[int, str]:
+        cli = ["--root", str(self.root), "verify", "--pulp-repo", str(self.pulp),
+               "--vellum-repo", str(self.vellum), "--git-base", run(self.root, "git", "rev-parse", "HEAD"),
+               "--pulp-target", self.pulp_head, "--vellum-target", self.vellum_base,
+               "--now", (at or self.now).strftime("%Y-%m-%dT%H:%M:%SZ"), *flags]
+        stderr = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(stderr):
+            code = observatory.main(cli)
+        return code, stderr.getvalue()
+
+    def test_the_budget_flags_are_the_workflows(self) -> None:
+        self.assertEqual(receiver_budget_flags(),
+                         ["--time-budgets", "report", "--pending-event-scope", "non-increasing"])
+        self.assertEqual(main_push_budget_flags(),
+                         ["--time-budgets", "enforce", "--pending-event-scope", "all"])
+
+    def test_new_pending_events_past_the_budget_fail_the_receiver(self) -> None:
+        self.land_base(20)
+        self.pulp_commits(21)
+        self.reconcile()
+        self.assertEqual(self.pending(), 41)
+        code, error = self.verify(receiver_budget_flags())
+        self.assertNotEqual(code, 0)
+        self.assertIn("pending-event-count-exceeded", error)
+        self.assertIn("41 pending events", error)
+
+    def test_one_new_pending_event_on_a_base_at_budget_fails_the_receiver(self) -> None:
+        self.land_base(20)
+        self.pulp_commits(1)
+        self.reconcile()
+        self.assertEqual(self.pending(), 21)
+        code, error = self.verify(receiver_budget_flags())
+        self.assertNotEqual(code, 0)
+        self.assertIn("pending-event-count-exceeded", error)
+        self.assertIn("the limit is 20", error)
+        # Judging only what the run introduces would let it through: every
+        # receiver run could add up to the budget again.
+        code, _ = self.verify(["--time-budgets", "report", "--pending-event-scope", "introduced"])
+        self.assertEqual(code, 0)
+
+    def test_base_debt_with_no_new_pending_events_passes_the_receiver_and_fails_main(self) -> None:
+        self.land_base(25)
+        self.pulp_commits(1, mapped=False)
+        self.reconcile()
+        self.assertEqual(self.pending(), 25)
+        self.assertNotEqual(run(self.root, "git", "status", "--porcelain"), "")
+        code, error = self.verify(receiver_budget_flags())
+        self.assertEqual(code, 0, error)
+        code, error = self.verify(main_push_budget_flags())
+        self.assertNotEqual(code, 0)
+        self.assertIn("pending-event-count-exceeded", error)
+
+    def test_overdue_base_debt_passes_the_receiver_and_fails_main(self) -> None:
+        self.land_base(3)
+        self.pulp_commits(1, mapped=False)
+        self.reconcile()
+        later = self.now + timedelta(days=30)
+        code, error = self.verify(receiver_budget_flags(), at=later)
+        self.assertEqual(code, 0, error)
+        code, error = self.verify(main_push_budget_flags(), at=later)
+        self.assertNotEqual(code, 0)
+        self.assertIn("overdue-event-count-exceeded", error)
+        self.assertIn("pending-event-age-exceeded", error)
 
 if __name__ == "__main__":
     unittest.main()

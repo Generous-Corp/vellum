@@ -1,0 +1,10 @@
+{
+  "image_os": "win22",
+  "platform": "windows-x64",
+  "pulp_sha": "bb5c9cd5a348f3a1560bb2be141befd83d42b857",
+  "renderer_asset_name": "skia-build-win-x64-gpu-release.zip",
+  "runner_image": {
+    "name": "windows-2022",
+    "version": "20261116.370.1"
+  }
+}

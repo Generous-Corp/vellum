@@ -1514,7 +1514,9 @@ bool parse_vector_paint(id raw, vellum::graphics::VectorPaint& output, const std
     return true;
 }
 
-// A compiled vector asset: one display list drawn by a single node.
+// A compiled vector asset: one display list drawn by a single node, as the
+// DesignIR SVG importer emits it for an asset over its budgets or one that
+// uses features only the compiled form carries.
 bool materialize_vector(
     NSDictionary* source, const std::string& identity, MaterializeContext& context,
     vellum::graphics::SceneNode& output, std::string* error) {

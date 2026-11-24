@@ -413,19 +413,22 @@ jobs:
           lock = json.load(open("gpu-runtime/renderer-lock.json", encoding="utf-8"))
           platform = lock["platforms"]["macos-arm64"]
           repository, milestone = lock["builder"]["repository"], lock["milestone"]
+          # The macOS row may name its own release of the milestone.
+          release = platform.get("release", milestone)
           asset, sha256 = platform["asset"], platform["sha256"]
           # Fail closed on anything but the pinned builder's chrome/mNNN asset,
           # so no lock field can reach curl as an option or another path.
           if (repository != "https://github.com/danielraffel/skia-builder"
                   or not re.fullmatch(r"chrome/m[0-9]+", milestone)
+                  or not re.fullmatch(re.escape(milestone) + r"(-attested\.[0-9]+)?", release)
                   or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", asset)
                   or not re.fullmatch(r"[0-9a-f]{64}", sha256)):
               sys.exit("renderer lock names an unexpected skia-builder asset")
-          print("/".join((repository, "releases/download", milestone, asset)), asset, sha256)
+          print("/".join((repository, "releases/download", release, asset)), asset, sha256)
           PY
           python3 -I "$reader" > "$RUNNER_TEMP/renderer-lock-asset.txt"
           read -r url asset sha256 < "$RUNNER_TEMP/renderer-lock-asset.txt"
-          [[ "$url" =~ ^https://github\.com/danielraffel/skia-builder/releases/download/chrome/m[0-9]+/[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]
+          [[ "$url" =~ ^https://github\.com/danielraffel/skia-builder/releases/download/chrome/m[0-9]+(-attested\.[0-9]+)?/[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]
           [[ "$sha256" =~ ^[0-9a-f]{64}$ && "$asset" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]
           archive="$RUNNER_TEMP/$asset"
           # Resumable, with curl's own exponential backoff (a fixed retry
@@ -603,6 +606,7 @@ jobs:
             -DVELLUM_ENABLE_MIRROR=ON \
             -DVELLUM_MIRROR_DEPS_DIR="$VELLUM_MIRROR_DEPS_DIR" \
             -DVELLUM_VIEW_AUDIO_ARCHIVE="$VELLUM_VIEW_AUDIO_ARCHIVE" \
+            -DVELLUM_GPU_RUNTIME_PREFIX="$RUNNER_TEMP/gpu-runtime-prefix" \
             -DVELLUM_ENABLE_V8=ON \
             -DVELLUM_V8_ARCHIVE="$VELLUM_V8_ARCHIVE" \
             -DVELLUM_ENABLE_RMLUI=ON \
@@ -706,6 +710,35 @@ jobs:
           python3 -I tools/provenance/verify_renderer_dependency.py \
             --archive "$VELLUM_SKIA_ARCHIVE" \
             --require-macho
+
+      - name: Prove and install the gpu-runtime package for mirror consumers
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The installed native-editor consumer uses the separately published
+          # runtime package, so prepare that exact prefix before ctest runs.
+          for build in first second; do
+            python3 scripts/build_gpu_runtime_artifact.py \
+              --renderer-archive "$VELLUM_SKIA_ARCHIVE" \
+              --source-commit "$GITHUB_SHA" \
+              --output-dir "$RUNNER_TEMP/gpu-runtime-$build" \
+              --json > "$RUNNER_TEMP/gpu-runtime-$build.json"
+          done
+          archive="vellum-gpu-runtime-$VELLUM_RELEASE_VERSION-darwin-arm64.tar.gz"
+          cmp "$RUNNER_TEMP/gpu-runtime-first/$archive" "$RUNNER_TEMP/gpu-runtime-second/$archive"
+          cp "$RUNNER_TEMP/gpu-runtime-first/$archive" "$RUNNER_TEMP/$archive"
+          runtime_prefix="$RUNNER_TEMP/gpu-runtime-prefix"
+          mkdir -p "$runtime_prefix"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$runtime_prefix"
+          test -f "$runtime_prefix/lib/cmake/VellumGpuRuntime/VellumGpuRuntimeConfig.cmake"
+          python3 scripts/verify_gpu_runtime_artifact.py \
+            --archive "$RUNNER_TEMP/$archive" \
+            --repo "$GITHUB_WORKSPACE" \
+            --renderer-archive "$VELLUM_SKIA_ARCHIVE" \
+            --consumer --require-adapter \
+            --output "$RUNNER_TEMP/gpu-runtime-verification.json"
+          (cd "$RUNNER_TEMP" && shasum -a 256 "$archive" > vellum-gpu-runtime.sha256)
 
       - name: Run native, capture, and sterile-consumer tests
         if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
@@ -862,33 +895,6 @@ jobs:
           python3 scripts/build_sterile_acceptance_bundle.py \
             --output "$RUNNER_TEMP/vellum-sterile-acceptance.tar.gz" \
             --json > "$RUNNER_TEMP/sterile-acceptance-bundle.json"
-
-      - name: Prove the gpu-runtime archive is reproducible and consumable
-        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
-        shell: bash
-        run: |
-          set -euo pipefail
-          # vellum-gpu-runtime-<version>-darwin-arm64.tar.gz is published beside
-          # the SDK. Two builds of this commit must match byte for byte, and an
-          # audio-only consumer must find it by exact version and link Device
-          # against the Dawn build it ships, with nothing else supplied.
-          for build in first second; do
-            python3 scripts/build_gpu_runtime_artifact.py \
-              --renderer-archive "$VELLUM_SKIA_ARCHIVE" \
-              --source-commit "$GITHUB_SHA" \
-              --output-dir "$RUNNER_TEMP/gpu-runtime-$build" \
-              --json > "$RUNNER_TEMP/gpu-runtime-$build.json"
-          done
-          archive="vellum-gpu-runtime-$VELLUM_RELEASE_VERSION-darwin-arm64.tar.gz"
-          cmp "$RUNNER_TEMP/gpu-runtime-first/$archive" "$RUNNER_TEMP/gpu-runtime-second/$archive"
-          cp "$RUNNER_TEMP/gpu-runtime-first/$archive" "$RUNNER_TEMP/$archive"
-          python3 scripts/verify_gpu_runtime_artifact.py \
-            --archive "$RUNNER_TEMP/$archive" \
-            --repo "$GITHUB_WORKSPACE" \
-            --renderer-archive "$VELLUM_SKIA_ARCHIVE" \
-            --consumer --require-adapter \
-            --output "$RUNNER_TEMP/gpu-runtime-verification.json"
-          (cd "$RUNNER_TEMP" && shasum -a 256 "$archive" > vellum-gpu-runtime.sha256)
 
       - name: Prove the RmlUi SDK archive is reproducible and consumable
         if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''

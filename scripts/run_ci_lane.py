@@ -16,6 +16,25 @@ import subprocess
 import sys
 from typing import Any
 
+
+def _escape_data(value: str) -> str:
+    return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def _escape_property(value: str) -> str:
+    return _escape_data(value).replace(":", "%3A").replace(",", "%2C")
+
+
+def error(title: str, message: str) -> None:
+    """Annotate a failed check with a GitHub Actions workflow command.
+
+    Silent outside Actions. The title is a command property, so it also
+    escapes ':' and ','; the message is command data.
+    """
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    print(f"::error title={_escape_property(title)}::{_escape_data(message)}", flush=True)
+
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "scripts/ci_lanes.json"
 SCHEMA = "vellum.ci-lanes.v1"
@@ -63,11 +82,28 @@ def run(lane: str, manifest: dict[str, Any]) -> int:
     commands = [command(entry) for entry in entries]
     for argv in commands:
         print(f"::group::{' '.join(argv[1:])}", flush=True)
-        result = subprocess.run(argv, cwd=ROOT, check=False)
+        result = subprocess.Popen(
+            argv,
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        first_output = ""
+        assert result.stdout is not None
+        for line in result.stdout:
+            print(line, end="", flush=True)
+            if not first_output and line.strip():
+                first_output = line.strip()
+        returncode = result.wait()
         print("::endgroup::", flush=True)
-        if result.returncode:
-            print(f"run-ci-lane: {lane}: {' '.join(argv[1:])} exited {result.returncode}", file=sys.stderr)
-            return result.returncode
+        if returncode:
+            item = first_output or f"{' '.join(argv[1:])} exited {returncode}"
+            error(lane, item)
+            print(f"run-ci-lane: {lane}: {' '.join(argv[1:])} exited {returncode}", file=sys.stderr)
+            return returncode
     return 0
 
 

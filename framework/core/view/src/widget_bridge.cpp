@@ -351,6 +351,27 @@ WidgetBridge::WidgetBridge(ScriptEngine& engine, View& root, state::StateStore* 
     // most as long as the bridge.
     repaint_callback_ = [&root] { root.request_repaint(); };
     register_api();
+    {
+        auto alive = callback_alive_;
+        auto* eng = &engine_;
+        auto notify = [alive, eng](View& view, bool gained, FocusCause cause) {
+            if (view.id().empty()) return;
+            BridgeCallbackScope scope(alive);
+            const bool visible = gained && cause != FocusCause::pointer;
+            const char* cause_name = cause == FocusCause::pointer ? "pointer"
+                                     : cause == FocusCause::keyboard ? "keyboard"
+                                                                      : "programmatic";
+            dispatch_event(alive, eng, view.id(), gained ? "focus" : "blur",
+                           std::string("{cause:'") + cause_name +
+                               "',focusVisible:" + (visible ? "true" : "false") + "}");
+        };
+        root_.on_descendant_focus_event = [notify](View& child, bool gained, FocusCause cause) {
+            notify(child, gained, cause);
+        };
+        root_.on_focus_event = [notify, root = &root_](bool gained, FocusCause cause) {
+            notify(*root, gained, cause);
+        };
+    }
     eval_or_throw(engine_, "kJSPreamble", dispatch_prelude_js() + kJSPreamblePart2);
     const auto eval_prelude = [this](const char* name, const auto& prelude) {
         eval_or_throw(engine_, name, preludes::source(prelude));
@@ -516,8 +537,7 @@ void WidgetBridge::release_document_navigation_focus() noexcept {
     // offered. Drop it with the claim.
     last_navigation_offer_ = {};
     if (focused_input_under_root(root_) == &root_) {
-        root_.release_input_focus();
-        root_.View::on_focus_changed(false);
+        transfer_input_focus(root_, nullptr, FocusCause::programmatic);
     }
 }
 
@@ -1157,6 +1177,7 @@ void WidgetBridge::register_api() {
     // evaluated after this run against the resulting surface. Append; never sort.
     static constexpr ApiGroup kGroups[] = {
         {std::nullopt, &BridgeRegistrars::register_widget_factory_controls_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_asset_styling_api},
         // Reads arbitrary file paths (image/sprite assets) → gated by Filesystem.
         {ReloadCapability::Filesystem, &BridgeRegistrars::register_widget_assets_api},
         {std::nullopt, &BridgeRegistrars::register_widget_factory_form_api},

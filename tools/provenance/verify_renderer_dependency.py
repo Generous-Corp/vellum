@@ -57,7 +57,11 @@ RECORD_SCHEMA = "vellum.renderer-provenance.v2"
 STATE_PENDING = "pending-build-provenance"
 STATE_ATTESTED = "builder-attested"
 RECORD_KEYS = {"schema", "state", "artifact", "source_identities", "build_identity",
-               "legal_inventory", "build_provenance"}
+               "legal_inventory", "build_provenance", "android_arm64_v8a"}
+# The Android arm64-v8a lane is declared but has no builder asset yet. The only
+# shape accepted is the explicit deferral: it can never name an artifact, so it
+# cannot make the renderer eligible for release.
+ANDROID_DEFERRED_STATE = "deferred-no-verified-asset"
 LEGAL_MANIFEST_SCHEMA = "skia-builder.legal-manifest.v1"
 CONTENT_ADDRESSED_MANIFEST = re.compile(r"\.legal-manifest\.sha256-([0-9a-f]{64})\.json$")
 CONTENT_ADDRESSED_RECEIPT = re.compile(r"\.apple-toolchain\.sha256-([0-9a-f]{64})\.json$")
@@ -624,6 +628,12 @@ def validate_renderer_attestation(renderer: dict[str, object], attestation: obje
             "renderer provenance schema is missing or unsupported")
     unknown = sorted(set(attestation) - RECORD_KEYS)
     require(not unknown, "renderer provenance record has unexpected fields: " + ", ".join(unknown))
+    android = attestation.get("android_arm64_v8a")
+    if android is not None:
+        require(isinstance(android, dict)
+                and android.get("state") == ANDROID_DEFERRED_STATE
+                and android.get("artifact") is None,
+                "renderer android_arm64_v8a record must stay deferred with a null artifact")
     artifact = attestation.get("artifact")
     locked_artifact = renderer.get("artifact")
     require(isinstance(artifact, dict) and isinstance(locked_artifact, dict),

@@ -16,6 +16,8 @@
 #import <Foundation/Foundation.h>
 #import <ImageIO/ImageIO.h>
 
+#import <TargetConditionals.h>
+
 #include <RmlUi/Core/Core.h>
 #include <RmlUi/Core/FileInterface.h>
 #include <RmlUi/Core/Math.h>
@@ -605,7 +607,32 @@ MetalRenderInterface::MetalRenderInterface(id<MTLDevice> device)
     if (!device)
         return;
     NSError* error = nil;
+#if TARGET_OS_IPHONE
+    // Prefer the precompiled metallib shipped in the app bundle (or next to
+    // the executable). The installed SDK does not ship it, so when it is
+    // absent or fails to load, compile the embedded source like macOS does.
+    NSURL* library_url = [[NSBundle mainBundle] URLForResource:@"vellum-rmlui-metal"
+                                                     withExtension:@"metallib"];
+    if (!library_url) {
+        NSString* executable_directory = [[[NSBundle mainBundle] executablePath]
+            stringByDeletingLastPathComponent];
+        NSString* sibling = [executable_directory
+            stringByAppendingPathComponent:@"vellum-rmlui-metal.metallib"];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:sibling])
+            library_url = [NSURL fileURLWithPath:sibling];
+    }
+    if (library_url)
+        s.library = [device newLibraryWithURL:library_url error:&error];
+    if (!s.library) {
+        if (library_url)
+            Rml::Log::Message(Rml::Log::LT_WARNING,
+                              "Metal shader library failed to load; compiling from source");
+        error = nil;
+        s.library = [device newLibraryWithSource:@(kShaderSource) options:nil error:&error];
+    }
+#else
     s.library = [device newLibraryWithSource:@(kShaderSource) options:nil error:&error];
+#endif
     if (!s.library) {
         Rml::Log::Message(Rml::Log::LT_ERROR, "Metal shader library failed: %s",
                           error ? error.localizedDescription.UTF8String : "unknown");
