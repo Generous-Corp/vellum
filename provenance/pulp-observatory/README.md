@@ -228,7 +228,10 @@ Classification deadlines and stop thresholds come from
 correctness, schema, importer, rendering, and platform events within three
 business days; other events within seven days. Overdue events, excess backlog,
 repeated generic fixes, cursor gaps, and excessive observatory effort fail
-health. The report's `release_blockers` list names only overdue security
+health. Repeated generic fixes are port-required or ported events on one
+contract key, counted only when classified within the last
+`repeated_generic_fix_window_days` (Decision 0015), so the budget catches a
+burst of fixes rather than migration-era debt. The report's `release_blockers` list names only overdue security
 events and events explicitly marked as a shared-contract release blocker; any
 health failure, an overdue event of any class included, still fails
 `provenance-verify` on the commit it judges.

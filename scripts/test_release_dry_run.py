@@ -637,8 +637,12 @@ class ObservatoryHealth(unittest.TestCase):
         tob.run(self.root, "git", "config", "user.name", "Observatory Test")
         self.discovered = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(minutes=1)
 
-    def ledger(self, mapped: int, *, committed_after: timedelta) -> str:
-        """A reconciled ledger with `mapped` pending observations, committed `committed_after` discovery."""
+    def ledger(self, mapped: int, *, committed_after: timedelta, resolve: str | None = None) -> str:
+        """A reconciled ledger with `mapped` observations, committed `committed_after` discovery.
+
+        Each observation stays pending, or with `resolve` is classified with that
+        disposition a minute after its discovery.
+        """
         for index in range(mapped - 1):
             self.tob.write(self.pulp / "core/render/render.cpp", f"int value = {index + 100};\n")
             self.pulp_head = self.tob.commit_all(self.pulp, f"pulp change {index}")
@@ -646,6 +650,20 @@ class ObservatoryHealth(unittest.TestCase):
             root=self.root, pulp_repo=self.pulp, vellum_repo=self.vellum,
             pulp_target=self.pulp_head, vellum_target=self.vellum_base,
             now_text=self.discovered.strftime("%Y-%m-%dT%H:%M:%SZ"), write=True)
+        if resolve is not None:
+            events = self.root / "provenance/pulp-observatory/events"
+            for path in sorted(events.glob("*.yaml")):
+                observation = json.loads(path.read_text())
+                self.tob.write_json(events / f"resolution-{observation['event_id']}.yaml", {
+                    "schema_version": 1, "event_id": f"resolution-{observation['event_id']}",
+                    "kind": "resolution",
+                    "created_at": (self.discovered + timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "resolves": observation["event_id"], "disposition": resolve,
+                    "rationale": "Classified.", "owner": "@danielraffel",
+                    "linked_commits": [observation["source_commit"]], "linked_pull_requests": [],
+                    "contract_tests": observation["contract_tests"],
+                    "shared_contract_release_blocker": False, "effort_minutes": 5,
+                })
         stamp = (self.discovered + committed_after).strftime("%Y-%m-%dT%H:%M:%SZ")
         subprocess.run(["git", "-C", str(self.root), "add", "."], check=True)
         subprocess.run(["git", "-C", str(self.root), "commit", "-q", "-m", "reconciled ledger"], check=True,
@@ -664,6 +682,16 @@ class ObservatoryHealth(unittest.TestCase):
         problems = dry.observatory_problems(self.root, self.ledger(1, committed_after=timedelta(days=30)))
         self.assertEqual(sorted(problem.split()[0] for problem in problems),
                          ["overdue-event-count-exceeded", "pending-event-age-exceeded"])
+
+    def test_a_burst_of_repeated_generic_fixes_is_refused(self) -> None:
+        problems = dry.observatory_problems(
+            self.root, self.ledger(3, committed_after=timedelta(hours=1), resolve="port-required"))
+        self.assertEqual([problem.split()[0] for problem in problems],
+                         ["repeated-generic-fix-threshold-exceeded"])
+
+    def test_repeated_generic_fixes_older_than_the_window_pass(self) -> None:
+        self.assertEqual(dry.observatory_problems(
+            self.root, self.ledger(3, committed_after=timedelta(days=15), resolve="port-required")), [])
 
     def test_a_tree_without_a_ledger_is_refused(self) -> None:
         bare = self.root.parent / "bare"
