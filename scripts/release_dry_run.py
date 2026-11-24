@@ -16,7 +16,10 @@ is the one the next release of that version would carry. The release identity
 
   plan      the commit to tag (the newest observatory-reconciled commit on
             main's first-parent history, which a tag's provenance run can pass)
-            and the dry-run tag's name.
+            and the dry-run tag's name. A commit whose observatory ledger fails
+            a health budget at its committer time, as the tag's provenance run
+            judges it, is refused: the release key never signs a dry run of a
+            commit no release could be cut from.
   identity  for a tag name: `mode=` release or dry-run, `version=`, `identity=`.
             Any other name is refused.
   gate      whether this run of release-tag.yml starts a dry run: always on
@@ -31,9 +34,14 @@ is the one the next release of that version would carry. The release identity
 from __future__ import annotations
 
 import argparse
+import io
+import json
 import re
 import subprocess
 import sys
+import tarfile
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -73,6 +81,13 @@ ACTIVE = ("queued", "in_progress", "waiting", "pending", "requested")
 RELEASE_PIPELINE = ("Locked macOS GPU proof", "Provenance and forbidden dependencies")
 FINALIZER = "Finalize immutable SDK release"
 ZERO = "0" * 40
+# The files the observatory health report is built from.
+OBSERVATORY_INPUTS = (
+    "product/budgets.yaml",
+    "provenance/authority/trust-policy.v1.json",
+    "provenance/pulp-observatory",
+)
+OBSERVATORY_REPORT = "provenance/pulp-observatory/reports/current.json"
 
 
 class DryRunError(RuntimeError):
@@ -106,6 +121,43 @@ def reconciled_target(root: Path, head: str) -> str:
             continue
         return commit
     raise DryRunError(f"no observatory-reconciled commit in the last {SEARCH_LIMIT} first-parent commits of {head}")
+
+
+def observatory_problems(root: Path, commit: str) -> list[str]:
+    """The observatory health budgets `commit` fails at its committer time.
+
+    The tag's provenance run judges a tag's ledger at the tagged commit's
+    committer time with every budget enforced ledger-wide. This rebuilds that
+    report with this checkout's observatory code from the commit's own events,
+    cursor and budgets. Coverage needs the Pulp history, so its gaps come from
+    the committed report the receiver wrote at the reconcile; the evidence-only
+    tail after a reconcile changes no mapped path on either side.
+    """
+    sys.path.append(str(ROOT / "tools/provenance"))
+    import observatory  # noqa: PLC0415
+
+    try:
+        committed = json.loads(rr.git(root, "show", f"{commit}:{OBSERVATORY_REPORT}"))
+        at = datetime.fromtimestamp(int(rr.git(root, "show", "-s", "--format=%ct", commit)), timezone.utc)
+        archive = subprocess.run(["git", "-C", str(root), "archive", "--format=tar", commit, "--",
+                                  *OBSERVATORY_INPUTS], check=True, capture_output=True).stdout
+        with tempfile.TemporaryDirectory(prefix="dry-run-observatory-") as temporary:
+            tree = Path(temporary)
+            with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
+                tar.extractall(tree, filter="data")
+            lock, _, cursor, budgets = observatory.validate_lock_map_cursor(tree)
+            gaps = committed.get("coverage_gaps") if isinstance(committed, dict) else None
+            if not isinstance(gaps, list):
+                return [f"{OBSERVATORY_REPORT} at {commit} has no coverage_gaps list"]
+            report = observatory.build_report(root=tree, lock=lock, cursor=cursor,
+                                              events=observatory.load_events(tree), budgets=budgets,
+                                              now=at, coverage_gaps=gaps)
+    except (subprocess.CalledProcessError, ValueError, OSError, tarfile.TarError,
+            observatory.ObservatoryError) as error:
+        detail = getattr(error, "stderr", None) or error
+        return [f"the observatory ledger at {commit} cannot be judged: {str(detail).strip()[:300]}"]
+    return [f"{violation} at {observatory.utc_text(at)} ({report['pending']} pending, "
+            f"{report['overdue']} overdue)" for violation in report["budget_violations"]]
 
 
 def busy(runs: object) -> list[str]:
@@ -191,6 +243,10 @@ def main(argv: list[str]) -> int:
         if not rr.SHA.fullmatch(args.head):
             raise DryRunError("the head must be a full SHA")
         target = reconciled_target(ROOT, args.head)
+        problems = observatory_problems(ROOT, target)
+        if problems:
+            raise DryRunError(f"the observatory ledger at {target} is unhealthy, so its tag's provenance run "
+                              "would fail: " + "; ".join(problems))
         version = val.project_version(rr.git(ROOT, "show", f"{target}:{rr.CMAKELISTS}"))
         name = tag_name(version, args.run_id, args.attempt)
         print(f"commit={target}\ntag={name}\nidentity=v{version}")
