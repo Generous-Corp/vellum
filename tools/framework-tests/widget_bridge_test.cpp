@@ -17,6 +17,7 @@
 #include <vellum/view/widgets.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -239,6 +240,14 @@ FRAMEWORK_TEST(a_panel_cannot_rebind_a_family_another_owner_registered) {
     CHECK(register_embedded(a, family, "assets/face.ttf"));
     // Another panel may not take the family over.
     CHECK(!register_embedded(b, family, "assets/face.ttf"));
+
+    const auto case_variant = probe_family("case-variant");
+    CHECK(register_embedded(a, case_variant, "assets/face.ttf"));
+    auto lower_case_variant = case_variant;
+    std::transform(lower_case_variant.begin(), lower_case_variant.end(), lower_case_variant.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    CHECK(!register_embedded(b, lower_case_variant, "assets/face.ttf"));
+
     // The owning panel adds faces, and another instance of it shares them.
     CHECK(register_embedded(a, family, "assets/face.ttf"));
     CHECK(register_embedded(a2, family, "assets/face.ttf"));

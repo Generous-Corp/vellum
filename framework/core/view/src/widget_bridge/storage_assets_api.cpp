@@ -63,6 +63,12 @@ SealedFamilyOwners& sealed_family_owners() {
     return owners;
 }
 
+std::string canonical_sealed_family(std::string family) {
+    for (auto& c : family)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return family;
+}
+
 // Registers a font sealed into the panel straight from its bytes. The bytes
 // are size- and signature-checked before the font parser sees them, and no
 // path is ever consulted, so a face that fails to parse cannot fall through
@@ -74,9 +80,10 @@ bool register_sealed_font(WidgetBridge& self, const WidgetBridge::EmbeddedAsset&
                           const std::optional<std::pair<int, int>>& declared) {
     auto& owners = sealed_family_owners();
     const auto owner = self.sealed_font_owner();
+    const auto family_key = canonical_sealed_family(family);
     {
         std::lock_guard lock(owners.mutex);
-        const auto it = owners.owner_by_family.find(family);
+        const auto it = owners.owner_by_family.find(family_key);
         const bool ours = it != owners.owner_by_family.end() && it->second == owner;
         if (!ours && vellum::canvas::is_font_registered(family)) {
             if (sealed_font_diagnostic_allowed())
@@ -87,7 +94,7 @@ bool register_sealed_font(WidgetBridge& self, const WidgetBridge::EmbeddedAsset&
         }
         if (!vellum::view::register_font_container(embedded.data, embedded.size, family))
             return false;
-        owners.owner_by_family.emplace(family, owner);
+        owners.owner_by_family.emplace(family_key, owner);
     }
     if (declared)
         vellum::canvas::declare_font_face_weight_range(family, declared->first, declared->second,
