@@ -268,6 +268,9 @@ class Runner:
     def main(self) -> int:
         if git("rev-parse", "HEAD", cwd=self.root) != self.commit:
             raise PretagError(f"the checkout is not at {self.commit}")
+        # Start the age clock before any live evidence is read. Exporting or
+        # downloading the result must never refresh its capture time.
+        captured_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         workflows = {name: (self.root / ".github/workflows" / name).read_text(encoding="utf-8")
                      for name in {check.workflow for check in CHECKS}}
         self.sign_local_tag()
@@ -297,7 +300,14 @@ class Runner:
             if not recorded.is_file():
                 raise PretagError(f"the pre-tag authority replay did not record {what}")
             output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_bytes(recorded.read_bytes())
+            if name == "open-pr-snapshot.json":
+                snapshot = json.loads(recorded.read_text(encoding="utf-8"))
+                if not isinstance(snapshot, dict):
+                    raise PretagError("the pre-tag open-PR snapshot must be an object")
+                snapshot["captured_at"] = captured_at
+                output.write_text(json.dumps(snapshot, sort_keys=True) + "\n", encoding="utf-8")
+            else:
+                output.write_bytes(recorded.read_bytes())
         print(f"every content check the {self.tag} pipeline runs on {self.commit} passes")
         return 0
 

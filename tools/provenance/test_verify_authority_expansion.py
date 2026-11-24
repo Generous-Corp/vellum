@@ -877,6 +877,8 @@ class Tests(unittest.TestCase):
             bump_evidence = {"schema": "vellum.release-bump-evidence.v1",
                              "repository": "Generous-Corp/vellum", "pulls": []}
 
+        snapshot = {"captured_at": "2026-10-31T12:00:00Z", **snapshot}
+
         def digest(value: dict) -> str:
             return hashlib.sha256((json.dumps(value, sort_keys=True) + "\n").encode()).hexdigest()
         return {
@@ -1719,12 +1721,14 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
         self.assertTrue(any("snapshot is missing" in error for error in
                             verifier.validate_promotion_open_pr_snapshot({}, "1" * 40)))
         snapshot = {"schema_version": 3, "kind": "github-open-pull-request-snapshot", "repositories": []}
-        data = self.signed_open_pr_binding("1" * 40, snapshot)
+        binding = self.signed_open_pr_binding("1" * 40, snapshot)
+        snapshot = binding["open_pr_snapshot"]
+        data = {**binding, "attested_at": "2026-10-31T12:00:00Z"}
         self.assertEqual(verifier.validate_promotion_open_pr_snapshot(data, "1" * 40), [])
         self.assertEqual(
             verifier.promotion_open_pr_binding(
                 "1" * 40, snapshot, data["open_pr_release_bump_evidence"]),
-            data,
+            binding,
         )
         self.assertTrue(any("snapshot is missing" in error for error in
                             verifier.validate_promotion_open_pr_snapshot(
@@ -2315,6 +2319,14 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
         errors = run("refs/tags/v0.1.10", signed=bind(self.open_pr_snapshot(retired=True)))
         self.assertEqual(self.open_pr_errors(errors), [], errors)
         self.assertFalse(any("cannot be deferred" in error for error in errors), errors)
+
+    def test_release_tag_run_refuses_a_digest_valid_but_expired_snapshot(self) -> None:
+        run, _, bind = self.tag_run_case()
+        snapshot = self.open_pr_snapshot(retired=True)
+        snapshot["captured_at"] = "2026-10-30T11:59:59Z"
+        errors = run("refs/tags/v0.1.10", signed=bind(snapshot))
+        self.assertTrue(any("snapshot must be captured within the 24 hours" in error
+                            for error in errors), errors)
 
     def test_release_tag_run_accepts_the_signed_release_bump(self) -> None:
         run, _, bind = self.tag_run_case()

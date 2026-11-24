@@ -632,7 +632,8 @@ class Attestation(unittest.TestCase):
 
     def test_the_attestation_signs_the_selection_snapshot_with_its_bump_evidence(self) -> None:
         root, head = self.fixture()
-        snapshot = {"schema_version": 3, "kind": "github-open-pull-request-snapshot", "repositories": []}
+        snapshot = {"schema_version": 3, "kind": "github-open-pull-request-snapshot", "repositories": [],
+                    "captured_at": "2026-10-31T12:00:00Z"}
         evidence = {"schema": "vellum.release-bump-evidence.v1", "repository": "Generous-Corp/vellum", "pulls": []}
         data = rr.attestation(root, head, "2026-10-31T12:00:00Z", "v0.1.10", snapshot, evidence)
         self.assertEqual(data["open_pr_snapshot"], snapshot)
@@ -651,7 +652,8 @@ class Attestation(unittest.TestCase):
         args = ["attestation", "--commit", head, "--tag", "v0.1.10",
                 "--attested-at", "2026-10-31T12:00:00Z", "--open-pr-snapshot-json", str(snapshot),
                 "--release-bump-evidence-json", str(evidence)]
-        good_snapshot = {"schema_version": 3, "kind": "github-open-pull-request-snapshot", "repositories": []}
+        good_snapshot = {"schema_version": 3, "kind": "github-open-pull-request-snapshot", "repositories": [],
+                         "captured_at": "2026-10-31T12:00:00Z"}
         good_evidence = {"schema": "vellum.release-bump-evidence.v1", "repository": "Generous-Corp/vellum", "pulls": []}
         for left, right in ((good_snapshot, good_evidence), (None, None),
                             *[(bad, good_evidence) for bad in (None, [], True, "x", 3)],
@@ -670,6 +672,23 @@ class Attestation(unittest.TestCase):
                 else:
                     self.assertEqual(result, 1)
                     self.assertEqual(out.getvalue(), "")
+
+    def test_attestation_refuses_stale_or_unprovable_selection_time(self) -> None:
+        root, head = self.fixture()
+        evidence = {"schema": "vellum.release-bump-evidence.v1", "repository": "Generous-Corp/vellum", "pulls": []}
+        for captured, accepted in (("2026-10-31T12:00:00Z", True), ("2026-10-30T12:00:00Z", True),
+                                   ("2026-10-30T11:59:59Z", False), ("2026-10-31T12:00:01Z", False),
+                                   ("2026-10-31T12:00:00", False), ("invalid", False), (None, False)):
+            snapshot = {"schema_version": 3, "kind": "github-open-pull-request-snapshot", "repositories": []}
+            if captured is not None:
+                snapshot["captured_at"] = captured
+            with self.subTest(captured=captured):
+                if accepted:
+                    signed = rr.attestation(root, head, "2026-10-31T12:00:00Z", "v0.1.10", snapshot, evidence)
+                    self.assertEqual(signed["open_pr_snapshot"]["captured_at"], captured)
+                else:
+                    with self.assertRaisesRegex(rr.ReleaseRequestError, "snapshot.*(time|24 hours)"):
+                        rr.attestation(root, head, "2026-10-31T12:00:00Z", "v0.1.10", snapshot, evidence)
 
     def test_with_parity_the_attestation_binds_the_completion(self) -> None:
         root, head = self.fixture(parity=True)

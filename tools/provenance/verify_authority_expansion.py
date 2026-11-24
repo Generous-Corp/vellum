@@ -814,6 +814,25 @@ def validate_promotion_open_pr_snapshot(
         errors.append("release readiness: signed-tag open-PR snapshot is not an object")
     elif data.get("open_pr_snapshot_sha256") != canonical_json_sha256(snapshot):
         errors.append("release readiness: signed-tag open-PR snapshot digest differs")
+    if isinstance(snapshot, dict):
+        try:
+            times = []
+            for stamp in (snapshot.get("captured_at"), data.get("attested_at")):
+                if not isinstance(stamp, str) or not stamp.endswith("Z"):
+                    raise ValueError
+                parsed = dt.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+                if parsed.utcoffset() != dt.timedelta(0):
+                    raise ValueError
+                times.append(parsed)
+            age = times[1] - times[0]
+            # Compare signed times, so verifying an old tag does not expire
+            # its evidence. The signing workflow supplies attested_at now.
+            if not dt.timedelta(0) <= age <= dt.timedelta(hours=24):
+                errors.append("release readiness: signed-tag open-PR snapshot must be captured "
+                              "within the 24 hours before attestation")
+        except (TypeError, ValueError, OverflowError):
+            errors.append("release readiness: signed-tag open-PR snapshot capture and attestation "
+                          "times must be UTC timestamps ending in Z")
     evidence = data.get("open_pr_release_bump_evidence")
     if not isinstance(evidence, dict):
         errors.append("release readiness: signed-tag release-bump evidence is not an object")
@@ -1770,9 +1789,8 @@ def validate_open_pr_snapshot(
             if isinstance(row, dict) and isinstance(row.get("number"), int):
                 bump_evidence.setdefault(row["number"], row)
     snapshot_rows: dict[tuple[str, int], tuple[str, list[str]]] = {}
-    if not isinstance(snapshot, dict) or set(snapshot) != {
-        "schema_version", "kind", "repositories"
-    }:
+    snapshot_keys = {"schema_version", "kind", "repositories"}
+    if not isinstance(snapshot, dict) or set(snapshot) not in (snapshot_keys, snapshot_keys | {"captured_at"}):
         return ["open PR snapshot: expected strict snapshot object"]
     if not exact_scalar(snapshot.get("schema_version"), 3) or not exact_scalar(
         snapshot.get("kind"), "github-open-pull-request-snapshot"

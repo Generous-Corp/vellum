@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import json
 import subprocess
 import sys
 import tempfile
@@ -137,13 +138,18 @@ class Fixture(unittest.TestCase):
             replay.environment.update(LOG=str(self.log), CURSOR=self.cursor)
             return replay
 
+        started = pc.datetime.now(pc.timezone.utc).replace(microsecond=0)
         with mock.patch.object(pc, "Runner", side_effect=runner):
             self.assertEqual(pc.main([
                 "--root", str(self.root), "--tag", "v0.1.10", "--commit", self.commit,
                 "--snapshot-output", str(output / snapshot.name),
                 "--release-bump-output", str(output / evidence.name), "--pretag-replay",
             ]), 0)
-        self.assertEqual((output / snapshot.name).read_bytes(), snapshot.read_bytes())
+        exported = json.loads((output / snapshot.name).read_text())
+        captured = pc.datetime.fromisoformat(exported.pop("captured_at").replace("Z", "+00:00"))
+        self.assertGreaterEqual(captured, started)
+        self.assertLessEqual(captured, pc.datetime.now(pc.timezone.utc))
+        self.assertEqual(exported, json.loads(snapshot.read_text()))
         self.assertEqual((output / evidence.name).read_bytes(), evidence.read_bytes())
         self.assertEqual(self.ran(), [check.step for check in pc.CHECKS])
 
