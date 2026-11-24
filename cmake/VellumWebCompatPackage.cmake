@@ -77,7 +77,7 @@ function(vellum_embed_web_compat_preludes output_cpp output_header)
     get_filename_component(_vellum_header_name "${output_header}" NAME)
     set(_vellum_decls "")
     string(APPEND _vellum_decls
-        "#pragma once\n// Auto-generated from the Vellum web-compat manifest — do not edit\n\n"
+        "#pragma once\n// Auto-generated from the Vellum web-compat manifest, do not edit\n\n"
         "#include <cstddef>\n#include <string>\n\nnamespace ${_arg_NAMESPACE} {\n\n"
         "struct EmbeddedPrelude {\n    const char* file_name;\n    const unsigned char* deflated;\n"
         "    std::size_t deflated_size;\n    std::size_t source_size;\n    const char* sha256;\n};\n\n"

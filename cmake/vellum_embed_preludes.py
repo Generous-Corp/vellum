@@ -59,7 +59,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     parts = [
-        "// Auto-generated from the Vellum web-compat preludes — do not edit\n",
+        "// Auto-generated from the Vellum web-compat preludes, do not edit\n",
         f'#include "{args.header}"\n',
         f"#include {args.inflate_header}\n#include <stdexcept>\n\n",
         f"namespace {args.namespace} {{\n\n",
