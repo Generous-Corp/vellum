@@ -871,13 +871,14 @@ class Tests(unittest.TestCase):
         }
 
     @staticmethod
-    def signed_open_pr_binding(commit: str, snapshot: dict, bump_evidence: dict | None = None) -> dict:
+    def signed_open_pr_binding(commit: str, snapshot: dict, bump_evidence: dict | None = None,
+                               *, captured_at: str = "2026-10-31T12:00:00Z") -> dict:
         """The open-PR audit inputs a release tag signs at selection, bound by digest."""
         if bump_evidence is None:
             bump_evidence = {"schema": "vellum.release-bump-evidence.v1",
                              "repository": "Generous-Corp/vellum", "pulls": []}
 
-        snapshot = {"captured_at": "2026-10-31T12:00:00Z", **snapshot}
+        snapshot = {"captured_at": captured_at, **snapshot}
 
         def digest(value: dict) -> str:
             return hashlib.sha256((json.dumps(value, sort_keys=True) + "\n").encode()).hexdigest()
@@ -2293,7 +2294,7 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
                 report = verifier.verify(clone, **arguments)
             return report["errors"]
 
-        bind = functools.partial(self.signed_open_pr_binding, commit)
+        bind = functools.partial(self.signed_open_pr_binding, commit, captured_at="2026-12-01T00:00:00Z")
         return run, overlap, bind
 
     @staticmethod
@@ -2323,7 +2324,7 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
     def test_release_tag_run_refuses_a_digest_valid_but_expired_snapshot(self) -> None:
         run, _, bind = self.tag_run_case()
         snapshot = self.open_pr_snapshot(retired=True)
-        snapshot["captured_at"] = "2026-10-30T11:59:59Z"
+        snapshot["captured_at"] = "2026-11-29T23:59:59Z"
         errors = run("refs/tags/v0.1.10", signed=bind(snapshot))
         self.assertTrue(any("snapshot must be captured within the 24 hours" in error
                             for error in errors), errors)
