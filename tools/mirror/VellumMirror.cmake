@@ -19,6 +19,13 @@
 # is enabled only by landing one.
 include("${CMAKE_CURRENT_LIST_DIR}/VellumMirrorPlatform.cmake")
 vellum_mirror_platform_args(_vellum_mirror_platform_args)
+# The Apple-only link rules below apply to macOS alone, not to the other Apple
+# systems, which plan from their own closure records.
+if(APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set(_vellum_mirror_darwin TRUE)
+else()
+    set(_vellum_mirror_darwin FALSE)
+endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     if(NOT VELLUM_HAS_SKIA_DAWN)
         message(FATAL_ERROR
@@ -657,7 +664,7 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
                 ${_provider_unit_links})
         endif()
         target_link_libraries(vellum-skia-dawn-provider PRIVATE ${_third_party})
-        if(APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        if(_vellum_mirror_darwin)
             target_link_libraries(vellum-skia-dawn-provider PRIVATE
                 "-framework Accelerate"
                 "-framework AppKit"
@@ -679,7 +686,7 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         # provider while retaining a standalone direct-link contract.
         target_link_libraries("${_library}" PUBLIC
             Vellum::SkiaDawnProvider ${_unit_links})
-        if(APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        if(_vellum_mirror_darwin)
             target_link_options("${_library}" PRIVATE
                 "LINKER:-reexport_library,$<TARGET_FILE:vellum-skia-dawn-provider>")
         endif()
@@ -700,7 +707,7 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
     endif()
     set_target_properties("${_library}" PROPERTIES
         VELLUM_MIRROR_CARRIED_ARCHIVES "${_third_party}")
-    if(APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    if(_vellum_mirror_darwin)
         target_link_libraries("${_library}" PRIVATE
             "-framework Accelerate"
             "-framework AppKit"
@@ -716,7 +723,7 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
             "-framework UserNotifications"
             bsm)
     endif()
-    if(_skia AND APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    if(_skia AND _vellum_mirror_darwin)
         # Export only the mirrored namespaces this unit defines.
         set(_exports "${CMAKE_CURRENT_BINARY_DIR}/vellum-mirror-${_vellum_mirror_unit}.exports")
         # The units' root namespace comes from the plan: pulp before the
@@ -735,7 +742,7 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         target_link_options("${_library}" PRIVATE
             "LINKER:-exported_symbols_list,${_exports}")
         set_property(TARGET "${_library}" APPEND PROPERTY LINK_DEPENDS "${_exports}")
-    elseif(NOT _skia AND APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    elseif(NOT _skia AND _vellum_mirror_darwin)
         # ld takes an export list or an unexport list, not both: the units
         # that have no export list leave the third-party names out.
         target_link_options("${_library}" PRIVATE
@@ -744,7 +751,7 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
             "${VELLUM_MIRROR_UNEXPORTS}")
         add_dependencies("${_library}" vellum-mirror-third-party-unexports)
     endif()
-    if(APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    if(_vellum_mirror_darwin)
         target_link_options("${_library}" PRIVATE "LINKER:-dead_strip_dylibs")
     endif()
     target_compile_definitions("${_library}" INTERFACE
@@ -781,7 +788,7 @@ foreach(_vellum_mirror_executable IN LISTS VELLUM_MIRROR_EXECUTABLES)
         CXX_STANDARD_REQUIRED ON
         OBJCXX_STANDARD 20
         BUILD_RPATH "$<TARGET_FILE_DIR:vellum-skia-dawn-provider>")
-    if(APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    if(_vellum_mirror_darwin)
         set_target_properties("${_vellum_mirror_executable}" PROPERTIES
             OSX_ARCHITECTURES arm64
             MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})

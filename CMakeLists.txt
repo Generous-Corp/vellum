@@ -700,6 +700,12 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}" -m unittest
             tools.mirror.test_platform_cmake.PlatformCmakeTests
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    # Evaluates VellumMirror.cmake for each declared platform with a stand-in
+    # planner, so it runs whether or not this build enabled the mirror.
+    add_test(NAME vellum.mirror-platform-targets
+        COMMAND "${Python3_EXECUTABLE}" -m unittest
+            tools.mirror.test_mirror_platform_targets
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     if(VELLUM_PACKAGE_HAS_MIRROR)
         add_test(NAME vellum.mirror-export-targets
             COMMAND "${CMAKE_COMMAND}"

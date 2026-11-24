@@ -1,6 +1,8 @@
 """cmake -P tests for tools/mirror/VellumMirrorPlatform.cmake."""
 from __future__ import annotations
 
+import json
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -39,12 +41,54 @@ class PlatformCmakeTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("requires a verified platform closure", " ".join(result.stderr.split()))
 
-    def test_packaging_allowlist_reads_platform_records(self) -> None:
-        source = MODULE.read_text(encoding="utf-8")
-        self.assertIn('file(GLOB _records "${_records_root}/*/record.json")', source)
-        self.assertIn('string(JSON _record_system', source)
-        self.assertNotIn('CMAKE_SYSTEM_NAME STREQUAL "Linux"', source)
-        self.assertNotIn('CMAKE_SYSTEM_NAME STREQUAL "Windows"', source)
+    def records_root(self, tmp: Path, keep: tuple[str, ...], *, schema: str = "") -> Path:
+        """A copy of the platform records limited to `keep`, indexed only by them."""
+        source = MODULE.parent.parent.parent / "provenance/framework/platforms"
+        root = tmp / "platforms"
+        index = {"schema": "vellum.framework-platform-index.v1", "platforms": {}}
+        for key in keep:
+            (root / key).mkdir(parents=True)
+            text = (source / key / "record.json").read_text(encoding="utf-8")
+            if schema:
+                text = text.replace("vellum.framework-platform-closure.v1", schema)
+            (root / key / "record.json").write_text(text, encoding="utf-8")
+            index["platforms"][key] = f"provenance/framework/platforms/{key}/record.json"
+        (root / "index.json").write_text(json.dumps(index), encoding="utf-8")
+        return root
+
+    def run_with_root(self, root: Path, system: str) -> subprocess.CompletedProcess:
+        return run_cmake(f'set(VELLUM_MIRROR_PLATFORM_RECORD_ROOT "{root}")\n'
+                         f'set(CMAKE_SYSTEM_NAME {system})\nvellum_mirror_require_packaging()')
+
+    def test_packaging_allowlist_follows_the_records_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.records_root(Path(tmp), ("windows-x64",))
+            windows = self.run_with_root(root, "Windows")
+            self.assertEqual(windows.returncode, 0, windows.stderr)
+            linux = self.run_with_root(root, "Linux")
+            self.assertNotEqual(linux.returncode, 0)
+            self.assertIn("requires a verified platform closure", " ".join(linux.stderr.split()))
+            both = self.records_root(Path(tmp) / "both", ("linux-x64", "windows-x64"))
+            self.assertEqual(self.run_with_root(both, "Linux").returncode, 0)
+
+    def test_a_record_the_index_does_not_list_or_that_is_not_a_closure_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.records_root(Path(tmp), ("linux-x64",))
+            unlisted = root / "windows-x64"
+            unlisted.mkdir()
+            shutil.copy(MODULE.parent.parent.parent / "provenance/framework/platforms/windows-x64/record.json",
+                        unlisted / "record.json")
+            self.assertNotEqual(self.run_with_root(root, "Windows").returncode, 0)
+            wrong = self.records_root(Path(tmp) / "wrong", ("linux-x64",),
+                                      schema="vellum.something-else.v1")
+            self.assertNotEqual(self.run_with_root(wrong, "Linux").returncode, 0)
+
+    def test_declared_platforms_name_system_and_processor(self) -> None:
+        result = run_cmake('vellum_mirror_declared_platforms(_p)\nmessage(STATUS "P=${_p}")')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        output = result.stdout + result.stderr
+        for platform in ("Darwin|arm64", "Linux|x86_64", "Windows|AMD64"):
+            self.assertIn(platform, output)
 
     def prefix_flags(self, c_id: str, cxx_id: str, variant: str = "") -> str:
         result = run_cmake(
