@@ -133,6 +133,15 @@ FRAMEWORK_TEST(empty_grant_registers_only_sealed_embedded_fonts) {
     std::vector<unsigned char> oversized(view::kMaxShippedFontBytes + 1, 0);
     std::copy(bytes.begin(), bytes.end(), oversized.begin());
     static const char text[] = "plain text, not a font";
+    // A real face whose last table record claims bytes past the end of the
+    // file: the structural check refuses it whatever the platform parser does.
+    auto overrun = bytes;
+    if (overrun.size() > 12) {
+        const std::size_t tables = (std::size_t(overrun[4]) << 8) | overrun[5];
+        const std::size_t record = 12 + (tables - 1) * 16;
+        for (std::size_t i = 0; i < 4 && record + 15 < overrun.size(); ++i)
+            overrun[record + 12 + i] = 0x7f;
+    }
 
     const auto script_dir = fresh_temp_dir("bridge");
     std::filesystem::create_directories(script_dir / "assets");
@@ -148,6 +157,7 @@ FRAMEWORK_TEST(empty_grant_registers_only_sealed_embedded_fonts) {
                                           malformed.size()},
         view::WidgetBridge::EmbeddedAsset{"assets/oversized.ttf", oversized.data(),
                                           oversized.size()},
+        view::WidgetBridge::EmbeddedAsset{"assets/overrun.ttf", overrun.data(), overrun.size()},
         view::WidgetBridge::EmbeddedAsset{"assets/text.ttf",
                                           reinterpret_cast<const unsigned char*>(text),
                                           sizeof(text) - 1},
@@ -171,7 +181,7 @@ FRAMEWORK_TEST(empty_grant_registers_only_sealed_embedded_fonts) {
              "assets/unsealed.ttf", "userfont-1", "../userfont-1", "assets/../assets/sealed.ttf",
              "assets/../../assets/sealed.ttf", "/etc/hosts", disk_font, "file://" + disk_font,
              "file://assets/sealed.ttf", "assets/malformed.ttf", "assets/oversized.ttf",
-             "assets/text.ttf"}) {
+             "assets/overrun.ttf", "assets/text.ttf"}) {
         const auto family = probe_family("refused");
         const bool registered = register_embedded(h, family, name);
         if (registered || vellum::canvas::is_font_registered(family))
