@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-41307951b3352cfefe99ddcc2c2eb464a7c82800",
+  "kind": "resolution",
+  "created_at": "2026-11-24T13:43:07Z",
+  "resolves": "vellum-41307951b3352cfefe99ddcc2c2eb464a7c82800",
+  "disposition": "framework-only",
+  "rationale": "Vellum's figma-plugin.js decoder now maps style.mix_blend_mode to compositing.blendMode. Pulp's importer already consumes mix_blend_mode from the same envelope. Nothing to port. Evidence, Pulp main b0ee92d21944d5c956603afd1108b575e50c1302 (full clone): [absent] `git -C <pulp> grep -c -F -e 'compositing.blendMode' b0ee92d21944 -- tools/import-design core` = 0; [control] `git -C <pulp> grep -c -F -e 'mix_blend_mode' b0ee92d21944 -- core/view/src` = 24. [control] searches show the instrument finds the nearest Pulp counterpart. Classified by the Vellum lead under the owner's one-time delegation of 2026-11-24 (pulp-planning vellum-move/DECISIONS.md); any later resolution overrides it.",
+  "owner": "@vellum-lead",
+  "linked_commits": [
+    "41307951b3352cfefe99ddcc2c2eb464a7c82800"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}
