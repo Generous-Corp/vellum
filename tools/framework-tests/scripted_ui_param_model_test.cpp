@@ -165,10 +165,38 @@ FRAMEWORK_TEST(empty_capability_session_hides_file_reading_asset_api) {
     root.set_bounds({0, 0, 300, 200});
     view::ScriptedUiSession session(
         root, model, empty_capability_options(
-            "if (typeof setImageSource !== 'undefined') throw new Error('filesystem API granted');"));
+            "if (typeof setImageSource !== 'undefined') throw new Error('filesystem API granted');"
+            "if (typeof setKnobSpriteStrip !== 'undefined') throw new Error('filesystem API granted');"
+            "if (typeof setFaderCapturedArt !== 'undefined') throw new Error('filesystem API granted');"));
     std::string error;
     CHECK(session.load(&error));
     CHECK(error.empty());
+}
+
+FRAMEWORK_TEST(generated_captured_asset_calls_are_guarded_for_empty_capability) {
+    auto model = make_model();
+    view::View root;
+    root.set_bounds({0, 0, 300, 200});
+
+    // This is the shape emitted by design_codegen for captured assets. The
+    // guard lets the authored styling load while Filesystem APIs stay absent.
+    view::ScriptedUiSession guarded(
+        root, model, empty_capability_options(
+            "if (typeof setFaderCapturedArt === 'function') "
+            "setFaderCapturedArt('fader', 'body.png', 1, 1, 'indicator.png', 1, 1);"
+            "if (typeof setImageSource === 'function') "
+            "setImageSource('image', 'asset.png');"));
+    std::string error;
+    CHECK(guarded.load(&error));
+    CHECK(error.empty());
+
+    // Removing the guard would turn the generated calls into ReferenceErrors.
+    view::ScriptedUiSession unguarded(
+        root, model, empty_capability_options(
+            "setFaderCapturedArt('fader', 'body.png', 1, 1, 'indicator.png', 1, 1);"));
+    error.clear();
+    CHECK(!unguarded.load(&error));
+    CHECK(!error.empty());
 }
 
 // A script that refuses to run unless getParamMetadata reports what the live

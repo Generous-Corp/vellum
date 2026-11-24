@@ -53,10 +53,14 @@ void BridgeRegistrars::register_widget_asset_styling_api(WidgetBridge& self) {
         auto id = args.get<std::string>(0, "");
         auto* k = dynamic_cast<Knob*>(self.widget(id));
         if (!k) return choc::value::Value();
-        k->set_sprite_core(static_cast<float>(args.get<double>(1, 0.0)),
-                           static_cast<float>(args.get<double>(2, 0.0)),
-                           static_cast<float>(args.get<double>(3, 0.0)),
-                           static_cast<float>(args.get<double>(4, 0.0)));
+        const float core_x = static_cast<float>(args.get<double>(1, 0.0));
+        const float core_y = static_cast<float>(args.get<double>(2, 0.0));
+        const float core_w = static_cast<float>(args.get<double>(3, 0.0));
+        const float core_h = static_cast<float>(args.get<double>(4, 0.0));
+        if (!std::isfinite(core_x) || !std::isfinite(core_y) ||
+            !std::isfinite(core_w) || !std::isfinite(core_h))
+            return choc::value::Value();
+        k->set_sprite_core(core_x, core_y, core_w, core_h);
         k->request_repaint();
         return choc::value::Value();
     });
@@ -86,13 +90,15 @@ void BridgeRegistrars::register_widget_asset_styling_api(WidgetBridge& self) {
             if (has_color) color = parsed;
             const bool color_authored = has_color &&
                 args.get<bool>(6, true);
+            const float r_in = static_cast<float>(args.get<double>(1, 0.0));
+            const float r_out = static_cast<float>(args.get<double>(2, 0.0));
+            const float width = static_cast<float>(args.get<double>(3, 0.0));
+            const float phase_rad = static_cast<float>(args.get<double>(5, 0.0));
+            if (!std::isfinite(r_in) || !std::isfinite(r_out) ||
+                !std::isfinite(width) || !std::isfinite(phase_rad))
+                return choc::value::Value();
             k->set_captured_indicator(
-                static_cast<float>(args.get<double>(1, 0.0)),
-                static_cast<float>(args.get<double>(2, 0.0)),
-                static_cast<float>(args.get<double>(3, 0.0)),
-                color,
-                static_cast<float>(args.get<double>(5, 0.0)),
-                color_authored);
+                r_in, r_out, width, color, phase_rad, color_authored);
             const auto [outline, has_outline] =
                 parse_skin_color(args.get<std::string>(7, ""));
             const float outline_width =
@@ -136,13 +142,13 @@ void BridgeRegistrars::register_widget_asset_styling_api(WidgetBridge& self) {
             }
             float tw = static_cast<float>(args.get<double>(5, 0));
             float th = static_cast<float>(args.get<double>(6, 0));
-            if (tw > 0.0f && th > 0.0f) {
+            if (std::isfinite(tw) && std::isfinite(th) && tw > 0.0f && th > 0.0f) {
                 f->begin_skin_thumb_style();
                 f->set_thumb_size(tw, th);
                 thumb_specific = true;
             }
             float cr = static_cast<float>(args.get<double>(7, 0));
-            if (cr > 0.0f) {
+            if (std::isfinite(cr) && cr > 0.0f) {
                 f->begin_skin_thumb_style();
                 f->set_thumb_corner_radius(cr);
                 thumb_specific = true;
@@ -160,7 +166,7 @@ void BridgeRegistrars::register_widget_asset_styling_api(WidgetBridge& self) {
             auto* f = dynamic_cast<Fader*>(self.widget(args.get<std::string>(0, "")));
             if (!f) return choc::value::Value();
             float w = static_cast<float>(args.get<double>(1, 0));
-            if (w > 0.0f) { f->set_skin_track_width(w); f->request_repaint(); }
+            if (std::isfinite(w) && w > 0.0f) { f->set_skin_track_width(w); f->request_repaint(); }
             return choc::value::Value();
         });
 
@@ -220,7 +226,7 @@ void BridgeRegistrars::register_widget_asset_styling_api(WidgetBridge& self) {
         if (!m)
             return choc::value::Value();
         float r = static_cast<float>(args.get<double>(1, 0));
-        if (r > 0.0f) {
+        if (std::isfinite(r) && r > 0.0f) {
             m->set_level_bar_ratio(r);
             if (auto* view = dynamic_cast<View*>(m))
                 view->request_repaint();
@@ -259,7 +265,7 @@ void BridgeRegistrars::register_widget_assets_api(WidgetBridge& self) {
         return choc::value::Value();
     });
 
-    // setKnobSpriteStrip(id, pngPath, frameCount, orientation?) - Track A1.
+    // setKnobSpriteStrip(id, pngPath, frameCount, orientation?).
     register_bridge_function(api, "setKnobSpriteStrip", [&self](choc::javascript::ArgumentList args) {
         auto id = args.get<std::string>(0, "");
         auto path = args.get<std::string>(1, "");
@@ -352,7 +358,6 @@ void BridgeRegistrars::register_widget_assets_api(WidgetBridge& self) {
                 args.get<bool>(12, false));
             return choc::value::Value();
         });
-
 }
 
 } // namespace vellum::view
