@@ -217,7 +217,8 @@ ScriptedUiSession::sealed_assets_for(const std::filesystem::path& script) {
     constexpr std::size_t kMaxFiles = 256;
     constexpr std::uintmax_t kMaxTotalBytes = 128u * 1024u * 1024u;
     std::error_code ec;
-    const auto dir = fs::weakly_canonical(script.parent_path(), ec);
+    const auto dir = fs::weakly_canonical(
+        script.has_parent_path() ? script.parent_path() : fs::path{"."}, ec);
     if (ec || dir.empty())
         return assets;
     if (!disk_fonts_)

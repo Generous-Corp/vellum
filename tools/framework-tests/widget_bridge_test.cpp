@@ -337,6 +337,31 @@ FRAMEWORK_TEST(deadline_recovery_reuses_last_good_sealed_fonts) {
     std::filesystem::remove_all(dir);
 }
 
+FRAMEWORK_TEST(basename_script_path_seals_fonts_from_current_directory) {
+    const auto dir = fresh_temp_dir("basename");
+    std::filesystem::copy_file(VELLUM_TEST_FONT_PATH, dir / "face.ttf");
+    const auto family = probe_family("basename");
+    write_file(dir / "ui.js", "if (!registerEmbeddedFont('" + family +
+        "', 'face.ttf')) throw new Error('sibling font missing');");
+    struct CurrentDirectoryGuard {
+        std::filesystem::path previous = std::filesystem::current_path();
+        ~CurrentDirectoryGuard() { std::filesystem::current_path(previous); }
+    } guard;
+    std::filesystem::current_path(dir);
+    view::ScriptedUiOptions options;
+    options.script_path = "ui.js";
+    options.granted_capabilities = view::CapabilitySet{};
+    options.enable_hot_reload = options.enable_theme_reload = false;
+    view::View root;
+    vellum::state::StateStore store;
+    view::ScriptedUiSession session(root, store, options);
+    std::string error;
+    CHECK(session.load(&error));
+    CHECK(vellum::canvas::is_font_registered(family));
+    std::filesystem::current_path(guard.previous);
+    std::filesystem::remove_all(dir);
+}
+
 FRAMEWORK_TEST(directory_switch_does_not_reuse_same_timestamp_font_bytes) {
     const auto first = fresh_temp_dir("cache-first");
     const auto second = fresh_temp_dir("cache-second");
