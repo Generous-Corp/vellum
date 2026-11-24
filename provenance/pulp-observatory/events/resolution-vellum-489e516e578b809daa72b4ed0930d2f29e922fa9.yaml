@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-489e516e578b809daa72b4ed0930d2f29e922fa9",
+  "kind": "resolution",
+  "created_at": "2026-11-24T07:21:00Z",
+  "resolves": "vellum-489e516e578b809daa72b4ed0930d2f29e922fa9",
+  "disposition": "framework-only",
+  "rationale": "Vellum SDK packaging: the native backend (cli/vellum_native_backend.py) resolves the provider and mirror runtime images through sdk/share/vellum/runtime-images.json, because their installed filenames now carry an identity suffix. Pulp has no cli/ tree (0 files; the path appears only in its ownership record) and names only libvellum-gpu.dylib, whose installed path this commit leaves unchanged (prefix/lib/libvellum-gpu.dylib). Pulp search at origin/main 25e27ae8ce96 (git grep -w -F over the whole tree, integrations/ included) for runtime-images.json, NATIVE_HOST_FILES, build_sdk_artifact.py and install_core.py returns 0; control SkiaSurface on the same search returns 389 in 112 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-09, 'Classify the pending Vellum observatory events instead of raising the budget'); no schema or API delta recorded on the event. Any later resolution overrides this.",
+  "owner": "@danielraffel",
+  "linked_commits": [
+    "489e516e578b809daa72b4ed0930d2f29e922fa9"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum.capture-stats",
+    "vellum.gpu-native"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}
