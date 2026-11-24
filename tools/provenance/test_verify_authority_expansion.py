@@ -2263,8 +2263,9 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
         scope = ProvenanceWorkflowScopeTests()
 
         def run(ref: str, *, signed: dict | None = None, live: dict | None = None,
-                live_bump_evidence: dict | None = None, **overrides) -> list[str]:
-            audit, deferred = scope.scope(ref)
+                live_bump_evidence: dict | None = None, replay: bool = False,
+                **overrides) -> list[str]:
+            audit, deferred = scope.scope(ref, replay=replay)
             name = ref.removeprefix("refs/tags/")
             dry_run = re.fullmatch(r"dry-run/(v[0-9]+\.[0-9]+\.[0-9]+)/[0-9]+-[0-9]+", name)
             data = self.promotion_attestation("3" * 64, commit=commit, tree=tree)
@@ -2291,6 +2292,8 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
             arguments.update(overrides)
             with mock.patch.dict(os.environ):
                 os.environ.pop("VELLUM_PRETAG_REPLAY", None)
+                if replay:
+                    os.environ["VELLUM_PRETAG_REPLAY"] = "1"
                 report = verifier.verify(clone, **arguments)
             return report["errors"]
 
@@ -2320,6 +2323,27 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
         errors = run("refs/tags/v0.1.10", signed=bind(self.open_pr_snapshot(retired=True)))
         self.assertEqual(self.open_pr_errors(errors), [], errors)
         self.assertFalse(any("cannot be deferred" in error for error in errors), errors)
+
+    def test_pretag_replay_judges_live_snapshot_without_signed_snapshot(self) -> None:
+        run, overlap, bind = self.tag_run_case()
+        ref = "refs/tags/v0.1.10"
+        clean = self.open_pr_snapshot(retired=True)
+        with_overlap = self.open_pr_snapshot(overlap, retired=True)
+        with self.subTest("selection has no signed snapshot yet"):
+            errors = run(ref, replay=True, live=clean)
+            self.assertEqual(self.open_pr_errors(errors), [], errors)
+            self.assertFalse(any("cannot be deferred" in error for error in errors), errors)
+        with self.subTest("selection still requires live evidence"):
+            errors = run(ref, replay=True)
+            self.assertTrue(any("expected strict snapshot object" in error for error in errors), errors)
+        with self.subTest("selection refuses a live overlap"):
+            errors = run(ref, replay=True, live=with_overlap)
+            self.assertTrue(any("live overlap Generous-Corp/pulp#42 is absent" in error
+                                for error in errors), errors)
+        with self.subTest("signed evidence cannot hide a live selection overlap"):
+            errors = run(ref, replay=True, live=with_overlap, signed=bind(clean))
+            self.assertTrue(any("live overlap Generous-Corp/pulp#42 is absent" in error
+                                for error in errors), errors)
 
     def test_release_tag_run_refuses_a_digest_valid_but_expired_snapshot(self) -> None:
         run, _, bind = self.tag_run_case()
