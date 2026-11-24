@@ -117,6 +117,16 @@ class ReceiverWorkflowTests(unittest.TestCase):
         self.assertIn('--vellum-main "$(git rev-parse HEAD)"', text)
         self.assertIn('--vellum-target "$(git rev-parse HEAD)"', text)
 
+    def test_receiver_can_reconcile_base_pending_debt_but_rejects_new_overflow(self) -> None:
+        text = self.text("pulp-observatory-receiver.yml")
+        reconcile = text.split("- name: Reconcile through the latest verified durable event head", 1)[1]
+        verify = reconcile.split("- name: Prepare the evidence-only coalescing PR", 1)[0]
+        self.assertIn("--pending-event-scope introduced", verify)
+        # This job only prepares evidence; release signing and tagging remain
+        # outside the receiver and therefore cannot run while health is bad.
+        self.assertNotIn("--sign", verify)
+        self.assertNotIn("git tag", verify)
+
     def test_watchdog_builds_its_state_with_the_tested_module(self) -> None:
         text = (ROOT / ".github/workflows/pulp-observatory-watchdog.yml").read_text()
         self.assertIn("python3 -I tools/provenance/test_receiver_watchdog_state.py", text)

@@ -202,12 +202,16 @@ jobs:
             --now "$now" \
             --write --include-main-commits \
             --output "$RUNNER_TEMP/receiver-reconcile.json"
+          # Existing pending observations are base debt; new observations
+          # remain subject to the full pending-event budget. This receiver
+          # only prepares evidence and never signs or tags a release.
           python3 -I tools/provenance/observatory.py verify \
             --pulp-repo .receiver-pulp \
             --vellum-repo . \
             --git-base "$(git rev-parse HEAD)" \
             --pulp-target "$RECONCILE_TARGET" \
-            --vellum-target "$(git rev-parse HEAD)"
+            --vellum-target "$(git rev-parse HEAD)" \
+            --pending-event-scope introduced
 
       - name: Prepare the evidence-only coalescing PR
         if: steps.plan.outputs.status == 'reconcile'
