@@ -1,6 +1,8 @@
 """cmake -P tests for tools/mirror/VellumMirrorPlatform.cmake."""
 from __future__ import annotations
 
+import json
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -15,7 +17,8 @@ DARWIN_PREFIX_FLAGS = ("-ffile-prefix-map=/src=vellum;-ffile-prefix-map=/bld=vel
 def run_cmake(body: str) -> subprocess.CompletedProcess:
     with tempfile.TemporaryDirectory() as tmp:
         script = Path(tmp) / "case.cmake"
-        script.write_text(f'include("{MODULE}")\n{body}\n', encoding="utf-8")
+        script.write_text('cmake_minimum_required(VERSION 3.24)\n'
+                          f'include("{MODULE}")\n{body}\n', encoding="utf-8")
         return subprocess.run(["cmake", "-P", str(script)], capture_output=True, text=True)
 
 
@@ -26,17 +29,67 @@ class PlatformCmakeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stderr, "")
 
-    def test_linux_record_stops_with_a_clear_error_at_packaging(self) -> None:
+    def test_linux_record_is_accepted_at_packaging(self) -> None:
         result = run_cmake('set(CMAKE_SYSTEM_NAME Linux)\nvellum_mirror_require_packaging()')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("mirror packaging for Linux is not implemented yet; "
-                      "it arrives with that platform's record PR",
-                      " ".join(result.stderr.split()))
+        self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_windows_record_stops_with_a_clear_error_at_packaging(self) -> None:
+    def test_windows_record_is_accepted_at_packaging(self) -> None:
         result = run_cmake('set(CMAKE_SYSTEM_NAME Windows)\nvellum_mirror_require_packaging()')
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_undeclared_record_is_refused(self) -> None:
+        result = run_cmake('set(CMAKE_SYSTEM_NAME FreeBSD)\nvellum_mirror_require_packaging()')
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("mirror packaging for Windows is not implemented yet", result.stderr)
+        self.assertIn("requires a verified platform closure", " ".join(result.stderr.split()))
+
+    def records_root(self, tmp: Path, keep: tuple[str, ...], *, schema: str = "") -> Path:
+        """A copy of the platform records limited to `keep`, indexed only by them."""
+        source = MODULE.parent.parent.parent / "provenance/framework/platforms"
+        root = tmp / "platforms"
+        index = {"schema": "vellum.framework-platform-index.v1", "platforms": {}}
+        for key in keep:
+            (root / key).mkdir(parents=True)
+            text = (source / key / "record.json").read_text(encoding="utf-8")
+            if schema:
+                text = text.replace("vellum.framework-platform-closure.v1", schema)
+            (root / key / "record.json").write_text(text, encoding="utf-8")
+            index["platforms"][key] = f"provenance/framework/platforms/{key}/record.json"
+        (root / "index.json").write_text(json.dumps(index), encoding="utf-8")
+        return root
+
+    def run_with_root(self, root: Path, system: str) -> subprocess.CompletedProcess:
+        return run_cmake(f'set(VELLUM_MIRROR_PLATFORM_RECORD_ROOT "{root}")\n'
+                         f'set(CMAKE_SYSTEM_NAME {system})\nvellum_mirror_require_packaging()')
+
+    def test_packaging_allowlist_follows_the_records_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.records_root(Path(tmp), ("windows-x64",))
+            windows = self.run_with_root(root, "Windows")
+            self.assertEqual(windows.returncode, 0, windows.stderr)
+            linux = self.run_with_root(root, "Linux")
+            self.assertNotEqual(linux.returncode, 0)
+            self.assertIn("requires a verified platform closure", " ".join(linux.stderr.split()))
+            both = self.records_root(Path(tmp) / "both", ("linux-x64", "windows-x64"))
+            self.assertEqual(self.run_with_root(both, "Linux").returncode, 0)
+
+    def test_a_record_the_index_does_not_list_or_that_is_not_a_closure_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.records_root(Path(tmp), ("linux-x64",))
+            unlisted = root / "windows-x64"
+            unlisted.mkdir()
+            shutil.copy(MODULE.parent.parent.parent / "provenance/framework/platforms/windows-x64/record.json",
+                        unlisted / "record.json")
+            self.assertNotEqual(self.run_with_root(root, "Windows").returncode, 0)
+            wrong = self.records_root(Path(tmp) / "wrong", ("linux-x64",),
+                                      schema="vellum.something-else.v1")
+            self.assertNotEqual(self.run_with_root(wrong, "Linux").returncode, 0)
+
+    def test_declared_platforms_name_system_and_processor(self) -> None:
+        result = run_cmake('vellum_mirror_declared_platforms(_p)\nmessage(STATUS "P=${_p}")')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        output = result.stdout + result.stderr
+        for platform in ("Darwin|arm64", "Linux|x86_64", "Windows|AMD64"):
+            self.assertIn(platform, output)
 
     def prefix_flags(self, c_id: str, cxx_id: str, variant: str = "") -> str:
         result = run_cmake(
@@ -87,6 +140,42 @@ class ConfigureDependsTest(unittest.TestCase):
             r"CONFIGURE_DEPENDS\s+",
             "the platform-record glob must retrigger configure when a record is added",
         )
+
+
+class ExportConsumerScriptTest(unittest.TestCase):
+    def test_script_reaches_the_freebsd_packaging_guard(self) -> None:
+        # A package stand-in exercises the script without building a GPU SDK.
+        # The real platform module must produce the final FreeBSD refusal.
+        repo = MODULE.parents[2]
+        with tempfile.TemporaryDirectory() as tmp:
+            build = Path(tmp)
+            (build / "cmake_install.cmake").write_text('''
+file(MAKE_DIRECTORY "${CMAKE_INSTALL_PREFIX}/lib/cmake/Vellum"
+    "${CMAKE_INSTALL_PREFIX}/mirror/lib/cmake/VellumMirror")
+file(WRITE "${CMAKE_INSTALL_PREFIX}/mirror/lib/cmake/VellumMirror/VellumMirrorTargets.cmake" "")
+file(WRITE "${CMAKE_INSTALL_PREFIX}/lib/image.stub" "")
+file(WRITE "${CMAKE_INSTALL_PREFIX}/lib/cmake/Vellum/VellumConfig.cmake" [=[
+if(CMAKE_CROSSCOMPILING)
+    message(FATAL_ERROR "unsupported target platform")
+endif()
+add_library(Vellum::Value INTERFACE IMPORTED)
+add_library(Vellum::SkiaDawnProvider INTERFACE IMPORTED)
+add_library(Vellum::MirrorView_core SHARED IMPORTED)
+set_target_properties(Vellum::MirrorView_core PROPERTIES
+    INTERFACE_LINK_LIBRARIES Vellum::Value
+    IMPORTED_LOCATION_RELEASE "${CMAKE_CURRENT_LIST_DIR}/../../image.stub")
+add_library(Vellum::MirrorCanvas INTERFACE IMPORTED)
+set_target_properties(Vellum::MirrorCanvas PROPERTIES
+    INTERFACE_LINK_LIBRARIES Vellum::SkiaDawnProvider)
+]=])
+''', encoding="utf-8")
+            result = subprocess.run(
+                ["cmake", f"-DVELLUM_BUILD_DIR={build}", "-DVELLUM_INSTALL_LIBDIR=lib",
+                 f"-DVELLUM_SOURCE_DIR={repo}", "-P",
+                 str(repo / "cmake/RunMirrorExportConsumer.cmake")],
+                capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("FreeBSD packaging control: ok", result.stdout)
 
 
 if __name__ == "__main__":
