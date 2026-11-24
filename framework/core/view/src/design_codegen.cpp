@@ -510,7 +510,8 @@ static void generate_node(std::ostringstream& ss, const IRNode& node,
                     node.attributes.find("fader_indicator_asset_path");
                 if (body != node.attributes.end() &&
                     indicator != node.attributes.end()) {
-                    ss << ind << "setFaderCapturedArt(" << var << "._id, '"
+                    ss << ind << "if (typeof setFaderCapturedArt === 'function') {\n";
+                    ss << ind << "  setFaderCapturedArt(" << var << "._id, '"
                        << js_single_quote_escape(body->second) << "', "
                        << finite_numeric_attribute(node, "fader_body_natural_w", 0.0)
                        << ", "
@@ -535,6 +536,7 @@ static void generate_node(std::ostringstream& ss, const IRNode& node,
                        << (attr_bool(node, "fader_body_includes_static_track")
                                ? "true" : "false")
                        << ");\n";
+                    ss << ind << "}\n";
                 }
             }
 
@@ -1608,9 +1610,11 @@ static void emit_js_audio_widget(const NativeEmit& e) {
             if (fc_it != node.attributes.end()) {
                 try { frames = std::max(1, std::stoi(fc_it->second)); } catch (...) {}
             }
-            ss << ind << "setKnobSpriteStrip('" << id << "', '"
+            ss << ind << "if (typeof setKnobSpriteStrip === 'function') {\n";
+            ss << ind << "  setKnobSpriteStrip('" << id << "', '"
                << js_single_quote_escape(skin_it->second) << "', "
                << frames << ", 'vertical');\n";
+            ss << ind << "}\n";
             // Core-fit: when the importer recovered the body art's opaque
             // core (single-frame sprite bodies only), pass it so the engine
             // scales the disc to fill the knob box (shadow bleed extends
@@ -1726,7 +1730,8 @@ static void emit_js_audio_widget(const NativeEmit& e) {
             body != node.attributes.end()) {
             const auto indicator = node.attributes.find("fader_indicator_asset_path");
             if (indicator != node.attributes.end()) {
-                ss << ind << "setFaderCapturedArt('" << id << "', '"
+                ss << ind << "if (typeof setFaderCapturedArt === 'function') {\n";
+                ss << ind << "  setFaderCapturedArt('" << id << "', '"
                    << js_single_quote_escape(body->second) << "', "
                    << finite_numeric_attribute(node, "fader_body_natural_w", 0.0)
                    << ", "
@@ -1751,6 +1756,7 @@ static void emit_js_audio_widget(const NativeEmit& e) {
                    << (attr_bool(node, "fader_body_includes_static_track")
                            ? "true" : "false")
                    << ");\n";
+                ss << ind << "}\n";
             }
         }
         // Panel/design colours are fallbacks. Emit them before pixel-derived
@@ -2164,8 +2170,10 @@ static void emit_js_image_node(const NativeEmit& e) {
            << js_single_quote_escape(*node.style.object_fit) << "');\n";
     auto it = node.attributes.find("asset_path");
     if (it != node.attributes.end() && !it->second.empty()) {
-        ss << ind << "setImageSource('" << id << "', '"
+        ss << ind << "if (typeof setImageSource === 'function') {\n";
+        ss << ind << "  setImageSource('" << id << "', '"
            << js_single_quote_escape(it->second) << "');\n";
+        ss << ind << "}\n";
     }
     // Sprite sizing. A captured sprite (knob graphic, etc.) is exported as
     // a PNG that bleeds well past its layout box: the solid art sits in
