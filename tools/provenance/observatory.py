@@ -338,7 +338,13 @@ TIME_BUDGET_VIOLATIONS = frozenset({
     "pending-event-age-exceeded",
 })
 TIME_BUDGET_MODES = frozenset({"enforce", "report"})
-PENDING_EVENT_SCOPES = frozenset({"all", "introduced"})
+# How the pending-event budget is judged. all: the whole ledger against the
+# budget. introduced: only the pending observations the change adds. non-
+# increasing: the whole ledger against the larger of the budget and the
+# pending count already on the base, so a run may carry existing debt (and
+# reduce it) but never leaves more pending than the base had once the base is
+# at or over budget, and never more than the budget otherwise.
+PENDING_EVENT_SCOPES = frozenset({"all", "introduced", "non-increasing"})
 MIRROR_RECEIPT_INDEX = Path("provenance/mirror/receipts/index.json")
 
 
@@ -1158,15 +1164,32 @@ def verify(
         raise ObservatoryError(f"unknown time-budget mode: {time_budgets}")
     violations = list(report["budget_violations"])
     pending_budget_count: int | None = None
-    if pending_event_scope == "introduced":
-        pending_budget_count = pending_event_count(
-            root, git_base, events, pending_event_scope
-        )
+    pending_budget_limit = budgets["maximum_pending_events"]
+    base_pending: int | None = None
+    pending_detail = ""
+    if pending_event_scope in ("introduced", "non-increasing"):
+        if pending_event_scope == "introduced":
+            pending_budget_count = pending_event_count(
+                root, git_base, events, pending_event_scope
+            )
+        else:
+            pending_budget_count = pending_event_count(root, git_base, events, "all")
+            base_pending = base_pending_event_count(root, git_base, events)
+            pending_budget_limit = max(pending_budget_limit, base_pending)
         violations = [
             item for item in violations if item != "pending-event-count-exceeded"
         ]
-        if pending_budget_count > budgets["maximum_pending_events"]:
+        if pending_budget_count > pending_budget_limit:
             violations.append("pending-event-count-exceeded")
+            pending_detail = (
+                f"\n  {pending_budget_count} pending events judged under scope "
+                f"{pending_event_scope}; the limit is {pending_budget_limit}"
+                + (
+                    f" (the larger of the budget {budgets['maximum_pending_events']}"
+                    f" and the {base_pending} pending on the base)"
+                    if base_pending is not None else ""
+                )
+            )
     if time_budgets == "report":
         fatal = [item for item in violations if item not in TIME_BUDGET_VIOLATIONS]
         reported = [item for item in violations if item in TIME_BUDGET_VIOLATIONS]
@@ -1183,6 +1206,7 @@ def verify(
     if fatal:
         raise ObservatoryError(
             "observatory health budgets failed: " + ", ".join(fatal)
+            + pending_detail
             + describe_coverage_gaps(gaps, cursor)
         )
     if reported:
@@ -1192,7 +1216,10 @@ def verify(
             **report,
             "pending_event_budget_scope": pending_event_scope,
             "pending_event_budget_count": pending_budget_count,
+            "pending_event_budget_limit": pending_budget_limit,
         }
+        if base_pending is not None:
+            report["pending_event_budget_base"] = base_pending
     return report
 
 
@@ -1229,6 +1256,33 @@ def pending_event_count(
         for event in effective_observations(events)
         if event["disposition"] == "pending"
         and (introduced is None or str(event["event_id"]) in introduced)
+    )
+
+
+def base_pending_event_count(
+    root: Path,
+    git_base: str | None,
+    events: list[tuple[Path, dict[str, object]]],
+) -> int:
+    """Pending observations among the events already on git_base.
+
+    The base ledger is taken to be the current ledger without the events this
+    change adds. That holds only when the base's event files are unchanged:
+    append-only verification proves it for committed changes in
+    git_base..HEAD, but not for uncommitted working-tree edits, which the
+    receiver's in-place reconcile produces. The receiver therefore relies on
+    its reconcile writing only new event files. Without a base nothing counts
+    as existing debt.
+    """
+    if git_base is None:
+        return 0
+    added = new_event_ids(root, git_base, events)
+    return sum(
+        1
+        for event in effective_observations(
+            [(path, event) for path, event in events if str(event["event_id"]) not in added]
+        )
+        if event["disposition"] == "pending"
     )
 
 
@@ -1778,7 +1832,10 @@ def main(argv: list[str] | None = None) -> int:
         help=(
             "all: enforce the ledger-wide pending-event budget; "
             "introduced: on pull requests and queue entries, enforce it only "
-            "for pending events introduced by this change"
+            "for pending events introduced by this change; "
+            "non-increasing: the receiver's reconcile, which may carry the "
+            "base's pending debt but never ends above the larger of the budget "
+            "and the base's pending count"
         ),
     )
     verify_parser.add_argument("--output", type=Path)
