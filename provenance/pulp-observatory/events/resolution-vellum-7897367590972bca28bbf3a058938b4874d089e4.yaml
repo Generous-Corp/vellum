@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-7897367590972bca28bbf3a058938b4874d089e4",
+  "kind": "resolution",
+  "created_at": "2026-11-24T13:43:28Z",
+  "resolves": "vellum-7897367590972bca28bbf3a058938b4874d089e4",
+  "disposition": "framework-only",
+  "rationale": "Takes the fastest of three samples in the fan-out refusal timing check of Vellum's svg-asset-sanitize test. The test and sanitizer are Vellum's own. Nothing to port. Evidence, Pulp main b0ee92d21944d5c956603afd1108b575e50c1302 (full clone): [absent] `git -C <pulp> grep -c -F -e 'svg-asset-sanitize' b0ee92d21944 -- core tools test examples apple ship inspect` = 0; [control] `git -C <pulp> grep -c -F -e 'inline_declaration' b0ee92d21944 -- tools/import-design/svg_shape_lowering.cpp` = 2. [control] searches show the instrument finds the nearest Pulp counterpart. Classified by the Vellum lead under the owner's one-time delegation of 2026-11-24 (pulp-planning vellum-move/DECISIONS.md); any later resolution overrides it.",
+  "owner": "@vellum-lead",
+  "linked_commits": [
+    "7897367590972bca28bbf3a058938b4874d089e4"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}

@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-d7d42f3dffc383db65f23f1b6114e2260b937a9a",
+  "kind": "resolution",
+  "created_at": "2026-11-24T13:43:24Z",
+  "resolves": "vellum-d7d42f3dffc383db65f23f1b6114e2260b937a9a",
+  "disposition": "framework-only",
+  "rationale": "Vellum's svg-asset.js sanitizer now reads !important with white space before the keyword and in any case. The sanitizer is Vellum's own. Pulp's SVG lowering (inline_declaration in tools/import-design/svg_shape_lowering.cpp) truncates a value at the first '!', so it already accepts both spellings. Nothing to port. Evidence, Pulp main b0ee92d21944d5c956603afd1108b575e50c1302 (full clone): [absent] `git -C <pulp> grep -c -F -e 'svg-asset' b0ee92d21944 -- core tools test examples apple ship inspect` = 0; [control] `git -C <pulp> grep -c -F -e 'value.find('!')' b0ee92d21944 -- tools/import-design/svg_shape_lowering.cpp` = 1. [control] searches show the instrument finds the nearest Pulp counterpart. Classified by the Vellum lead under the owner's one-time delegation of 2026-11-24 (pulp-planning vellum-move/DECISIONS.md); any later resolution overrides it.",
+  "owner": "@vellum-lead",
+  "linked_commits": [
+    "d7d42f3dffc383db65f23f1b6114e2260b937a9a"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}
