@@ -316,7 +316,8 @@ extern "C" void vellum_mac_text_input_client_category_anchor();
                                    ? _dragTargetCapture.live_in(*root)
                                    : nullptr;
                 if (!root || !target ||
-                    !vellum::view::transfer_input_focus(*root, target)) {
+                    !vellum::view::transfer_input_focus(*root, target,
+                                                         vellum::view::FocusCause::pointer)) {
                     _dragTargetCapture.reset();
                     _focusedView = root
                                        ? vellum::view::focused_input_under_root(*root)
@@ -891,12 +892,6 @@ extern "C" void vellum_mac_text_input_client_category_anchor();
             else
                 next = vellum::view::View::focus_next(*self.rootView, old);
             if (next && next != old) {
-                vellum::view::ViewCapture next_capture;
-                next_capture.set(next);
-                if (old) {
-                    old->release_input_focus();
-                    old->on_focus_changed(false);
-                }
                 auto* liveRoot = self.rootView;
                 if (!liveRoot) {
                     _focusedView = nullptr;
@@ -909,14 +904,12 @@ extern "C" void vellum_mac_text_input_client_category_anchor();
                     [self setNeedsDisplay:YES];
                     return;
                 }
-                _focusedView = next;
-                _focusedView->on_focus_changed(true);
-                liveRoot = self.rootView;
-                _focusedView = liveRoot
-                                   ? next_capture.live_in(*liveRoot)
-                                   : nullptr;
-                if (_focusedView)
-                    _focusedView->claim_input_focus();
+                if (!vellum::view::transfer_input_focus(*liveRoot, next,
+                                                         vellum::view::FocusCause::keyboard)) {
+                    _focusedView = vellum::view::focused_input_under_root(*liveRoot);
+                } else {
+                    _focusedView = vellum::view::focused_input_under_root(*liveRoot);
+                }
             }
             [self setNeedsDisplay:YES];
             return;

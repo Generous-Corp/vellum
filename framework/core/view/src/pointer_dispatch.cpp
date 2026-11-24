@@ -126,8 +126,34 @@ void dispatch_dom_pointer_path(View& root,
 // synchronously claim a replacement (IME commit is the common case), so a
 // single snapshot is insufficient. The bounded fallback guarantees hostile
 // callbacks cannot spin forever while still leaving a focus slot latched.
+void deliver_focus_change(View& root, const ViewCapture& capture, bool gained, FocusCause cause) {
+    View* view = capture.live_in(root);
+    if (!view) return;
+    const auto ancestors = capture_path_to_root(view->parent());
+    {
+        DispatchLease lease(*view);
+        view->on_focus_changed(gained, cause);
+        if (capture.live_in(root)) {
+            auto hook = view->on_focus_event;
+            if (hook) hook(gained, cause);
+        }
+    }
+    if (!capture.live_in(root)) return;
+    for (const auto& ancestor_capture : ancestors) {
+        View* ancestor = ancestor_capture.live_in(root);
+        View* child = capture.live_in(root);
+        if (!ancestor || !child) continue;
+        DispatchLease lease(*ancestor);
+        ancestor->on_descendant_focus_changed(*child, gained, cause);
+        if (ancestor_capture.live_in(root)) {
+            auto hook = ancestor->on_descendant_focus_event;
+            if (hook) hook(*child, gained, cause);
+        }
+    }
+}
+
 bool drain_root_focus(View& root, const ViewCapture& protected_target,
-                      bool keep_protected_target) {
+                      bool keep_protected_target, FocusCause cause) {
     constexpr size_t kMaxReentrantFocusHops = 64;
     for (size_t hop = 0; hop < kMaxReentrantFocusHops; ++hop) {
         View* live_target = protected_target.has_value()
@@ -149,8 +175,7 @@ bool drain_root_focus(View& root, const ViewCapture& protected_target,
         ViewCapture current_capture;
         current_capture.set(current);
         current->release_input_focus();
-        if (View* live_current = current_capture.live_in(root))
-            live_current->on_focus_changed(false);
+        deliver_focus_change(root, current_capture, false, cause);
     }
 
     // Pathological focus callbacks can form a cycle. Do not call the virtual
@@ -215,11 +240,15 @@ bool yield_to_gesture_with_handoff(View& root, View*& drag_target,
 }
 
 bool transfer_input_focus(View& root, View* target) {
+    return transfer_input_focus(root, target, FocusCause::programmatic);
+}
+
+bool transfer_input_focus(View& root, View* target, FocusCause cause) {
     if (target && !still_in_tree(target, &root)) return false;
     ViewCapture target_capture;
     target_capture.set(target);
     const bool target_focusable = target && target->focusable();
-    if (!drain_root_focus(root, target_capture, target_focusable)) return false;
+    if (!drain_root_focus(root, target_capture, target_focusable, cause)) return false;
     if (!target) return false;
     target = target_capture.live_in(root);
     if (!target) return false;
@@ -231,13 +260,13 @@ bool transfer_input_focus(View& root, View* target) {
         // the call; the capture below decides whether it is still the same
         // view, still in this tree.
         DispatchLease lease(*target);
-        target->on_focus_changed(true);
+        deliver_focus_change(root, target_capture, true, cause);
     }
     target = target_capture.live_in(root);
     if (!target) return false;
     // A gain callback may also claim a replacement. The explicit clicked
     // target still wins; blur that replacement before publishing the target.
-    if (!drain_root_focus(root, target_capture, true)) return false;
+    if (!drain_root_focus(root, target_capture, true, cause)) return false;
     target = target_capture.live_in(root);
     if (!target) return false;
     target->claim_input_focus();
