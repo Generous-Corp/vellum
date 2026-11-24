@@ -899,11 +899,13 @@ printf 'tag=%s\n' "$TAG" >> "$GITHUB_OUTPUT"'''),
       'env': {'GH_TOKEN': '${{ github.token }}', 'TAG': '${{ steps.select.outputs.tag }}'},
       'run': 'set -euo pipefail\n'
              'python3 -I scripts/pretag_checks.py --tag "$TAG" --commit "$GITHUB_SHA" \\\n'
-             '  --snapshot-output "$RUNNER_TEMP/open-pr-snapshot.json"'},
+             '  --snapshot-output "$RUNNER_TEMP/open-pr-snapshot.json" \\\n'
+             '  --bump-evidence-output "$RUNNER_TEMP/release-bump-evidence.json"'},
      {'if': "steps.select.outputs.tag != ''",
       'uses': 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a',
       'with': {'name': 'release-open-pr-snapshot',
-               'path': '${{ runner.temp }}/open-pr-snapshot.json',
+               'path': '${{ runner.temp }}/open-pr-snapshot.json\n'
+                       '${{ runner.temp }}/release-bump-evidence.json\n',
                'if-no-files-found': 'error',
                'retention-days': '1'}},
      {'id': 'release',
@@ -1343,6 +1345,7 @@ echo "signed, pushed and froze $TAG at $OBJECT" >> "$GITHUB_STEP_SUMMARY"'''),
              'python3 -I scripts/release_request.py attestation --commit "$GITHUB_SHA" \\\n'
              '  --attested-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --tag "$tag" \\\n'
              '  --open-pr-snapshot-json "$RUNNER_TEMP/open-pr-snapshot.json" \\\n'
+             '  --release-bump-evidence-json "$RUNNER_TEMP/release-bump-evidence.json" \\\n'
              '  > "$RUNNER_TEMP/promotion-attestation.json"\n'
              'printf \'tag=%s\\nversion=%s\\n\' "$tag" "$version" >> "$GITHUB_OUTPUT"'},
      {'id': 'sign',

@@ -627,6 +627,20 @@ class Attestation(unittest.TestCase):
         with self.assertRaisesRegex(rr.ReleaseRequestError, "no mirror export receipt"):
             rr.attestation(root, head, "2026-10-31T12:00:00Z", "v0.1.10")
 
+    def test_the_attestation_signs_the_selection_snapshot_with_its_bump_evidence(self) -> None:
+        root, head = self.fixture()
+        snapshot = {"schema_version": 3, "kind": "github-open-pull-request-snapshot", "repositories": []}
+        evidence = {"schema": "vellum.release-bump-evidence.v1", "repository": "Generous-Corp/vellum", "pulls": []}
+        data = rr.attestation(root, head, "2026-10-31T12:00:00Z", "v0.1.10", snapshot, evidence)
+        self.assertEqual(data["open_pr_snapshot"], snapshot)
+        self.assertEqual(data["open_pr_snapshot_commit"], head)
+        self.assertEqual(data["open_pr_release_bump_evidence"], evidence)
+        self.assertEqual(data["open_pr_release_bump_evidence_sha256"], hashlib.sha256(
+            (json.dumps(evidence, sort_keys=True) + "\n").encode()).hexdigest())
+        for half in ((snapshot, None), (None, evidence)):
+            with self.subTest(half=half), self.assertRaisesRegex(rr.ReleaseRequestError, "signed together"):
+                rr.attestation(root, head, "2026-10-31T12:00:00Z", "v0.1.10", *half)
+
     def test_with_parity_the_attestation_binds_the_completion(self) -> None:
         root, head = self.fixture(parity=True)
         data = rr.attestation(root, head, "2026-10-31T12:00:00Z", "v0.1.12")
@@ -1335,6 +1349,8 @@ class ReleaseTagWorkflow(unittest.TestCase):
         self.assertIn("if: steps.select.outputs.tag != ''", checks)
         self.assertIn('python3 -I scripts/pretag_checks.py --tag "$TAG" --commit "$GITHUB_SHA"', checks)
         self.assertIn('--snapshot-output "$RUNNER_TEMP/open-pr-snapshot.json"', checks)
+        self.assertIn('--bump-evidence-output "$RUNNER_TEMP/release-bump-evidence.json"', checks)
+        self.assertIn("${{ runner.temp }}/release-bump-evidence.json", checks)
         self.assertIn("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", checks)
         self.assertNotIn("continue-on-error", self.select_job)
         self.assertIn("path: .exact-boundary-pulp", self.select_job)
@@ -1345,6 +1361,7 @@ class ReleaseTagWorkflow(unittest.TestCase):
     def test_the_tag_and_attestation_bind_the_pushed_commit(self) -> None:
         self.assertIn('attestation --commit "$GITHUB_SHA"', self.sign_job)
         self.assertIn('--open-pr-snapshot-json "$RUNNER_TEMP/open-pr-snapshot.json"', self.sign_job)
+        self.assertIn('--release-bump-evidence-json "$RUNNER_TEMP/release-bump-evidence.json"', self.sign_job)
         self.assertIn("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", self.sign_job)
         self.assertIn('tag -s -F "$RUNNER_TEMP/promotion-attestation.json" "$TAG" "$GITHUB_SHA"', self.sign_job)
         self.assertIn('--source-commit "$GITHUB_SHA"', self.sign_job)

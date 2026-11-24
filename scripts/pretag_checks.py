@@ -190,7 +190,7 @@ def git(*args: str, cwd: Path) -> str:
 
 class Runner:
     def __init__(self, root: Path, tag: str, commit: str, temp: Path, check_runs_commit: str | None = None,
-                 snapshot_output: Path | None = None) -> None:
+                 snapshot_output: Path | None = None, bump_evidence_output: Path | None = None) -> None:
         if not TAG.fullmatch(tag) or not SHA.fullmatch(commit):
             raise PretagError("the tag must be vMAJOR.MINOR.PATCH and the commit a full SHA")
         self.root, self.tag, self.commit, self.temp = root, tag, commit, temp
@@ -198,6 +198,7 @@ class Runner:
         # rehearses one reads the runs of a real commit instead (release_canary.py).
         self.check_runs_commit = check_runs_commit
         self.snapshot_output = snapshot_output
+        self.bump_evidence_output = bump_evidence_output
         self.outputs: dict[str, str] = {}
         token = os.environ.get("GH_TOKEN", "")
         self.expressions = {
@@ -284,12 +285,19 @@ class Runner:
                     return 1
         finally:
             git("tag", "-d", self.tag, cwd=self.root)
-        if self.snapshot_output is not None:
-            snapshot = self.temp / "open-pr-snapshot.json"
-            if not snapshot.is_file():
-                raise PretagError("the pre-tag authority replay did not record an open-PR snapshot")
-            self.snapshot_output.parent.mkdir(parents=True, exist_ok=True)
-            self.snapshot_output.write_bytes(snapshot.read_bytes())
+        # The release tag's run judges exactly what this replay judged: the
+        # open-PR snapshot and the release-bump content evidence read with it.
+        for output, name, what in (
+            (self.snapshot_output, "open-pr-snapshot.json", "an open-PR snapshot"),
+            (self.bump_evidence_output, "release-bump-evidence.json", "release-bump evidence"),
+        ):
+            if output is None:
+                continue
+            recorded = self.temp / name
+            if not recorded.is_file():
+                raise PretagError(f"the pre-tag authority replay did not record {what}")
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(recorded.read_bytes())
         print(f"every content check the {self.tag} pipeline runs on {self.commit} passes")
         return 0
 
@@ -303,11 +311,14 @@ def main(argv: list[str]) -> int:
                         "(for a rehearsal on a commit that exists only locally)")
     parser.add_argument("--snapshot-output", type=Path,
                         help="copy the pre-tag authority open-PR snapshot to this path")
+    parser.add_argument("--bump-evidence-output", type=Path,
+                        help="copy the release-bump evidence judged with that snapshot to this path")
     args = parser.parse_args(argv)
     try:
         with tempfile.TemporaryDirectory(prefix="pretag-") as temporary:
             return Runner(args.root.resolve(), args.tag, args.commit, Path(temporary), args.check_runs_commit,
-                          args.snapshot_output.resolve() if args.snapshot_output else None).main()
+                          args.snapshot_output.resolve() if args.snapshot_output else None,
+                          args.bump_evidence_output.resolve() if args.bump_evidence_output else None).main()
     except (OSError, subprocess.CalledProcessError, PretagError) as error:
         print(f"pretag checks refused: {error}", file=sys.stderr)
         return 1

@@ -121,14 +121,20 @@ jobs:
         run: |
           set -euo pipefail
           python3 -I scripts/pretag_checks.py --tag "$TAG" --commit "$GITHUB_SHA" \
-            --snapshot-output "$RUNNER_TEMP/open-pr-snapshot.json"
+            --snapshot-output "$RUNNER_TEMP/open-pr-snapshot.json" \
+            --bump-evidence-output "$RUNNER_TEMP/release-bump-evidence.json"
 
+      # The tag's own provenance run judges the open-PR audit against exactly
+      # what this selection judged, signed into the tag: the snapshot and the
+      # release-bump content evidence read with it.
       - name: Preserve the selection open-PR snapshot for signing
         if: steps.select.outputs.tag != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: release-open-pr-snapshot
-          path: ${{ runner.temp }}/open-pr-snapshot.json
+          path: |
+            ${{ runner.temp }}/open-pr-snapshot.json
+            ${{ runner.temp }}/release-bump-evidence.json
           if-no-files-found: error
           retention-days: 1
 
@@ -337,6 +343,7 @@ jobs:
           python3 -I scripts/release_request.py attestation --commit "$GITHUB_SHA" \
             --attested-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --tag "$tag" \
             --open-pr-snapshot-json "$RUNNER_TEMP/open-pr-snapshot.json" \
+            --release-bump-evidence-json "$RUNNER_TEMP/release-bump-evidence.json" \
             > "$RUNNER_TEMP/promotion-attestation.json"
           printf 'tag=%s\nversion=%s\n' "$tag" "$version" >> "$GITHUB_OUTPUT"
 
