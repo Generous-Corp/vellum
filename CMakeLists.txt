@@ -696,10 +696,15 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}" -m unittest discover
             -s tools/mirror -p "test_*.py"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.mirror-platform-record-gate
+        COMMAND "${Python3_EXECUTABLE}" -m unittest
+            tools.mirror.test_platform_cmake.PlatformCmakeTests
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     if(VELLUM_PACKAGE_HAS_MIRROR)
         add_test(NAME vellum.mirror-export-targets
             COMMAND "${CMAKE_COMMAND}"
                 "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
                 "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunMirrorExportConsumer.cmake")
         set(_vellum_view_audio_archive_arg)

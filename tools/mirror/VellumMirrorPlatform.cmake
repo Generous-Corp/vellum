@@ -20,10 +20,24 @@ endfunction()
 # planner already refuses systems without a verified platform record, so the
 # mirror can use the ordinary shared-library rules on declared non-Darwin
 # systems.
+set(_vellum_mirror_platform_module_dir "${CMAKE_CURRENT_LIST_DIR}")
 function(vellum_mirror_require_packaging)
-    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR
-       CMAKE_SYSTEM_NAME STREQUAL "Linux" OR
-       CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    set(_records_root "${_vellum_mirror_platform_module_dir}/../../provenance/framework/platforms")
+    if(DEFINED VELLUM_MIRROR_PLATFORM_RECORD_ROOT)
+        set(_records_root "${VELLUM_MIRROR_PLATFORM_RECORD_ROOT}")
+    endif()
+    set(_declared_systems Darwin)
+    file(GLOB _records "${_records_root}/*/record.json")
+    foreach(_record IN LISTS _records)
+        file(READ "${_record}" _record_json)
+        string(JSON _record_system ERROR_VARIABLE _record_error
+            GET "${_record_json}" configure identity system)
+        if(NOT _record_error)
+            list(APPEND _declared_systems "${_record_system}")
+        endif()
+    endforeach()
+    list(REMOVE_DUPLICATES _declared_systems)
+    if(CMAKE_SYSTEM_NAME IN_LIST _declared_systems)
         return()
     endif()
     message(FATAL_ERROR

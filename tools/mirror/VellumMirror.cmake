@@ -480,6 +480,13 @@ endif()
 # which arrive through the imported target and are part of V8's ABI. The
 # unit's objects live in vellum-skia-dawn-provider, which links libv8.dylib
 # and finds it beside itself once installed.
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set(_vellum_v8_provider_path "@rpath/libv8.dylib")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(_vellum_v8_provider_path "libv8.so")
+else()
+    set(_vellum_v8_provider_path "v8.dll")
+endif()
 set(VELLUM_MIRROR_HAS_V8 OFF)
 if(VELLUM_ENABLE_V8)
     if(NOT TARGET pulp-view-script)
@@ -497,7 +504,7 @@ if(VELLUM_ENABLE_V8)
     target_compile_definitions(pulp-view-script PRIVATE
         PULP_HAS_V8=1
         PULP_V8_PROVIDER_KIND="v8builder"
-        PULP_V8_PROVIDER_PATH="@rpath/libv8.dylib"
+        PULP_V8_PROVIDER_PATH="${_vellum_v8_provider_path}"
         PULP_V8_EXPECTED_RUNTIME_VERSION="${VELLUM_V8_VERSION}")
     target_link_libraries(vellum-skia-dawn-provider PRIVATE vellum-v8)
     install(FILES "${VELLUM_V8_LIBRARY}"
@@ -524,8 +531,26 @@ if(TARGET pulp-view-core)
         "$<TARGET_PROPERTY:pulp-view-core,COMPILE_DEFINITIONS>")
 endif()
 
-# Everything below packages and links with Apple-only rules.
+# The remaining packaging rules share one platform split. Darwin keeps its
+# symbol-list and re-export controls. Other declared platforms use ordinary
+# shared-library exports until slice 0b supplies equivalent controls.
 vellum_mirror_require_packaging()
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set(_vellum_mirror_install_rpath "@loader_path;@loader_path/../../${CMAKE_INSTALL_LIBDIR}")
+    set(_vellum_mirror_macos_architectures arm64)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(_vellum_mirror_install_rpath "\$ORIGIN;\$ORIGIN/../../${CMAKE_INSTALL_LIBDIR}")
+    set(_vellum_mirror_macos_architectures)
+else()
+    set(_vellum_mirror_install_rpath "")
+    set(_vellum_mirror_macos_architectures)
+endif()
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    message(STATUS
+        "Vellum: ${CMAKE_SYSTEM_NAME} mirror libraries omit Darwin "
+        "-exported_symbols_list, -unexported_symbols_list, and re-export controls; "
+        "slice 0b owns equivalent export controls")
+endif()
 
 # ── Package libraries ──────────────────────────────────────────────────────
 # One shared library per unit, each holding every object of its mirrored
@@ -545,11 +570,14 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
     set_target_properties("${_library}" PROPERTIES
         EXPORT_NAME "Mirror${_first}${_rest}"
         OUTPUT_NAME "vellum-mirror-${_vellum_mirror_unit}${VELLUM_RUNTIME_IDENTITY_SUFFIX}"
-        MACOSX_RPATH ON
         BUILD_WITH_INSTALL_RPATH ON
-        INSTALL_RPATH "@loader_path;@loader_path/../../${CMAKE_INSTALL_LIBDIR}"
-        OSX_ARCHITECTURES arm64
-        MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
+        INSTALL_RPATH "${_vellum_mirror_install_rpath}")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        set_target_properties("${_library}" PROPERTIES
+            MACOSX_RPATH ON
+            OSX_ARCHITECTURES ${_vellum_mirror_macos_architectures}
+            MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
+    endif()
     set(_whole)
     set(_external)
     set(_skia OFF)

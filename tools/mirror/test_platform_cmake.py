@@ -39,6 +39,13 @@ class PlatformCmakeTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("requires a verified platform closure", " ".join(result.stderr.split()))
 
+    def test_packaging_allowlist_reads_platform_records(self) -> None:
+        source = MODULE.read_text(encoding="utf-8")
+        self.assertIn('file(GLOB _records "${_records_root}/*/record.json")', source)
+        self.assertIn('string(JSON _record_system', source)
+        self.assertNotIn('CMAKE_SYSTEM_NAME STREQUAL "Linux"', source)
+        self.assertNotIn('CMAKE_SYSTEM_NAME STREQUAL "Windows"', source)
+
     def prefix_flags(self, c_id: str, cxx_id: str, variant: str = "") -> str:
         result = run_cmake(
             f'set(CMAKE_C_COMPILER_ID {c_id})\nset(CMAKE_CXX_COMPILER_ID {cxx_id})\n'
