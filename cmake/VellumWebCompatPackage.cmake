@@ -1,7 +1,8 @@
 # Consumer helper for Vellum's installed web-compat package.
+@PACKAGE_INIT@
 set(VELLUM_WEB_COMPAT_ROOT "${CMAKE_CURRENT_LIST_DIR}")
-# lib/cmake/Vellum/web-compat -> the install prefix is four levels up.
-get_filename_component(VELLUM_WEB_COMPAT_PREFIX "${VELLUM_WEB_COMPAT_ROOT}/../../../.." ABSOLUTE)
+# Use the configured install destination so nested library directories relocate.
+set(VELLUM_WEB_COMPAT_PREFIX "${PACKAGE_PREFIX_DIR}")
 set(VELLUM_WEB_COMPAT_PRELUDE_DIR "${VELLUM_WEB_COMPAT_PREFIX}/mirror/share/web-compat/preludes")
 set(VELLUM_WEB_COMPAT_SCRIPT_DIR "${VELLUM_WEB_COMPAT_ROOT}/../scripts")
 set(VELLUM_WEB_COMPAT_EMBED_PRELUDES "${VELLUM_WEB_COMPAT_ROOT}/vellum_embed_preludes.py")

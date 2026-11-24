@@ -60,6 +60,24 @@ test('explicit state resolver selects and paints a captured reference state', ()
   ]);
 });
 
+// A host that grants no filesystem capability does not define setImageSource,
+// so painting a captured state must skip the image load instead of throwing.
+test('captured state paints without setImageSource when the host omits it', () => {
+  const calls = [];
+  const sandbox = evaluateEntry({
+    visualAuthority: 'reference',
+    stateAtlas: [{ id: 'home', image: 'home.png', match: null, activate: [] }],
+    productPrelude: "globalThis.__pulpMaterializedStateResolver__ = () => 'home';",
+    bridge: {
+      setImageSource: undefined,
+      setVisible: (id, visible) => calls.push(['visible', id, visible]),
+    },
+  });
+
+  assert.equal(sandbox.__pulpRefreshMaterializedState__(), 'home');
+  assert.deepEqual(calls.at(-1), ['visible', '__pulp_materialized_state_home', true]);
+});
+
 // One application reads each registry node's parent once for the shared index,
 // plus once per resolved binding when translating that node's coordinate space.
 function applyAndCountParentReads(registrySize, bindingCount) {

@@ -59,9 +59,16 @@ endforeach()
 # so they install under the mirror scope the SDK payload rules reserve for it.
 install(FILES ${_vellum_web_compat_prelude_paths}
     DESTINATION "mirror/share/web-compat/preludes")
+include(CMakePackageConfigHelpers)
+configure_package_config_file(
+    "${CMAKE_CURRENT_LIST_DIR}/VellumWebCompatPackage.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/VellumWebCompatPackage.cmake"
+    INSTALL_DESTINATION "${_vellum_web_compat_install_root}"
+    NO_SET_AND_CHECK_MACRO
+    NO_CHECK_REQUIRED_COMPONENTS_MACRO)
 install(FILES
     "${CMAKE_CURRENT_LIST_DIR}/vellum_embed_preludes.py"
-    "${CMAKE_CURRENT_LIST_DIR}/VellumWebCompatPackage.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/VellumWebCompatPackage.cmake"
     DESTINATION "${_vellum_web_compat_install_root}")
 
 # The manifest records content hashes, so a changed prelude must re-run

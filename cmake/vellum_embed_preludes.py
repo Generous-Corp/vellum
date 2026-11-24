@@ -83,6 +83,7 @@ def main(argv: list[str]) -> int:
     parts.append(f"const std::size_t kAllCount = {len(names)};\n\n")
     parts.append(SOURCE_DEFINITION.format(inflate=args.inflate_function))
     parts.append(f"}}  // namespace {args.namespace}\n")
+    args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text("".join(parts), encoding="utf-8")
     return 0
 

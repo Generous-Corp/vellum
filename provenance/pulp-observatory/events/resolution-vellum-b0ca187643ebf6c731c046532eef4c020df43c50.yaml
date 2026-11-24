@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-b0ca187643ebf6c731c046532eef4c020df43c50",
+  "kind": "resolution",
+  "created_at": "2026-11-24T07:21:00Z",
+  "resolves": "vellum-b0ca187643ebf6c731c046532eef4c020df43c50",
+  "disposition": "framework-only",
+  "rationale": "Vellum-only test runner: Vellum pins no Catch2, so its copy of the conformance test links a local mini_test.hpp. Pulp's copy links Catch2 (Catch2::Catch2WithMain: 426 in 106 files) and needs no runner. Pulp search at origin/main 25e27ae8ce96 (git grep -w -F over the whole tree, integrations/ included) for mini_test and mini_test.hpp returns 0; control SkiaSurface on the same search returns 389 in 112 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-09, 'Classify the pending Vellum observatory events instead of raising the budget'); no schema or API delta recorded on the event. Any later resolution overrides this.",
+  "owner": "@danielraffel",
+  "linked_commits": [
+    "b0ca187643ebf6c731c046532eef4c020df43c50"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}

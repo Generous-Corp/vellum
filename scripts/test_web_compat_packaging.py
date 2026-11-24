@@ -171,7 +171,7 @@ class WebCompatPackagingTests(unittest.TestCase):
     def _cmake(self, *args):
         return subprocess.run(["cmake", *args], capture_output=True, text=True)
 
-    def _install_package(self, root):
+    def _install_package(self, root, libdir="lib"):
         """Copies the producer inputs into `root`, installs them, returns the prefix.
 
         The copy lets a test edit a prelude without touching the repository.
@@ -197,9 +197,11 @@ class WebCompatPackagingTests(unittest.TestCase):
             '  "include(\\"\\${CMAKE_CURRENT_LIST_DIR}/web-compat/VellumWebCompatPackage.cmake\\")\\n")\n'
             'install(FILES "${CMAKE_CURRENT_BINARY_DIR}/VellumConfig.cmake"\n'
             '  DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/Vellum")\n')
+        self.libdir = libdir
         self.producer_build = root / "build"
         prefix = root / "sdk"
-        for cmd in (["-S", str(producer), "-B", str(self.producer_build)],
+        for cmd in (["-S", str(producer), "-B", str(self.producer_build),
+                     f"-DCMAKE_INSTALL_LIBDIR={libdir}"],
                     ["--install", str(self.producer_build), "--prefix", str(prefix)]):
             result = self._cmake(*cmd)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -208,7 +210,7 @@ class WebCompatPackagingTests(unittest.TestCase):
 
     def _manifest(self, prefix):
         return json.loads(
-            (prefix / "lib/cmake/Vellum/web-compat/vellum-web-compat-manifest.json").read_text())
+            (prefix / self.libdir / "cmake/Vellum/web-compat/vellum-web-compat-manifest.json").read_text())
 
     def _consumer(self, root, prefix, body, languages="NONE", sources=None, name="consumer"):
         consumer = root / name
@@ -220,7 +222,8 @@ class WebCompatPackagingTests(unittest.TestCase):
             f'project(WebCompatConsumer LANGUAGES {languages})\n'
             'find_package(Vellum CONFIG REQUIRED)\n' + body)
         return consumer, self._cmake("-S", str(consumer), "-B", str(root / f"{name}-build"),
-                                     f"-DCMAKE_PREFIX_PATH={prefix}")
+                                     f"-DCMAKE_PREFIX_PATH={prefix}",
+                                     f"-DVellum_DIR={prefix / self.libdir / 'cmake/Vellum'}")
 
     def test_manifest_matches_the_source_registry(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -276,9 +279,26 @@ class WebCompatPackagingTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("c++") or shutil.which("clang++"),
                          "the consumer compiles and links a C++ target")
     def test_consumer_compiles_links_and_inflates_a_prelude(self):
+        self._check_consumer()
+
+    @unittest.skipUnless(shutil.which("c++") or shutil.which("clang++"),
+                         "the consumer compiles and links a C++ target")
+    def test_consumer_relocates_nested_libdir(self):
+        self._check_consumer(libdir="lib/vellum", relocate=True)
+
+    @unittest.skipUnless(shutil.which("c++") or shutil.which("clang++"),
+                         "the consumer compiles and links a C++ target")
+    def test_consumer_separate_source_and_header_directories(self):
+        self._check_consumer(separate_outputs=True)
+
+    def _check_consumer(self, libdir="lib", relocate=False, separate_outputs=False):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            prefix = self._install_package(root)
+            prefix = self._install_package(root, libdir)
+            if relocate:
+                moved = root / "relocated sdk"
+                prefix.rename(moved)
+                prefix = moved
             sources = {
                 "inflate.hpp": (
                     '#pragma once\n#include <cstddef>\n#include <cstdint>\n'
@@ -317,6 +337,8 @@ class WebCompatPackagingTests(unittest.TestCase):
                 '"${CMAKE_CURRENT_BINARY_DIR}/gen" "${CMAKE_CURRENT_SOURCE_DIR}")\n'
                 'target_compile_features(prelude_consumer PRIVATE cxx_std_17)\n'
                 'target_link_libraries(prelude_consumer PRIVATE ZLIB::ZLIB)\n')
+            if separate_outputs:
+                body = body.replace("/gen/preludes.cpp", "/source/nested/preludes.cpp")
             _, configured = self._consumer(root, prefix, body, "CXX", sources)
             self.assertEqual(configured.returncode, 0, configured.stdout + configured.stderr)
             build = root / "consumer-build"
@@ -354,7 +376,7 @@ class WebCompatPackagingTests(unittest.TestCase):
             out = Path(tmp)
             inputs = [str(VIEW / "js/css-colors.js"), str(VIEW / "js/web-compat-element.js")]
             framework = out / "framework.cpp"
-            installed = out / "installed.cpp"
+            installed = out / "separate/source/installed.cpp"
             for command in (
                     ["python3", str(VIEW / "js/embed_js.py"), str(framework), *inputs],
                     ["python3", str(ROOT / "cmake/vellum_embed_preludes.py"), str(installed),

@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-7c6dacaf9eb81de3d4debec8133cb5b96a865afc",
+  "kind": "resolution",
+  "created_at": "2026-11-24T07:21:00Z",
+  "resolves": "vellum-7c6dacaf9eb81de3d4debec8133cb5b96a865afc",
+  "disposition": "framework-only",
+  "rationale": "Vellum copy of Pulp's own emitter conformance gate: authoring/design_pipeline/tests/design_emitter_conformance_test.cpp is Pulp's test/test_design_emitter_conformance.cpp with pulp:: -> vellum:: and PULP_ -> VELLUM_ renames and Vellum fixture paths (diff of the two files is renames plus the temp-directory line). Pulp still carries the original (PULP_CONFORMANCE_FIXTURE: 7 in 1 file; test_design_emitter_conformance.cpp: 10 in 8 files), so nothing flows back. Pulp search at origin/main 25e27ae8ce96 (git grep -w -F over the whole tree, integrations/ included) for VELLUM_CONFORMANCE_FIXTURE, VELLUM_REPO_ROOT, vellum-emitter-conformance-gen and design_emitter_conformance_test returns 0; control SkiaSurface on the same search returns 389 in 112 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-09, 'Classify the pending Vellum observatory events instead of raising the budget'); no schema or API delta recorded on the event. Any later resolution overrides this.",
+  "owner": "@danielraffel",
+  "linked_commits": [
+    "7c6dacaf9eb81de3d4debec8133cb5b96a865afc"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}

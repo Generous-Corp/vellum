@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-dfcd76587e0c1dae160609c79caa3272318aadb6",
+  "kind": "resolution",
+  "created_at": "2026-11-24T07:21:00Z",
+  "resolves": "vellum-dfcd76587e0c1dae160609c79caa3272318aadb6",
+  "disposition": "framework-only",
+  "rationale": "Vellum build wiring: force-loads the view-audio archive into Vellum's conformance test; af17426f1 later removes it. Pulp links its own audio displays normally. Pulp search at origin/main 25e27ae8ce96 (git grep -w -F over the whole tree, integrations/ included) for VELLUM_VIEW_AUDIO_ARCHIVE returns 0; control SkiaSurface on the same search returns 389 in 112 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-09, 'Classify the pending Vellum observatory events instead of raising the budget'); no schema or API delta recorded on the event. Any later resolution overrides this.",
+  "owner": "@danielraffel",
+  "linked_commits": [
+    "dfcd76587e0c1dae160609c79caa3272318aadb6"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}
