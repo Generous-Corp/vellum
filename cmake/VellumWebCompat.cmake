@@ -55,12 +55,21 @@ foreach(_vellum_web_compat_prelude IN LISTS _vellum_web_compat_preludes)
     list(APPEND _vellum_web_compat_prelude_paths
         "${_vellum_web_compat_source_dir}/${_vellum_web_compat_prelude}")
 endforeach()
+# The preludes are mirrored framework source and keep its names byte for byte,
+# so they install under the mirror scope the SDK payload rules reserve for it.
 install(FILES ${_vellum_web_compat_prelude_paths}
-    DESTINATION "${_vellum_web_compat_install_root}/preludes")
+    DESTINATION "mirror/share/web-compat/preludes")
 install(FILES
-    "${_vellum_web_compat_source_dir}/embed_js.py"
+    "${CMAKE_CURRENT_LIST_DIR}/vellum_embed_preludes.py"
     "${CMAKE_CURRENT_LIST_DIR}/VellumWebCompatPackage.cmake"
     DESTINATION "${_vellum_web_compat_install_root}")
+
+# The manifest records content hashes, so a changed prelude must re-run
+# configure or the installed manifest goes stale.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    ${_vellum_web_compat_prelude_paths}
+    ${_vellum_web_compat_script_paths}
+    "${CMAKE_CURRENT_LIST_DIR}/vellum_embed_preludes.py")
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(_vellum_web_compat_manifest "{\n  \"schema\": \"vellum.web-compat.v1\",\n  \"version\": \"${PROJECT_VERSION}\",\n  \"preludes\": [\n")
@@ -94,6 +103,12 @@ endforeach()
 string(APPEND _vellum_web_compat_manifest "  ]\n}\n")
 set(_vellum_web_compat_manifest_file
     "${CMAKE_CURRENT_BINARY_DIR}/vellum-web-compat-manifest.json")
-file(WRITE "${_vellum_web_compat_manifest_file}" "${_vellum_web_compat_manifest}")
+set(_vellum_web_compat_existing_manifest "")
+if(EXISTS "${_vellum_web_compat_manifest_file}")
+    file(READ "${_vellum_web_compat_manifest_file}" _vellum_web_compat_existing_manifest)
+endif()
+if(NOT "${_vellum_web_compat_existing_manifest}" STREQUAL "${_vellum_web_compat_manifest}")
+    file(WRITE "${_vellum_web_compat_manifest_file}" "${_vellum_web_compat_manifest}")
+endif()
 install(FILES "${_vellum_web_compat_manifest_file}"
     DESTINATION "${_vellum_web_compat_install_root}")
