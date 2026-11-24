@@ -114,7 +114,7 @@ FRAMEWORK_TEST(native_focus_transfer_reaches_real_widget_bridge) {
         "target.addEventListener('focusin', function () { focusInSeen.push(1); });"
         "target.addEventListener('blur', function () { blurSeen.push(1); });"
         "target.addEventListener('focusout', function () { focusOutSeen.push(1); });"
-        "parent.appendChild(target); document.body.appendChild(parent);"
+        "document.body.appendChild(parent); parent.appendChild(target);"
         "var style = document.createElement('style');"
         "style.textContent = '#focus-parent:focus-within { color: red; }';"
         "document.body.appendChild(style);");
