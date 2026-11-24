@@ -721,7 +721,8 @@ class Wiring(unittest.TestCase):
         self.assertEqual(gpu.count("startsWith(github.ref, 'refs/tags/') && "
                                    "!startsWith(github.ref, 'refs/tags/authority/')"), 2)
         provenance = (WORKFLOWS / "provenance.yml").read_text()
-        self.assertIn('release_readiness+=(--release-tag "${BASH_REMATCH[1]}")', provenance)
+        self.assertIn('release_readiness+=(--release-tag "${BASH_REMATCH[1]}" --dry-run-tag "$GITHUB_REF_NAME")',
+                      provenance)
 
 
 if __name__ == "__main__":
