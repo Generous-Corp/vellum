@@ -114,9 +114,11 @@ void load_script_before_deadline(WidgetBridge& bridge, ScriptEngine& engine,
         std::rethrow_exception(load_error);
 }
 
+// The font file extensions sealed from beside a path-backed script.
 bool is_panel_font_file(const std::filesystem::path& path) {
     auto ext = path.extension().string();
-    for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    for (auto& c : ext)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return ext == ".ttf" || ext == ".otf" || ext == ".woff" || ext == ".woff2";
 }
 
@@ -191,42 +193,79 @@ std::unique_ptr<value::ParamModel> read_only_view(value::ParamModel& source,
 
 } // namespace
 
+// A path-backed script has no embedded files, so the fonts beside it are read
+// here and sealed into each bridge under their script-relative names, the
+// names an embedded panel uses for the same files. The panel then registers them with registerEmbeddedFont
+// and needs no Filesystem grant. Bytes are kept for the session's life, since
+// a retired realm's bridge may still point at them; a file is re-read only
+// when it changes.
 struct ScriptedUiSession::DiskFontCache {
-    struct Entry { std::filesystem::file_time_type write_time; std::shared_ptr<const std::vector<unsigned char>> bytes; };
+    struct Entry {
+        std::filesystem::file_time_type write_time;
+        std::shared_ptr<const std::vector<unsigned char>> bytes;
+    };
     std::unordered_map<std::string, Entry> by_name;
     std::vector<std::shared_ptr<const std::vector<unsigned char>>> retained;
 };
 
-std::vector<WidgetBridge::EmbeddedAsset> ScriptedUiSession::sealed_assets_for(const std::filesystem::path& script) {
+std::vector<WidgetBridge::EmbeddedAsset>
+ScriptedUiSession::sealed_assets_for(const std::filesystem::path& script) {
     auto assets = embedded_assets_;
-    if (!script_source_.empty() || script.empty()) return assets;
+    if (!script_source_.empty() || script.empty())
+        return assets;
     namespace fs = std::filesystem;
+    constexpr std::size_t kMaxFiles = 256;
+    constexpr std::uintmax_t kMaxTotalBytes = 128u * 1024u * 1024u;
     std::error_code ec;
     const auto dir = fs::weakly_canonical(script.parent_path(), ec);
-    if (ec || dir.empty()) return assets;
-    if (!disk_fonts_) disk_fonts_ = std::make_shared<DiskFontCache>();
-    std::size_t files = 0; std::uintmax_t total = 0;
-    for (auto it = fs::recursive_directory_iterator(dir, fs::directory_options::skip_permission_denied, ec);
+    if (ec || dir.empty())
+        return assets;
+    if (!disk_fonts_)
+        disk_fonts_ = std::make_shared<DiskFontCache>();
+    std::size_t files = 0;
+    std::uintmax_t total = 0;
+    for (auto it = fs::recursive_directory_iterator(
+             dir, fs::directory_options::skip_permission_denied, ec);
          !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
         const auto& path = it->path();
+        const auto leaf = path.filename().string();
         std::error_code entry_ec;
-        if (it->is_directory(entry_ec)) { if (path.filename().string().starts_with('.') || path.filename() == "node_modules") it.disable_recursion_pending(); continue; }
-        if (!is_panel_font_file(path) || !it->is_regular_file(entry_ec)) continue;
+        if (it->is_directory(entry_ec)) {
+            // Hidden directories, dependency trees and build trees beside the
+            // script are not part of the panel.
+            if ((!leaf.empty() && leaf.front() == '.') || leaf == "node_modules" ||
+                fs::exists(path / "CMakeCache.txt", entry_ec))
+                it.disable_recursion_pending();
+            continue;
+        }
+        if (!is_panel_font_file(path) || !it->is_regular_file(entry_ec))
+            continue;
+        // A symlink beside the script must not reach a file outside it.
         const auto real = fs::weakly_canonical(path, entry_ec);
-        if (entry_ec || !runtime::is_within_directory(dir, real)) continue;
+        if (entry_ec || !runtime::is_within_directory(dir, real))
+            continue;
         const auto size = fs::file_size(real, entry_ec);
-        if (entry_ec || size == 0 || size > kMaxShippedFontBytes || ++files > 256 || (total += size) > 128u * 1024u * 1024u) continue;
+        if (entry_ec || size == 0 || size > kMaxShippedFontBytes)
+            continue;
+        if (++files > kMaxFiles || (total += size) > kMaxTotalBytes)
+            break;
         const auto name = path.lexically_relative(dir).generic_string();
         const auto write_time = fs::last_write_time(real, entry_ec);
         auto& entry = disk_fonts_->by_name[name];
         if (!entry.bytes || entry.write_time != write_time) {
             std::ifstream in(real, std::ios::binary);
-            auto bytes = std::make_shared<std::vector<unsigned char>>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-            if (bytes->empty()) continue;
-            entry = {write_time, bytes}; disk_fonts_->retained.push_back(std::move(bytes));
+            auto bytes = std::make_shared<std::vector<unsigned char>>(
+                std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+            if (bytes->empty())
+                continue;
+            entry = {write_time, bytes};
+            disk_fonts_->retained.push_back(std::move(bytes));
         }
-        const bool embedded = std::any_of(assets.begin(), assets.end(), [&](const auto& a) { return a.name == name; });
-        if (!embedded) assets.push_back({name, entry.bytes->data(), entry.bytes->size()});
+        // A file embedded at build time wins over one of the same name on disk.
+        const bool embedded = std::any_of(assets.begin(), assets.end(),
+                                          [&](const auto& a) { return a.name == name; });
+        if (!embedded)
+            assets.push_back({name, entry.bytes->data(), entry.bytes->size()});
     }
     return assets;
 }

@@ -3162,8 +3162,14 @@ std::string generate_pulp_js(const DesignIR& ir, const CodeGenOptions& opts) {
     ss << "if (typeof setSubpixelLayout === 'function') setSubpixelLayout('', true);\n"
        << "if (typeof setCapturedFrameRoot === 'function') setCapturedFrameRoot('', true);\n\n";
 
-    // Register bundled fonts before any setFontFamily. Localized faces use the
-    // sealed, script-relative bridge API and need no Filesystem capability.
+    // Register bundled fonts before any setFontFamily, so a family resolves to
+    // the shipped face rather than a same-named system font, with each
+    // @font-face rule's declared weight range. A face that sits beside the
+    // script (the path the export pass localizes it to) is sealed into a
+    // shipped panel, so it registers by that name with registerEmbeddedFont,
+    // which needs no capability grant. Only a face reachable solely by an
+    // absolute path falls back to the Filesystem-gated registerFont; emitting
+    // that call for a sealed face would make the panel declare Filesystem.
     if (!ir.font_family_assets.empty()) {
         bool any = false;
         for (const auto& fa : ir.font_family_assets) {

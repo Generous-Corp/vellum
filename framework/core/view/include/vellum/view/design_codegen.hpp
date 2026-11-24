@@ -72,6 +72,13 @@ struct CodeGenOptions {
 /// Native mode (default) uses createCol/createRow/createKnob + setFlex.
 /// Web-compat mode uses document.createElement + el.style.
 std::string generate_pulp_js(const DesignIR& ir, const CodeGenOptions& opts = {});
+
+/// The script-relative name a bundled font is sealed under in a shipped panel,
+/// or "" when it has none. It is the asset's localized `local_path` (else the
+/// face's `resolved_path`) when that is a safe relative path: no scheme, no
+/// root, no `..`. `generate_pulp_js` registers such a face with
+/// `registerEmbeddedFont` under this name, and a tool that runs the panel can
+/// seal the same file under it.
 std::string sealed_font_asset_name(const DesignIR& ir, const IRFontAsset& face);
 
 struct CppExportOptions {

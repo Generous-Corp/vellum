@@ -55,12 +55,6 @@ struct Segment {
     std::string alias;
 };
 
-// A shipped font larger than this is not read: no real face is near it, and
-// the bytes are copied whole into the registry.
-
-// TrueType (0x00010000 or 'true'), OpenType ('OTTO') or WOFF2 ('wOF2'): the
-// containers the platform font managers and the WOFF2 decoder accept.
-
 std::optional<std::vector<std::uint8_t>> read_font(const IRFontAsset& face,
                                                    const IRAssetManifest& manifest,
                                                    const NativeMaterializeOptions& options) {
