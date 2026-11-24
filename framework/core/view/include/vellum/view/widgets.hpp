@@ -1647,6 +1647,13 @@ public:
     }
     float skin_track_width() const { return skin_track_width_; }
     bool has_skin_track_width() const { return has_skin_track_width_; }
+    /// The imported body already paints the track and its fill. Keep the
+    /// native thumb live while leaving those authored pixels untouched.
+    void set_authored_body_only(bool enabled = true) {
+        authored_body_only_ = enabled;
+        request_repaint();
+    }
+    bool authored_body_only() const { return authored_body_only_; }
     void clear_skin() {
         clear_skin_thumb_style();
         has_skin_track_ = has_skin_fill_ = false;
@@ -1702,6 +1709,7 @@ private:
     bool has_skin_track_border_ = false;
     float skin_track_width_ = 0.0f;
     bool has_skin_track_width_ = false;
+    bool authored_body_only_ = false;
 };
 
 /// The SDF shape a widget's chart shader is drawn on: `flat_arc` for a Knob's

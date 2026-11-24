@@ -983,7 +983,8 @@ void Fader::paint_stock_thumb(canvas::Canvas& canvas, float pos, canvas::Color t
         // When the importer derived a thin track width, it also sized the
         // widget box to the captured thumb width — so the thumb fills the
         // box (no 0.62 shrink), and the track is the thin line.
-        const float skin_thumb_frac = has_skin_track_width_ ? 1.0f : 0.62f;
+        const float skin_thumb_frac = has_skin_track_width_ ? 1.0f
+            : authored_body_only_ ? 0.8333333f : 0.62f;
         const float skin_default_w = vert ? std::min(b.width, track_width) * skin_thumb_frac
                                           : std::max(10.0f, track_length * 0.10f);
         // A captured fader thumb is a flat slab — wider than tall (~2:1).
@@ -1195,6 +1196,13 @@ void Fader::paint(canvas::Canvas& canvas) {
         // value-driven (the thumb still moves with value_), unlike a baked
         // full-image sprite. Falls back to theme tokens when unset.
         const bool skinned = has_skin();
+
+        // An authored body already contains the hollow track and its value
+        // fill. Only the live thumb is supplied by this widget.
+        if (authored_body_only_) {
+            paint_stock_thumb(canvas, pos, thumb_color);
+            return;
+        }
 
         // Track
         auto track_color = has_skin_track_

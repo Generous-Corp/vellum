@@ -2451,7 +2451,14 @@ std::unique_ptr<View> make_widget(const IRNode& node,
                     if (const auto color = parse_indicator_css_color(*hex))
                         fader->set_skin_thumb_fallback_color(*color);
             } else {
-                apply_designed_body_skin(*fader, node);
+                if (body_is_painted_beneath(node)) {
+                    fader->set_authored_body_only();
+                    if (const auto hex = attr(node, "design_accent"))
+                        if (const auto color = parse_any_css_color(*hex))
+                            fader->set_skin_thumb_color(*color);
+                } else {
+                    apply_designed_body_skin(*fader, node);
+                }
             }
             apply_durable_fader_indicator(*fader, node);
             return fader;

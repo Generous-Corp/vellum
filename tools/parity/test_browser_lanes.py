@@ -30,6 +30,7 @@ lanes = ph.load_lane_module(HERE / "lanes" / "browser_lanes.py")
 from vellum_png import RgbaImage, decode_png_bytes, encode_png  # noqa: E402
 
 RECORDER = HERE / "lanes" / "outcome_recorder.py"
+FADER_FIXTURE = HERE / "corpus" / "fixtures" / "fader-authored.json"
 
 
 def png(width: int, height: int, fill=(16, 16, 16, 255), box=None, box_fill=(200, 80, 40, 255)) -> bytes:
@@ -129,6 +130,27 @@ class OracleLane(unittest.TestCase):
         write_oracle_side(self.ref, native=NATIVE)
         write_oracle_side(self.cand, native=png(40, 20, box=(4, 4, 30, 13)))
         self.assertIn("further from Chromium", " ".join(self.run_lane()["reasons"]))
+
+    def test_authored_fader_geometry_rejects_stock_track(self) -> None:
+        fixture = json.loads(FADER_FIXTURE.read_text(encoding="utf-8"))
+        browser = fixture["browser"]
+        width, height = browser["width"], browser["height"]
+        expected = bytearray(bytes(browser["track"]["fill"]) * (width * height))
+        # The authored cap is the only dark region in this trimmed crop.
+        thumb = browser["thumb"]
+        for y in range(38, 38 + thumb["height"]):
+            for x in range(thumb["x"], thumb["x"] + thumb["width"]):
+                offset = (y * width + x) * 4
+                expected[offset:offset + 4] = bytes(thumb["fill"])
+
+        # This is the regression shape from the current importer: a full dark
+        # track with a wider cap. It must remain outside the browser oracle.
+        stock = bytearray(expected)
+        for y in range(height):
+            offset = (y * width + width // 2 - 2) * 4
+            stock[offset:offset + 4 * 4] = bytes([0, 0, 0, 255]) * 4
+        mismatches = sum(a != b for a, b in zip(expected, stock)) // 4
+        self.assertGreater(mismatches / (width * height), fixture["oracle"]["max_mismatch_fraction"])
 
     def test_ceiling_is_bounded_and_bites(self) -> None:
         for side in (self.ref, self.cand):

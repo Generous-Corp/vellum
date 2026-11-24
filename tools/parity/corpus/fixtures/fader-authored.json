@@ -1,0 +1,14 @@
+{
+  "name": "authored-fader",
+  "browser": {
+    "width": 24,
+    "height": 88,
+    "track": {"x": 0, "y": 0, "width": 24, "height": 88, "fill": [255, 255, 255, 255], "border": [0, 0, 0, 255]},
+    "thumb": {"x": 2, "width": 20, "height": 12, "fill": [0, 0, 0, 255]}
+  },
+  "oracle": {
+    "max_mismatch_fraction": 0.05,
+    "channel_threshold": 8,
+    "justification": "The 5% ceiling is above the one-pixel antialiasing floor while rejecting a full-width procedural track."
+  }
+}
