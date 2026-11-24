@@ -501,6 +501,12 @@ std::vector<std::size_t> line_break_opportunities(const std::string& text,
 
 namespace {
 
+std::string canonical_family_name(std::string family) {
+    for (auto& c : family)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return family;
+}
+
 std::mutex& declared_weights_mutex() {
     static std::mutex m;
     return m;
@@ -526,7 +532,7 @@ void declare_font_face_weight_range(const std::string& family, int weight_min, i
     const DeclaredWeightRange range{std::min(weight_min, weight_max),
                                     std::max(weight_min, weight_max)};
     std::lock_guard<std::mutex> guard(declared_weights_mutex());
-    auto& ranges = declared_weights()[scope][family];
+    auto& ranges = declared_weights()[scope][canonical_family_name(family)];
     for (const auto& existing : ranges) {
         if (existing.min == range.min && existing.max == range.max)
             return;
@@ -543,9 +549,10 @@ void clear_declared_font_face_weight_ranges(const std::string& scope) {
 
 bool has_declared_font_face_weights(const std::string& family) {
     std::lock_guard<std::mutex> guard(declared_weights_mutex());
+    const auto family_key = canonical_family_name(family);
     for (const auto& [scope, families] : declared_weights()) {
         (void)scope;
-        if (families.count(family) != 0)
+        if (families.count(family_key) != 0)
             return true;
     }
     return false;

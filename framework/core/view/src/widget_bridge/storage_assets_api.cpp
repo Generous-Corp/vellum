@@ -95,12 +95,12 @@ bool register_sealed_font(WidgetBridge& self, const WidgetBridge::EmbeddedAsset&
                                           family);
             return false;
         }
-        if (!vellum::view::register_font_container(embedded.data, embedded.size, family))
+        if (!vellum::view::register_font_container(embedded.data, embedded.size, family_key))
             return false;
         owners.owner_by_family.emplace(family_key, owner);
     }
     if (declared)
-        vellum::canvas::declare_font_face_weight_range(family, declared->first, declared->second,
+        vellum::canvas::declare_font_face_weight_range(family_key, declared->first, declared->second,
                                                        self.font_weight_scope());
     return true;
 }
@@ -599,8 +599,11 @@ void BridgeRegistrars::register_font_assets_api(WidgetBridge& self) {
         // register_font_family decodes the file + registers the typeface with
         // the canvas font registry (Skia on GPU builds; no-op stub otherwise).
         AssetManager::instance().register_font_family(family, path);
-        if (declared)
-            vellum::canvas::declare_font_face_weight_range(family, declared->first, declared->second, self.font_weight_scope());
+        if (declared) {
+            const auto family_key = canonical_sealed_family(family);
+            vellum::canvas::declare_font_face_weight_range(
+                family_key, declared->first, declared->second, self.font_weight_scope());
+        }
         return choc::value::createBool(true);
     });
 }

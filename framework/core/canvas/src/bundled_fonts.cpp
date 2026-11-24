@@ -388,7 +388,8 @@ sk_sp<SkTypeface> match_registered_typeface(const std::string& family,
     if (family.empty()) return nullptr;
     std::lock_guard<std::mutex> guard(registered_mutex());
     auto& map = registered_fonts();
-    auto it = map.find(family);
+    const auto family_key = canonical_family(family);
+    auto it = map.find(family_key);
     if (it == map.end() || it->second.faces.empty()) return nullptr;
     if (auto match = best_style_match(it->second.faces, style))
         return match;
@@ -396,7 +397,7 @@ sk_sp<SkTypeface> match_registered_typeface(const std::string& family,
     // CSS picks its nearest face and synthesizes the rest. Without this the
     // resolver measured a 700 run in a system face while the paragraph painted
     // the page's Regular face emboldened, and the text wrapped where it did not.
-    if (!has_declared_font_face_weights(family))
+    if (!has_declared_font_face_weights(family_key))
         return nullptr;
     sk_sp<SkTypeface> nearest;
     int nearest_gap = std::numeric_limits<int>::max();
@@ -450,7 +451,7 @@ bool register_font(const std::uint8_t* data, std::size_t size,
     if (!family_override.empty()) {
         std::lock_guard<std::mutex> guard(registered_mutex());
         const auto& map = registered_fonts();
-        if (const auto it = map.find(family_override); it != map.end()) {
+        if (const auto it = map.find(canonical_family(family_override)); it != map.end()) {
             for (const auto& source : it->second.sources) {
                 if (source && source->size() == size
                     && std::memcmp(source->data(), data, size) == 0) {
@@ -478,6 +479,7 @@ bool register_font(const std::uint8_t* data, std::size_t size,
         // refuse rather than insert under "".
         return false;
     }
+    family = canonical_family(std::move(family));
 
     {
         std::lock_guard<std::mutex> guard(registered_mutex());
