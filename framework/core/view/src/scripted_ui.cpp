@@ -196,16 +196,15 @@ std::unique_ptr<value::ParamModel> read_only_view(value::ParamModel& source,
 // A path-backed script has no embedded files, so the fonts beside it are read
 // here and sealed into each bridge under their script-relative names, the
 // names an embedded panel uses for the same files. The panel then registers them with registerEmbeddedFont
-// and needs no Filesystem grant. Bytes are kept for the session's life, since
-// a retired realm's bridge may still point at them; a file is re-read only
-// when it changes.
+// and needs no Filesystem grant. Each snapshot owns its bytes through its
+// bridges and recovery state. The weak cache reuses unchanged live bytes
+// without retaining revisions after their realms retire.
 struct ScriptedUiSession::DiskFontCache {
     struct Entry {
         std::filesystem::file_time_type write_time;
-        std::shared_ptr<const std::vector<unsigned char>> bytes;
+        std::weak_ptr<const std::vector<unsigned char>> bytes;
     };
     std::unordered_map<std::string, Entry> by_path;
-    std::vector<std::shared_ptr<const std::vector<unsigned char>>> retained;
 };
 
 std::vector<WidgetBridge::EmbeddedAsset>
@@ -224,6 +223,9 @@ ScriptedUiSession::sealed_assets_for(const std::filesystem::path& script) {
         return assets;
     if (!disk_fonts_)
         disk_fonts_ = std::make_shared<DiskFontCache>();
+    std::erase_if(disk_fonts_->by_path, [](const auto& item) {
+        return item.second.bytes.expired();
+    });
     std::size_t files = 0;
     std::size_t visited_entries = 0;
     std::uintmax_t total = 0;
@@ -261,25 +263,26 @@ ScriptedUiSession::sealed_assets_for(const std::filesystem::path& script) {
         if (entry_ec)
             continue;
         auto& entry = disk_fonts_->by_path[real.generic_string()];
-        if (!entry.bytes || entry.write_time != write_time) {
+        auto bytes = entry.bytes.lock();
+        if (!bytes || entry.write_time != write_time) {
             std::ifstream in(real, std::ios::binary);
             if (!in)
                 continue;
             // Bound the read to the size already charged to the load budget,
             // even if another process appends bytes after the size check.
-            auto bytes = std::make_shared<std::vector<unsigned char>>(size);
-            in.read(reinterpret_cast<char*>(bytes->data()),
-                    static_cast<std::streamsize>(bytes->size()));
+            auto loaded = std::make_shared<std::vector<unsigned char>>(size);
+            in.read(reinterpret_cast<char*>(loaded->data()),
+                    static_cast<std::streamsize>(loaded->size()));
             if (!in)
                 continue;
+            bytes = std::move(loaded);
             entry = {write_time, bytes};
-            disk_fonts_->retained.push_back(std::move(bytes));
         }
         // A file embedded at build time wins over one of the same name on disk.
         const bool embedded = std::any_of(assets.begin(), assets.end(),
                                           [&](const auto& a) { return a.name == name; });
         if (!embedded)
-            assets.push_back({name, entry.bytes->data(), entry.bytes->size()});
+            assets.push_back({name, bytes->data(), bytes->size(), bytes});
     }
     return assets;
 }

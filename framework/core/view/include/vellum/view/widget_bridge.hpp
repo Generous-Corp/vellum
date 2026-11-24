@@ -187,11 +187,13 @@ public:
 
     /// One file compiled into the plug-in beside its editor script. `name` is
     /// the script-relative path with forward slashes (`assets/knob.png`); the
-    /// bytes live for the process (a static array in the plug-in image).
+    /// bytes live for the process (a static array in the plug-in image), or
+    /// are held by `owned_bytes` when sealed from disk for a reload snapshot.
     struct EmbeddedAsset {
         std::string name;
         const unsigned char* data = nullptr;
         std::size_t size = 0;
+        std::shared_ptr<const std::vector<unsigned char>> owned_bytes;
     };
 
     /// Install the files embedded beside the script. For an editor whose

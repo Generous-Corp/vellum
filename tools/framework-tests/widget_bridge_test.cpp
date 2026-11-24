@@ -393,6 +393,44 @@ FRAMEWORK_TEST(directory_switch_does_not_reuse_same_timestamp_font_bytes) {
     std::filesystem::remove_all(second);
 }
 
+FRAMEWORK_TEST(font_snapshots_release_obsolete_revisions_after_realm_retirement) {
+    const auto dir = fresh_temp_dir("snapshot-lifetime");
+    std::filesystem::copy_file(VELLUM_TEST_FONT_PATH, dir / "face.ttf");
+    write_file(dir / "ui.js", "");
+    view::ScriptedUiOptions options;
+    options.script_path = dir / "ui.js";
+    options.enable_hot_reload = options.enable_theme_reload = false;
+    view::View root;
+    vellum::state::StateStore store;
+    view::ScriptedUiSession session(root, store, options);
+    std::string error;
+    CHECK(session.load(&error));
+    const auto* asset = session.bridge()->embedded_asset("face.ttf");
+    CHECK(asset && asset->owned_bytes);
+    if (!asset || !asset->owned_bytes) return;
+    std::weak_ptr<const std::vector<unsigned char>> previous = asset->owned_bytes;
+    // An external snapshot has the same ownership behavior as a retained bridge.
+    auto retained = *asset;
+    CHECK(session.reload(&error));
+    CHECK(session.bridge()->embedded_asset("face.ttf")->owned_bytes == previous.lock());
+    auto stamp = std::filesystem::last_write_time(dir / "face.ttf");
+    for (int revision = 0; revision < 3; ++revision) {
+        stamp += std::chrono::seconds(1);
+        std::filesystem::last_write_time(dir / "face.ttf", stamp);
+        CHECK(session.reload(&error));
+        session.poll(&error);
+        if (revision == 0) {
+            CHECK(!previous.expired());
+            CHECK(retained.data[0] == retained.owned_bytes->at(0));
+            retained = {};
+        }
+        CHECK(previous.expired());
+        previous = session.bridge()->embedded_asset("face.ttf")->owned_bytes;
+        CHECK(!previous.expired());
+    }
+    std::filesystem::remove_all(dir);
+}
+
 FRAMEWORK_TEST(ordinary_font_sealing_bounds_entries_that_fail_font_filters) {
     const auto dir = fresh_temp_dir("enumeration-budget");
     write_file(dir / "ui.js", "");
