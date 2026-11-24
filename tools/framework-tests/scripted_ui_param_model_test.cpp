@@ -8,6 +8,7 @@
 #include <vellum/value/in_memory_param_model.hpp>
 #include <vellum/value/param_metadata.hpp>
 #include <vellum/view/scripted_ui.hpp>
+#include <vellum/view/design_codegen.hpp>
 #include <vellum/view/view.hpp>
 #include <vellum/view/widgets.hpp>
 
@@ -173,30 +174,63 @@ FRAMEWORK_TEST(empty_capability_session_hides_file_reading_asset_api) {
     CHECK(error.empty());
 }
 
+// Builds a DesignIR whose nodes carry every captured-asset attribute the
+// generator turns into a file-reading call.
+vellum::view::DesignIR captured_asset_design() {
+    using vellum::view::AudioWidgetType;
+    using vellum::view::IRNode;
+    vellum::view::DesignIR ir;
+    ir.root.type = "frame";
+    ir.root.name = "root";
+
+    IRNode image;
+    image.type = "image";
+    image.name = "art";
+    image.attributes["asset_path"] = "/assets/art.png";
+
+    IRNode knob;
+    knob.type = "frame";
+    knob.name = "cutoff";
+    knob.audio_widget = AudioWidgetType::knob;
+    knob.attributes["asset_path"] = "/assets/knob.png";
+
+    IRNode fader;
+    fader.type = "frame";
+    fader.name = "level";
+    fader.audio_widget = AudioWidgetType::fader;
+    fader.attributes["fader_body_asset_path"] = "/assets/body.png";
+    fader.attributes["fader_indicator_asset_path"] = "/assets/indicator.png";
+
+    ir.root.children = {image, knob, fader};
+    return ir;
+}
+
 FRAMEWORK_TEST(generated_captured_asset_calls_are_guarded_for_empty_capability) {
     auto model = make_model();
     view::View root;
     root.set_bounds({0, 0, 300, 200});
 
-    // This is the shape emitted by design_codegen for captured assets. The
-    // guard lets the authored styling load while Filesystem APIs stay absent.
-    view::ScriptedUiSession guarded(
-        root, model, empty_capability_options(
-            "if (typeof setFaderCapturedArt === 'function') "
-            "setFaderCapturedArt('fader', 'body.png', 1, 1, 'indicator.png', 1, 1);"
-            "if (typeof setImageSource === 'function') "
-            "setImageSource('image', 'asset.png');"));
-    std::string error;
-    CHECK(guarded.load(&error));
-    CHECK(error.empty());
+    for (const auto mode : {view::CodeGenMode::bridge_native_js, view::CodeGenMode::web_compat}) {
+        view::CodeGenOptions codegen;
+        codegen.mode = mode;
+        codegen.use_silver_knobs = false;
+        const std::string js = view::generate_pulp_js(captured_asset_design(), codegen);
 
-    // Removing the guard would turn the generated calls into ReferenceErrors.
-    view::ScriptedUiSession unguarded(
-        root, model, empty_capability_options(
-            "setFaderCapturedArt('fader', 'body.png', 1, 1, 'indicator.png', 1, 1);"));
-    error.clear();
-    CHECK(!unguarded.load(&error));
-    CHECK(!error.empty());
+        // Every file-reading call the generator emits for captured assets
+        // sits behind a typeof guard.
+        const bool native = mode == view::CodeGenMode::bridge_native_js;
+        CHECK(js.find("typeof setFaderCapturedArt === 'function'") != std::string::npos);
+        if (native) {
+            CHECK(js.find("typeof setImageSource === 'function'") != std::string::npos);
+            CHECK(js.find("typeof setKnobSpriteStrip === 'function'") != std::string::npos);
+        }
+
+        // The generated script loads with the filesystem APIs absent.
+        view::ScriptedUiSession session(root, model, empty_capability_options(js));
+        std::string error;
+        CHECK(session.load(&error));
+        CHECK(error.empty());
+    }
 }
 
 // A script that refuses to run unless getParamMetadata reports what the live

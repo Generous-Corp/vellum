@@ -1333,7 +1333,9 @@ g.__pulpRefreshMaterializedState__ = function () {
   if (next !== activeCapturedState) {
     for (const state of capturedPaintStates) {
       if (state.id === next && !loadedCapturedStates.has(state.id)) {
-        setImageSource('__pulp_materialized_state_' + state.id, state.image);
+        if (typeof setImageSource === 'function') {
+          setImageSource('__pulp_materialized_state_' + state.id, state.image);
+        }
         loadedCapturedStates.add(state.id);
       }
       setVisible('__pulp_materialized_state_' + state.id, state.id === next);
