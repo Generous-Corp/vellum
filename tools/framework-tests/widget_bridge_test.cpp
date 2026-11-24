@@ -393,6 +393,52 @@ FRAMEWORK_TEST(directory_switch_does_not_reuse_same_timestamp_font_bytes) {
     std::filesystem::remove_all(second);
 }
 
+FRAMEWORK_TEST(ordinary_font_sealing_bounds_entries_that_fail_font_filters) {
+    const auto dir = fresh_temp_dir("enumeration-budget");
+    write_file(dir / "ui.js", "");
+    // Empty candidates do not count against the accepted-font count or byte
+    // limits. The entry budget must stop the walk even when these are skipped.
+    for (int i = 0; i < 5000; ++i)
+        write_file(dir / (std::to_string(i) + ".ttf"), "");
+    const auto entries = [&] {
+        std::vector<std::string> names;
+        for (const auto& entry : std::filesystem::directory_iterator(dir))
+            if (entry.path().extension() == ".ttf")
+                names.push_back(entry.path().filename().generic_string());
+        return names;
+    };
+    const auto names = entries();
+    CHECK(names.size() == 5000);
+    if (names.size() != 5000)
+        return;
+    const auto bytes = read_test_font();
+    for (const auto& name : {names.front(), names.back()}) {
+        std::ofstream out(dir / name, std::ios::binary);
+        out.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    }
+    const auto first = probe_family("bounded-first");
+    const auto last = probe_family("bounded-last");
+    write_file(dir / "ui.js", "if (!registerEmbeddedFont('" + first + "', '" +
+        names.front() + "')) throw new Error('positive control missing');" +
+        "if (registerEmbeddedFont('" + last + "', '" + names.back() +
+        "')) throw new Error('entry budget exceeded');");
+    // Updating existing files leaves the fixture's observed directory order
+    // intact; no particular filesystem sort order is assumed.
+    CHECK(entries() == names);
+    view::ScriptedUiOptions options;
+    options.script_path = dir / "ui.js";
+    options.granted_capabilities = view::CapabilitySet{};
+    options.enable_hot_reload = options.enable_theme_reload = false;
+    view::View root;
+    vellum::state::StateStore store;
+    view::ScriptedUiSession session(root, store, options);
+    std::string error;
+    CHECK(session.load(&error));
+    CHECK(vellum::canvas::is_font_registered(first));
+    CHECK(!vellum::canvas::is_font_registered(last));
+    std::filesystem::remove_all(dir);
+}
+
 FRAMEWORK_TEST(a_path_backed_session_seals_the_fonts_beside_its_script) {
     const auto dir = fresh_temp_dir("session");
     const auto outside = fresh_temp_dir("session-outside");

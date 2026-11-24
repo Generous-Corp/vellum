@@ -215,6 +215,7 @@ ScriptedUiSession::sealed_assets_for(const std::filesystem::path& script) {
         return assets;
     namespace fs = std::filesystem;
     constexpr std::size_t kMaxFiles = 256;
+    constexpr std::size_t kMaxVisitedEntries = 4096;
     constexpr std::uintmax_t kMaxTotalBytes = 128u * 1024u * 1024u;
     std::error_code ec;
     const auto dir = fs::weakly_canonical(
@@ -224,10 +225,15 @@ ScriptedUiSession::sealed_assets_for(const std::filesystem::path& script) {
     if (!disk_fonts_)
         disk_fonts_ = std::make_shared<DiskFontCache>();
     std::size_t files = 0;
+    std::size_t visited_entries = 0;
     std::uintmax_t total = 0;
     for (auto it = fs::recursive_directory_iterator(
              dir, fs::directory_options::skip_permission_denied, ec);
          !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        // Reloads must see nested file changes, but even entries that are not
+        // usable fonts consume the enumeration budget on the owner thread.
+        if (++visited_entries > kMaxVisitedEntries)
+            break;
         const auto& path = it->path();
         const auto leaf = path.filename().string();
         std::error_code entry_ec;
@@ -257,9 +263,14 @@ ScriptedUiSession::sealed_assets_for(const std::filesystem::path& script) {
         auto& entry = disk_fonts_->by_path[real.generic_string()];
         if (!entry.bytes || entry.write_time != write_time) {
             std::ifstream in(real, std::ios::binary);
-            auto bytes = std::make_shared<std::vector<unsigned char>>(
-                std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-            if (bytes->empty())
+            if (!in)
+                continue;
+            // Bound the read to the size already charged to the load budget,
+            // even if another process appends bytes after the size check.
+            auto bytes = std::make_shared<std::vector<unsigned char>>(size);
+            in.read(reinterpret_cast<char*>(bytes->data()),
+                    static_cast<std::streamsize>(bytes->size()));
+            if (!in)
                 continue;
             entry = {write_time, bytes};
             disk_fonts_->retained.push_back(std::move(bytes));
