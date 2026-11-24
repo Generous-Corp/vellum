@@ -33,6 +33,8 @@
 #include <vellum/view/design_sources.hpp>
 #include <vellum/view/gap_widgets.hpp>
 #include <vellum/view/script_engine.hpp>
+#include <vellum/view/scripted_ui.hpp>
+#include <vellum/view/screenshot.hpp>
 #include <vellum/view/text_editor.hpp>
 #include <vellum/view/ui_components.hpp>
 #include <vellum/view/view.hpp>
@@ -43,6 +45,8 @@
 #include <choc/text/choc_JSON.h>
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -390,7 +394,7 @@ class StagedAssets {
     fs::path dir_;
 };
 
-Rect root_rect(const DesignIR& ir) {
+vellum::view::Rect root_rect(const DesignIR& ir) {
     return {0.0f, 0.0f, ir.root.style.width.value_or(800.0f),
             ir.root.style.height.value_or(600.0f)};
 }
@@ -884,30 +888,192 @@ TEST_CASE("ui.js leaves a theme-painted control it has no case for as a plain fr
     }
 }
 
-TEST_CASE("authored faders use the designed overlay in every generated lane",
-          "[view][import][emitter-conformance][fader]") {
+// A browser-captured fader whose author declared the track static: the panel
+// capture beneath it holds the track, so every lane paints only the cap.
+DesignIR authored_fader_ir(bool static_track, bool captured_cap) {
     DesignIR ir;
     ir.root.type = "frame";
     ir.root.stable_anchor_id = "root";
-    ir.root.style.width = 120.0f;
+    ir.root.style.width = 48.0f;
     ir.root.style.height = 120.0f;
+    ir.root.style.background_color = "#ffffff";
     IRNode fader;
     fader.type = "fader";
     fader.audio_widget = AudioWidgetType::fader;
     fader.stable_anchor_id = "fader";
+    fader.style.position = "absolute";
+    fader.style.left = 12.0f;
+    fader.style.top = 16.0f;
     fader.style.width = 24.0f;
-    fader.style.height = 96.0f;
+    fader.style.height = 88.0f;
+    fader.audio_default = 0.5f;
     fader.attributes["pulpRouteId"] = "route:fader";
     fader.attributes["designed_body"] = "capture";
+    if (static_track)
+        fader.attributes["fader_body_includes_static_track"] = "1";
     fader.attributes["design_track"] = "#111111";
     fader.attributes["design_accent"] = "#222222";
+    fader.attributes["fader_ind_color"] = "#a93d10ff";
+    fader.attributes["captured_raster_dpr"] = "2.000000";
+    fader.attributes["fader_control_natural_w"] = "48";
+    fader.attributes["fader_control_natural_h"] = "176";
+    if (captured_cap) {
+        fader.attributes["fader_indicator_natural_w"] = "40";
+        fader.attributes["fader_indicator_natural_h"] = "24";
+    }
     ir.root.children.push_back(fader);
+    return ir;
+}
 
+std::vector<std::string> fader_skin_calls(const std::string& js) {
+    std::vector<std::string> calls;
+    std::istringstream lines(js);
+    for (std::string line; std::getline(lines, line);) {
+        const auto at = line.find("setFaderSkin(");
+        if (at != std::string::npos)
+            calls.push_back(line.substr(at));
+    }
+    return calls;
+}
+
+TEST_CASE("authored faders use the designed overlay in every generated lane",
+          "[view][import][emitter-conformance][fader]") {
+    const auto ir = authored_fader_ir(true, false);
     const auto js = generate_pulp_js(ir, CodeGenOptions{});
-    CHECK(js.find("setDesignedOverlay") != std::string::npos);
-    CHECK(js.find("setFaderSkin('fader', '#111111'") == std::string::npos);
+    CHECK(js.find("setDesignedOverlay(") != std::string::npos);
+    // Exactly one skin call: the cap in the isolated thumb colour, with no
+    // track or fill colour, because the capture beneath holds the track.
+    const auto calls = fader_skin_calls(js);
+    REQUIRE(calls.size() == 1);
+    CHECK(std::regex_match(
+        calls[0], std::regex(R"(setFaderSkin\([^,]+, '', '', '#a93d10ff', '', 0, 0, 0, true\);)")));
+    CHECK(js.find("'#111111'") == std::string::npos);
+
     const auto cpp = generate_pulp_cpp(ir, {});
     CHECK(cpp.source.find("set_designed_overlay(true)") != std::string::npos);
+    CHECK(cpp.source.find("set_skin_thumb_color(vellum::view::Color::rgba8(169, 61, 16, 255))") !=
+          std::string::npos);
+
+    // Without the static-track declaration a value fill may exist, so every
+    // lane keeps the live track and fill.
+    const auto live = authored_fader_ir(false, false);
+    const auto live_js = generate_pulp_js(live, CodeGenOptions{});
+    CHECK(live_js.find("setDesignedOverlay(") == std::string::npos);
+    const auto live_calls = fader_skin_calls(live_js);
+    REQUIRE(!live_calls.empty());
+    CHECK(live_calls[0].find("'#111111', '#222222'") != std::string::npos);
+    CHECK(generate_pulp_cpp(live, {}).source.find("set_designed_overlay(true)") ==
+          std::string::npos);
+}
+
+TEST_CASE("a captured fader cap is sized in layout units in every lane",
+          "[view][import][emitter-conformance][fader]") {
+    // 40x24 device pixels over a 48x176 control drawn in a 24x88 box.
+    auto ir = authored_fader_ir(true, true);
+    const auto calls = fader_skin_calls(generate_pulp_js(ir, CodeGenOptions{}));
+    REQUIRE(calls.size() == 1);
+    CHECK(calls[0].find(", 20, 12, 0, true);") != std::string::npos);
+    CHECK(generate_pulp_cpp(ir, {}).source.find("set_thumb_size(20.0f, 12.0f)") != std::string::npos);
+    auto root = build_native_view_tree(ir, ir.asset_manifest, {});
+    REQUIRE(root != nullptr);
+    Fader* fader = nullptr;
+    std::function<void(View&)> find = [&](View& v) {
+        if (auto* f = dynamic_cast<Fader*>(&v)) fader = f;
+        for (std::size_t i = 0; i < v.child_count(); ++i) find(*v.child_at(i));
+    };
+    find(*root);
+    REQUIRE(fader != nullptr);
+    CHECK(std::abs(fader->thumb_width() - 20.0f) < 0.01f);
+    CHECK(std::abs(fader->thumb_height() - 12.0f) < 0.01f);
+
+    // Without the control's natural size the capture DPR scales instead.
+    ir.root.children[0].attributes.erase("fader_control_natural_w");
+    ir.root.children[0].attributes.erase("fader_control_natural_h");
+    const auto dpr_calls = fader_skin_calls(generate_pulp_js(ir, CodeGenOptions{}));
+    REQUIRE(dpr_calls.size() == 1);
+    CHECK(dpr_calls[0].find(", 20, 12, 0, true);") != std::string::npos);
+}
+
+/// The bounding box of the pixels within `tolerance` (sum of channel deltas)
+/// of `rgb`, as {x0, y0, x1, y1}, or all -1 when none match.
+std::array<int, 4> colour_bbox(const std::vector<std::uint8_t>& rgba, std::uint32_t width,
+                               std::uint32_t height, std::array<int, 3> rgb, int tolerance) {
+    std::array<int, 4> box{-1, -1, -1, -1};
+    for (std::uint32_t y = 0; y < height; ++y)
+        for (std::uint32_t x = 0; x < width; ++x) {
+            const auto* p = &rgba[(static_cast<std::size_t>(y) * width + x) * 4];
+            if (std::abs(p[0] - rgb[0]) + std::abs(p[1] - rgb[1]) + std::abs(p[2] - rgb[2]) >
+                tolerance)
+                continue;
+            if (box[0] < 0) box = {static_cast<int>(x), static_cast<int>(y), static_cast<int>(x),
+                                   static_cast<int>(y)};
+            box[0] = std::min(box[0], static_cast<int>(x));
+            box[1] = std::min(box[1], static_cast<int>(y));
+            box[2] = std::max(box[2], static_cast<int>(x));
+            box[3] = std::max(box[3], static_cast<int>(y));
+        }
+    return box;
+}
+
+TEST_CASE("a generated script paints the same authored fader cap as the native lane",
+          "[view][import][emitter-conformance][fader][render]") {
+    if (!raw_rgba_render_available())
+        return;
+    for (const bool captured_cap : {false, true}) {
+        INFO((captured_cap ? "captured cap geometry" : "no captured cap geometry"));
+        const auto ir = authored_fader_ir(true, captured_cap);
+        auto native = build_native_view_tree(ir, ir.asset_manifest, {});
+        REQUIRE(native != nullptr);
+        std::uint32_t w = 0, h = 0;
+        const auto native_rgba = render_to_rgba(*native, 48, 120, 1.0f, &w, &h);
+        REQUIRE((w == 48 && h == 120));
+
+        View root;
+        root.set_bounds({0.0f, 0.0f, 48.0f, 120.0f});
+        vellum::state::StateStore store;
+        ScriptedUiOptions options;
+        options.script_source = generate_pulp_js(ir, CodeGenOptions{});
+        options.script_name = "fader.ui.js";
+        options.enable_hot_reload = false;
+        options.enable_theme_reload = false;
+        ScriptedUiSession session(root, store, options);
+        std::string error;
+        REQUIRE(session.load(&error));
+        INFO(error);
+        root.layout_children();
+        const auto script_rgba = render_to_rgba(root, 48, 120, 1.0f, &w, &h);
+        REQUIRE((w == 48 && h == 120));
+
+        // The cap is the only pixels in the isolated thumb colour (#a93d10).
+        const auto native_cap = colour_bbox(native_rgba, 48, 120, {169, 61, 16}, 24);
+        const auto script_cap = colour_bbox(script_rgba, 48, 120, {169, 61, 16}, 24);
+        INFO("native cap " << native_cap[0] << "," << native_cap[1] << " - " << native_cap[2]
+                           << "," << native_cap[3]);
+        INFO("script cap " << script_cap[0] << "," << script_cap[1] << " - " << script_cap[2]
+                           << "," << script_cap[3]);
+        REQUIRE(native_cap[0] >= 0);
+        REQUIRE(script_cap[0] >= 0);
+        for (int i = 0; i < 4; ++i)
+            CHECK(std::abs(native_cap[i] - script_cap[i]) <= 1);
+        // A flat slab, not the stock 0.62 pill: about 0.85 of the 24px slot
+        // without captured geometry, the captured 20x12 with it.
+        const int cap_w = native_cap[2] - native_cap[0] + 1;
+        const int cap_h = native_cap[3] - native_cap[1] + 1;
+        CHECK(cap_w >= 19);
+        CHECK(cap_w <= 22);
+        CHECK(cap_h >= 11);
+        CHECK(cap_h <= 14);
+        // No track or fill in either lane: the centre column above and below
+        // the cap stays the panel colour.
+        for (const auto* rgba : {&native_rgba, &script_rgba}) {
+            for (int y = 20; y < 100; ++y) {
+                if (y >= native_cap[1] - 1 && y <= native_cap[3] + 1)
+                    continue;
+                const auto* p = &(*rgba)[(static_cast<std::size_t>(y) * 48 + 24) * 4];
+                CHECK((p[0] > 240 && p[1] > 240 && p[2] > 240));
+            }
+        }
+    }
 }
 
 TEST_CASE("staged assets never write outside the staging directory",

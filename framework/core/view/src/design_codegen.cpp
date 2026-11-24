@@ -155,6 +155,28 @@ static IndicatorColorSelection select_indicator_color(
     return {};
 }
 
+// The cap of a fader over a static captured track, as one setFaderSkin call.
+// Track and fill stay empty because the capture beneath holds them; the cap
+// colour is the isolated per-control thumb colour, else the design accent,
+// the same precedence the native materializer applies. Its size comes from
+// the shared captured-cap helper, or zeros for the widget's authored default.
+static void emit_fader_cap_skin(std::ostringstream& ss, const std::string& ind,
+                                const std::string& id_expr, const IRNode& node) {
+    std::string thumb;
+    if (const auto it = node.attributes.find("fader_ind_color");
+        it != node.attributes.end() && css_color_syntax_supported(it->second))
+        thumb = it->second;
+    else if (const auto accent = node.attributes.find("design_accent");
+             accent != node.attributes.end() && css_color_syntax_supported(accent->second))
+        thumb = accent->second;
+    const auto cap = captured_fader_cap_size(node);
+    ss << ind << "setFaderSkin(" << id_expr << ", '', '', '"
+       << js_single_quote_escape(thumb) << "', '', "
+       << (cap ? cap->width : 0.0f) << ", " << (cap ? cap->height : 0.0f) << ", "
+       << finite_numeric_attribute(node, "fader_thumb_corner_radius", 0.0)
+       << ", true);\n";
+}
+
 static bool captured_line_decision_usable(const IRNode& node) {
     // Validate only source-owned structure here. Generated bundles register
     // their packaged fonts at runtime before constructing labels, so the
@@ -551,7 +573,7 @@ static void generate_node(std::ostringstream& ss, const IRNode& node,
                 };
                 const auto indicator = select_indicator_color(
                     node, "fader_ind_color");
-                if (!browser_control_overlay &&
+                if (!(browser_control_overlay && fader_cap_over_static_capture(node)) &&
                     (!color("design_track").empty() ||
                      !color("design_accent").empty() || !indicator.color.empty())) {
                     ss << ind << "setFaderSkin(" << var << "._id, '"
@@ -609,20 +631,17 @@ static void generate_node(std::ostringstream& ss, const IRNode& node,
                 ss << ind << "setAccentColor(" << var << "._id, '"
                    << js_single_quote_escape(accent->second) << "');\n";
             }
-            if (browser_control_overlay &&
-                (node.audio_widget == AudioWidgetType::fader ||
-                 node.audio_widget == AudioWidgetType::toggle ||
-                 node.audio_widget == AudioWidgetType::stepper ||
-                 node.audio_widget == AudioWidgetType::selector))
+            const bool fader_cap_only = browser_control_overlay &&
+                node.audio_widget == AudioWidgetType::fader &&
+                fader_cap_over_static_capture(node);
+            if (fader_cap_only ||
+                (browser_control_overlay &&
+                 (node.audio_widget == AudioWidgetType::toggle ||
+                  node.audio_widget == AudioWidgetType::stepper ||
+                  node.audio_widget == AudioWidgetType::selector)))
                 ss << ind << "setDesignedOverlay(" << var << "._id, true);\n";
-            if (browser_control_overlay && node.audio_widget == AudioWidgetType::fader &&
-                finite_numeric_attribute(node, "fader_indicator_natural_w", 0.0) > 0.0 &&
-                finite_numeric_attribute(node, "fader_indicator_natural_h", 0.0) > 0.0)
-                ss << ind << "setFaderSkin(" << var << "._id, '', '', '', '', "
-                   << finite_numeric_attribute(node, "fader_indicator_natural_w", 0.0)
-                   << ", " << finite_numeric_attribute(node, "fader_indicator_natural_h", 0.0)
-                   << ", " << finite_numeric_attribute(node, "fader_thumb_corner_radius", 0.0)
-                   << ", true);\n";
+            if (fader_cap_only)
+                emit_fader_cap_skin(ss, ind, var + "._id", node);
             emit_js_param_binding(ss, ind, var + "._id", node);
 
             // Same anchor contract as every non-widget node below: the
@@ -1315,6 +1334,8 @@ static void emit_js_audio_widget(const NativeEmit& e) {
         designed_body != node.attributes.end() &&
         (designed_body->second == "underlay" ||
          designed_body->second == "capture");
+    const bool fader_cap_only = browser_control_overlay &&
+        wtype == AudioWidgetType::fader && fader_cap_over_static_capture(node);
 
     // Extract label text, value text, and stroke color from child nodes
     std::string label_text = node.audio_label;
@@ -1774,7 +1795,7 @@ static void emit_js_audio_widget(const NativeEmit& e) {
             const std::string track = attr("design_track");
             const std::string fill = attr("design_accent");
             const std::string thumb = attr("design_indicator");
-            if (!browser_control_overlay && (!track.empty() || !fill.empty() || !thumb.empty())) {
+            if (!fader_cap_only && (!track.empty() || !fill.empty() || !thumb.empty())) {
                 ss << ind << "setFaderSkin('" << id << "', '"
                    << js_single_quote_escape(track) << "', '"
                    << js_single_quote_escape(fill) << "', '"
@@ -1787,7 +1808,7 @@ static void emit_js_audio_widget(const NativeEmit& e) {
         // the native fader renders the captured look while the thumb still
         // moves with setValue(). No per-instance hardcoding: every value
         // comes from node.attributes stamped by the sampler.
-        if (opts.skin_faders && !browser_control_overlay) {
+        if (opts.skin_faders && !fader_cap_only) {
             auto attr = [&](const char* k) -> std::string {
                 auto it = node.attributes.find(k);
                 return it != node.attributes.end() ? it->second : std::string();
@@ -1820,7 +1841,7 @@ static void emit_js_audio_widget(const NativeEmit& e) {
         // it last so it wins over both panel fallback and sampled per-control skin,
         // independently of captured-art path survival.
         if (const auto thumb = node.attributes.find("fader_ind_color");
-            thumb != node.attributes.end() && !thumb->second.empty()) {
+            !fader_cap_only && thumb != node.attributes.end() && !thumb->second.empty()) {
             ss << ind << "setFaderSkin('" << id << "', '', '', '"
                << js_single_quote_escape(thumb->second)
                << "', '', 0, 0, 0, true);\n";
@@ -2012,20 +2033,14 @@ static void emit_js_audio_widget(const NativeEmit& e) {
     // read as disabled came out indistinguishable from a live one.
     if (!needs_label_wrapper) emit_js_absolute_position(e, id);
     emit_js_visual_overrides(e, id);
-    if (browser_control_overlay &&
-        (wtype == AudioWidgetType::fader ||
-         wtype == AudioWidgetType::toggle ||
-         wtype == AudioWidgetType::stepper ||
-         wtype == AudioWidgetType::selector))
+    if (fader_cap_only ||
+        (browser_control_overlay &&
+         (wtype == AudioWidgetType::toggle ||
+          wtype == AudioWidgetType::stepper ||
+          wtype == AudioWidgetType::selector)))
         ss << ind << "setDesignedOverlay('" << id << "', true);\n";
-    if (browser_control_overlay && wtype == AudioWidgetType::fader &&
-        finite_numeric_attribute(node, "fader_indicator_natural_w", 0.0) > 0.0 &&
-        finite_numeric_attribute(node, "fader_indicator_natural_h", 0.0) > 0.0)
-        ss << ind << "setFaderSkin('" << id << "', '', '', '', '', "
-           << finite_numeric_attribute(node, "fader_indicator_natural_w", 0.0)
-           << ", " << finite_numeric_attribute(node, "fader_indicator_natural_h", 0.0)
-           << ", " << finite_numeric_attribute(node, "fader_thumb_corner_radius", 0.0)
-           << ", true);\n";
+    if (fader_cap_only)
+        emit_fader_cap_skin(ss, ind, "'" + id + "'", node);
     // The binding is the reason an audio widget exists, and this arm did not
     // emit one. It printed the parameter's name in the grey sub-stack above
     // instead, which reads as wiring and is a caption.

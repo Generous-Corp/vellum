@@ -452,8 +452,27 @@ void emit_widget_specific(std::ostringstream& out,
                 emit_line(out, depth, opts.indent_spaces,
                           std::string(var) + "->set_thumb_corner_radius(" + float_expr(ctx, *semantics.fader_thumb_corner_radius) + ");");
             }
-            if (body_is_painted_beneath(node))
+            // A fader over a static captured track paints only its cap: the
+            // per-control thumb colour (else the design accent) at the
+            // captured cap size, matching the native and ui.js lanes.
+            if (fader_cap_over_static_capture(node)) {
                 emit_line(out, depth, opts.indent_spaces, std::string(var) + "->set_designed_overlay(true);");
+                std::string thumb;
+                for (const char* key : {"fader_ind_color", "design_accent"}) {
+                    if (const auto value = attr(node, key)) {
+                        thumb = color_expr(ctx, *value);
+                        if (!thumb.empty())
+                            break;
+                    }
+                }
+                if (!thumb.empty())
+                    emit_line(out, depth, opts.indent_spaces, std::string(var) + "->set_skin_thumb_color(" + thumb + ");");
+                if (!semantics.fader_thumb_width && !semantics.fader_thumb_height)
+                    if (const auto cap = captured_fader_cap_size(node))
+                        emit_line(out, depth, opts.indent_spaces,
+                                  std::string(var) + "->set_thumb_size(" + float_expr(ctx, cap->width) +
+                                      ", " + float_expr(ctx, cap->height) + ");");
+            }
             break;
         }
         case NativeWidgetKind::meter: {
