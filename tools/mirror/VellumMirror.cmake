@@ -419,8 +419,10 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         _vellum_mirror_declared_recipe_usage("${_vellum_mirror_target}")
         # Link edges are resolved once, by the unit libraries below: a static
         # target that carried them would copy another unit's objects in.
-        add_dependencies("${_vellum_mirror_target}"
-            ${VELLUM_MIRROR_TARGET_${_tkey}_INTERNAL_LINKS})
+        if(VELLUM_MIRROR_TARGET_${_tkey}_INTERNAL_LINKS)
+            add_dependencies("${_vellum_mirror_target}"
+                ${VELLUM_MIRROR_TARGET_${_tkey}_INTERNAL_LINKS})
+        endif()
     endforeach()
 endforeach()
 

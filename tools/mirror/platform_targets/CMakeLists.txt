@@ -24,6 +24,9 @@ add_library(vellum-value INTERFACE)
 add_library(Vellum::Value ALIAS vellum-value)
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/provider.cpp" "int vellum_provider_probe;\n")
 add_library(vellum-skia-dawn-provider SHARED "${CMAKE_CURRENT_BINARY_DIR}/provider.cpp")
+# A host compiler may produce Mach-O while this configure-only probe targets
+# Linux. Avoid an install-time relink that would require an ELF binary.
+set_target_properties(vellum-skia-dawn-provider PROPERTIES BUILD_WITH_INSTALL_RPATH ON)
 add_library(Vellum::SkiaDawnProvider ALIAS vellum-skia-dawn-provider)
 
 # The module's export set names both, so the generate step needs them in it.

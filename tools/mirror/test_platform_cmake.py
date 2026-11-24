@@ -17,7 +17,8 @@ DARWIN_PREFIX_FLAGS = ("-ffile-prefix-map=/src=vellum;-ffile-prefix-map=/bld=vel
 def run_cmake(body: str) -> subprocess.CompletedProcess:
     with tempfile.TemporaryDirectory() as tmp:
         script = Path(tmp) / "case.cmake"
-        script.write_text(f'include("{MODULE}")\n{body}\n', encoding="utf-8")
+        script.write_text('cmake_minimum_required(VERSION 3.24)\n'
+                          f'include("{MODULE}")\n{body}\n', encoding="utf-8")
         return subprocess.run(["cmake", "-P", str(script)], capture_output=True, text=True)
 
 

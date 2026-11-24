@@ -33,6 +33,7 @@ def declared_non_darwin(record_root: Path | None = None) -> set[tuple[str, str]]
     with tempfile.TemporaryDirectory() as tmp:
         script = Path(tmp) / "declared.cmake"
         script.write_text(
+            'cmake_minimum_required(VERSION 3.24)\n'
             f'include("{HERE / "VellumMirrorPlatform.cmake"}")\n{override}'
             'vellum_mirror_declared_platforms(_p)\nforeach(_x IN LISTS _p)\n'
             '    message(STATUS "DECLARED ${_x}")\nendforeach()\n', encoding="utf-8")
@@ -81,11 +82,16 @@ def make_root(tmp: Path) -> Path:
 
 
 def toolchain(system: str, processor: str, path: Path) -> None:
+    # Windows-Clang enables RC during configure, even without resource sources.
+    # This probe never compiles resources and must not need a Windows SDK.
+    resource_compiler = ('set(CMAKE_RC_COMPILER "${CMAKE_COMMAND}")\n'
+                         if system == "Windows" else "")
     path.write_text(
         f'set(CMAKE_SYSTEM_NAME {system})\n'
         f'set(CMAKE_SYSTEM_PROCESSOR {processor})\n'
         f'set(CMAKE_C_COMPILER "{CC}")\nset(CMAKE_CXX_COMPILER "{CXX}")\n'
-        'set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)\n', encoding="utf-8")
+        'set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)\n'
+        f'{resource_compiler}', encoding="utf-8")
 
 
 def probe(tmp: Path, system: str, processor: str, v8: bool) -> dict[tuple[str, str], str]:
