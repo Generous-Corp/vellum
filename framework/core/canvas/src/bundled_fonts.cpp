@@ -283,6 +283,7 @@ namespace {
 // family so match_registered_typeface can pick the best style match instead of
 // letting a later face silently replace an earlier one.
 struct RegisteredEntry {
+    std::string display_family;
     std::vector<sk_sp<SkTypeface>> faces;
     // The bytes each face was built from, index-aligned with `faces`, so a
     // re-registration of identical bytes can be recognised by CONTENT.
@@ -421,7 +422,7 @@ std::vector<RegisteredTypeface> registered_typefaces_snapshot() {
     const auto& map = registered_fonts();
     for (const auto& [family, entry] : map) {
         for (const auto& f : entry.faces) {
-            if (f) out.push_back({family, f});
+            if (f) out.push_back({entry.display_family.empty() ? family : entry.display_family, f});
         }
     }
     return out;
@@ -479,6 +480,7 @@ bool register_font(const std::uint8_t* data, std::size_t size,
         // refuse rather than insert under "".
         return false;
     }
+    const auto display_family = family;
     family = canonical_family(std::move(family));
 
     {
@@ -490,6 +492,8 @@ bool register_font(const std::uint8_t* data, std::size_t size,
         // Regular + Italic + Bold trio is the normal case for "drop the font
         // family folder in").
         auto& entry = registered_fonts()[family];
+        if (entry.display_family.empty())
+            entry.display_family = display_family;
         for (std::size_t i = 0; i < entry.faces.size(); ++i) {
             if (entry.faces[i].get() == face.get()) return true;
             // Same bytes under a family resolved from the face's own name

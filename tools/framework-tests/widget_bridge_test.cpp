@@ -250,6 +250,10 @@ FRAMEWORK_TEST(a_panel_cannot_rebind_a_family_another_owner_registered) {
 
     const auto host_case_variant = probe_family("host-case-variant");
     CHECK(vellum::canvas::register_font(bytes.data(), bytes.size(), host_case_variant));
+    bool host_display_name_preserved = false;
+    for (const auto& registered : vellum::canvas::registered_typefaces_snapshot())
+        host_display_name_preserved |= registered.family == host_case_variant;
+    CHECK(host_display_name_preserved);
     auto host_lower_case_variant = host_case_variant;
     std::transform(host_lower_case_variant.begin(), host_lower_case_variant.end(),
                    host_lower_case_variant.begin(),
