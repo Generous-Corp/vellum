@@ -110,6 +110,11 @@ def build_report(
     for event in effective:
         if event["disposition"] not in {"port-required", "ported"}:
             continue
+        # Only a generic fix made in Pulp is a repeated independent fix: a
+        # framework-to-Pulp event follows the framework-first rule, and the
+        # Pulp copy it names is legacy debt until Pulp consumes the framework.
+        if event["direction"] != "Pulp-to-framework":
+            continue
         if not counts_as_recent_fix(event, budgets, now):
             continue
         for key in event["contract_keys"]:

@@ -2422,6 +2422,21 @@ class RepeatedGenericFixWindowTests(unittest.TestCase):
         self.assertEqual(report["repeated_generic_fixes"], {"render": 3})
         self.assertIn("repeated-generic-fix-threshold-exceeded", report["budget_violations"])
 
+    def test_framework_to_pulp_fixes_do_not_count(self) -> None:
+        for disposition in ("port-required", "ported"):
+            with self.subTest(disposition=disposition):
+                report = self.report(self.events(
+                    ["2026-11-23T00:00:00Z"] * 3, direction="framework-to-Pulp", disposition=disposition))
+                self.assertEqual(report["repeated_generic_fixes"], {})
+                self.assertEqual(report["health"], "pass")
+        mixed = self.events(["2026-11-23T00:00:00Z"] * 2) + [
+            (Path(f"vellum-{path}"), {**event, "event_id": f"vellum-{event['event_id']}",
+                                      **({"resolves": f"vellum-{event['resolves']}"} if "resolves" in event else
+                                         {"direction": "framework-to-Pulp"})})
+            for path, event in self.events(["2026-11-23T00:00:00Z"])
+        ]
+        self.assertEqual(self.report(mixed)["repeated_generic_fixes"], {"render": 2})
+
     def test_the_same_fixes_older_than_the_window_pass(self) -> None:
         report = self.report(self.events(["2026-11-01T00:00:00Z"] * 3))
         self.assertEqual(report["repeated_generic_fixes"], {})

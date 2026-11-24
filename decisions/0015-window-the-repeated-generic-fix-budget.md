@@ -3,7 +3,8 @@
 - Date: 2026-11-24
 - Status: accepted. The owner approved giving the budget a time window of
   about 14 days (pulp-planning `vellum-move/DECISIONS.md`, 2026-11-24, "split
-  the backlog and window the repeated-fix budget").
+  the backlog and window the repeated-fix budget"), and on the same day
+  ratified counting only Pulp-to-framework events.
 
 ## Problem
 
@@ -30,9 +31,20 @@ time budgets Decision 0013 reports instead of enforcing.
    stale-report check still loads, therefore judges exactly as it did, and a
    missing key can never loosen the budget. A window below one day is refused.
 
+4. Only Pulp-to-framework events count. The extraction spec (pulp-planning
+   `2026-07-22-native-gpu-application-framework-extraction-v3-spec.md`) states
+   the stop signal as repeated independent fixes to the same generic behavior,
+   that is, general framework development continuing in Pulp. It also says a
+   generic bug is fixed framework-first, an urgent Pulp legacy fix is an
+   explicit one-way backport, and framework-to-Pulp events remain advisory
+   until Pulp becomes a consumer. A framework-to-Pulp port-required or ported
+   event is that sanctioned workflow, not the signal.
+
 ## Consequences
 
-A burst of fixes to one contract still fails health. Debt older than the
+A burst of Pulp-side generic fixes to one contract still fails health. A
+burst of framework-to-Pulp ports is no longer caught by this budget; the
+pending-count and overdue budgets still cover unclassified ones. Debt older than the
 window stops counting. The window only shrinks a count as time passes, so the
 clock alone can clear this violation but never raise it, and Decision 0013's
 reasoning about clock-driven failures does not apply. A later resolution of an
