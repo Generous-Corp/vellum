@@ -1157,6 +1157,7 @@ void WidgetBridge::register_api() {
     // evaluated after this run against the resulting surface. Append; never sort.
     static constexpr ApiGroup kGroups[] = {
         {std::nullopt, &BridgeRegistrars::register_widget_factory_controls_api},
+        {std::nullopt, &BridgeRegistrars::register_widget_asset_styling_api},
         // Reads arbitrary file paths (image/sprite assets) → gated by Filesystem.
         {ReloadCapability::Filesystem, &BridgeRegistrars::register_widget_assets_api},
         {std::nullopt, &BridgeRegistrars::register_widget_factory_form_api},

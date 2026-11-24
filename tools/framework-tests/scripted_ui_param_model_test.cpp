@@ -9,6 +9,7 @@
 #include <vellum/value/param_metadata.hpp>
 #include <vellum/view/scripted_ui.hpp>
 #include <vellum/view/view.hpp>
+#include <vellum/view/widgets.hpp>
 
 #include <cmath>
 #include <optional>
@@ -76,6 +77,12 @@ view::ScriptedUiOptions options_for(std::string source) {
     return options;
 }
 
+view::ScriptedUiOptions empty_capability_options(std::string source) {
+    auto options = options_for(std::move(source));
+    options.granted_capabilities = view::CapabilitySet{};
+    return options;
+}
+
 bool near(double a, double b) { return std::abs(a - b) < 1e-6; }
 
 FRAMEWORK_TEST(a_model_session_runs_its_script_against_the_model) {
@@ -131,6 +138,37 @@ FRAMEWORK_TEST(a_store_session_is_unchanged) {
     CHECK(session.probe_dropped_writes() == 0);
     CHECK(session.bridge() != nullptr);
     CHECK(value::metadata_of(session.bridge()->params()) != nullptr);
+}
+
+FRAMEWORK_TEST(empty_capability_session_applies_captured_knob_indicator) {
+    auto model = make_model();
+    view::View root;
+    root.set_bounds({0, 0, 300, 200});
+    view::ScriptedUiSession session(
+        root, model, empty_capability_options(
+            "createKnob('cutoff', 0, 0, 40, 40);"
+            "setKnobCapturedIndicator('cutoff', 0.2, 0.8, 2.5, '#12abef', 0.35);"));
+    std::string error;
+    CHECK(session.load(&error));
+    CHECK(error.empty());
+    auto* knob = dynamic_cast<view::Knob*>(session.bridge()->widget("cutoff"));
+    CHECK(knob != nullptr);
+    CHECK(knob->has_captured_indicator());
+    CHECK(std::abs(knob->captured_indicator_r_in() - 0.2f) < 1e-6f);
+    CHECK(std::abs(knob->captured_indicator_r_out() - 0.8f) < 1e-6f);
+    CHECK(std::abs(knob->captured_indicator_phase_rad() - 0.35f) < 1e-6f);
+}
+
+FRAMEWORK_TEST(empty_capability_session_hides_file_reading_asset_api) {
+    auto model = make_model();
+    view::View root;
+    root.set_bounds({0, 0, 300, 200});
+    view::ScriptedUiSession session(
+        root, model, empty_capability_options(
+            "if (typeof setImageSource !== 'undefined') throw new Error('filesystem API granted');"));
+    std::string error;
+    CHECK(session.load(&error));
+    CHECK(error.empty());
 }
 
 // A script that refuses to run unless getParamMetadata reports what the live
