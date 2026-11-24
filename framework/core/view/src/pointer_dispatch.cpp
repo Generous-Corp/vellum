@@ -247,7 +247,11 @@ bool transfer_input_focus(View& root, View* target, FocusCause cause) {
     if (target && !still_in_tree(target, &root)) return false;
     ViewCapture target_capture;
     target_capture.set(target);
-    const bool target_focusable = target && target->focusable();
+    const bool target_focusable = target && target->focusable() && target->effectively_enabled();
+    // A disabled target leaves the current focus alone. An enabled target
+    // that simply cannot take focus still blurs the focused view, as a click
+    // on empty space does.
+    if (target && !target->effectively_enabled()) return true;
     if (!drain_root_focus(root, target_capture, target_focusable, cause)) return false;
     if (!target) return false;
     target = target_capture.live_in(root);
