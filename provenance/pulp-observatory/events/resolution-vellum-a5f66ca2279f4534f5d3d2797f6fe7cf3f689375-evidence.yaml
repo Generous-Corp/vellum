@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-a5f66ca2279f4534f5d3d2797f6fe7cf3f689375-evidence",
+  "kind": "resolution",
+  "created_at": "2026-11-24T20:42:33Z",
+  "resolves": "vellum-a5f66ca2279f4534f5d3d2797f6fe7cf3f689375",
+  "disposition": "ported",
+  "rationale": "Shares one cumulative decompression budget across ZIP entries and the inner .fig chunks. Pulp carries it: f954a741 (cap cumulative fig ZIP decompression, refs pulp#12758) added the shared entry budget and b228bd8b passes the same budget to decompressChunk for the schema and message chunks. Both are ancestors of Pulp main. Evidence supplement; the disposition is unchanged. See provenance/pulp-observatory/reports/decoder-evidence.md for immutable implementation links, executable boundary checks and mutation controls at Pulp b0ee92d21944d5c956603afd1108b575e50c1302. The previous event is retained as history; this evidence replaces its identifier-count argument.",
+  "owner": "@repair-lane",
+  "linked_commits": [
+    "a5f66ca2279f4534f5d3d2797f6fe7cf3f689375",
+    "b228bd8b90687ed159b1ad622b7bf3852d776f25",
+    "f954a7413c1e36170dade54431fe3d201c8fbb20"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/issues/12758"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}
