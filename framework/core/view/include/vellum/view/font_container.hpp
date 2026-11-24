@@ -45,6 +45,37 @@ inline std::size_t woff2_declared_sfnt_size(const std::uint8_t* data, std::size_
            (static_cast<std::size_t>(data[18]) << 8) | static_cast<std::size_t>(data[19]);
 }
 
+namespace detail {
+
+// The routing policy accepts parser operations so its refusal paths can be
+// checked independently of a platform font manager's permissiveness.
+struct FontContainerParsers {
+    bool (*woff2_available)() noexcept;
+    bool (*decode_woff2)(const std::uint8_t*, std::size_t, const std::string&);
+    bool (*validate)(const std::uint8_t*, std::size_t);
+    bool (*register_raw)(const std::uint8_t*, std::size_t, const std::string&);
+};
+
+inline bool register_font_container_with(const std::uint8_t* data, std::size_t size,
+                                         const std::string& family,
+                                         const FontContainerParsers& parsers) {
+    if (size > kMaxShippedFontBytes || !has_font_container_signature(data, size))
+        return false;
+    if (data[0] == 'w') {
+        if (parsers.woff2_available())
+            return parsers.decode_woff2(data, size, family);
+        const auto declared = woff2_declared_sfnt_size(data, size);
+        if (declared == 0 || declared > kMaxShippedWoff2SfntBytes)
+            return false;
+        return parsers.register_raw(data, size, family);
+    }
+    if (!parsers.validate(data, size))
+        return false;
+    return parsers.register_raw(data, size, family);
+}
+
+} // namespace detail
+
 /// Register an in-memory font container under `family`. Bytes larger than
 /// `kMaxShippedFontBytes` or without a font container signature are refused
 /// before any parser sees them. TrueType and OpenType bytes are structurally
@@ -56,19 +87,10 @@ inline std::size_t woff2_declared_sfnt_size(const std::uint8_t* data, std::size_
 /// filesystem. Registration is process-global.
 inline bool register_font_container(const std::uint8_t* data, std::size_t size,
                                     const std::string& family) {
-    if (size > kMaxShippedFontBytes || !has_font_container_signature(data, size))
-        return false;
-    if (data[0] == 'w') {
-        if (vellum::canvas::woff2_decoder_available())
-            return vellum::canvas::register_font_woff2(data, size, family);
-        const auto declared = woff2_declared_sfnt_size(data, size);
-        if (declared == 0 || declared > kMaxShippedWoff2SfntBytes)
-            return false;
-        return vellum::canvas::register_font(data, size, family);
-    }
-    if (!vellum::canvas::validate_font_bytes(data, size))
-        return false;
-    return vellum::canvas::register_font(data, size, family);
+    const detail::FontContainerParsers parsers{
+        vellum::canvas::woff2_decoder_available, vellum::canvas::register_font_woff2,
+        vellum::canvas::validate_font_bytes, vellum::canvas::register_font};
+    return detail::register_font_container_with(data, size, family, parsers);
 }
 
 } // namespace vellum::view

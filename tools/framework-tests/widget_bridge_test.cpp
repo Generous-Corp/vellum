@@ -296,6 +296,10 @@ public:
     std::string run_pending_post_evaluation_reset() override { return {}; }
 };
 
+std::unique_ptr<view::ScriptInspectorPort> make_reset_test_port() {
+    return std::make_unique<ResetTestPort>();
+}
+
 FRAMEWORK_TEST(deadline_recovery_reuses_last_good_sealed_fonts) {
     const auto dir = fresh_temp_dir("recovery");
     std::filesystem::copy_file(VELLUM_TEST_FONT_PATH, dir / "face.ttf");
@@ -311,9 +315,7 @@ FRAMEWORK_TEST(deadline_recovery_reuses_last_good_sealed_fonts) {
     struct FactoryGuard {
         view::ScriptInspectorPortFactory previous = view::script_inspector_port_factory();
         FactoryGuard() {
-            view::set_script_inspector_port_factory([]() -> std::unique_ptr<view::ScriptInspectorPort> {
-                return std::make_unique<ResetTestPort>();
-            });
+            view::set_script_inspector_port_factory(make_reset_test_port);
         }
         ~FactoryGuard() {
             view::set_script_inspector_port_factory(previous);

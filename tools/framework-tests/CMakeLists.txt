@@ -41,7 +41,7 @@ function(vellum_add_framework_test name)
     endforeach()
 endfunction()
 
-# This executable supplies parser spies, so it deliberately links no canvas library.
+# The routing policy test supplies parser operations without linking a canvas library.
 add_executable(vellum-framework-font-container-route-test font_container_route_test.cpp)
 target_include_directories(vellum-framework-font-container-route-test PRIVATE
     "${PROJECT_SOURCE_DIR}/framework/core/view/include"
