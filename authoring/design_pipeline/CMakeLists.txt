@@ -52,6 +52,7 @@ if(VELLUM_BUILD_TESTS)
     target_link_libraries(vellum-emitter-conformance-gen PRIVATE Vellum::MirrorDesign_import)
     set(_vellum_conformance_dir "${CMAKE_CURRENT_BINARY_DIR}/emitter_conformance")
     set(_vellum_conformance_sources)
+    set(_vellum_conformance_stems)
     foreach(_spec
             "form_controls_08|ir|fixtures/emitter-conformance/form-controls-08.ir.json"
             "spectr|ir|fixtures/emitter-conformance/spectr.ir.json"
@@ -62,6 +63,7 @@ if(VELLUM_BUILD_TESTS)
         list(GET _parts 0 _stem)
         list(GET _parts 1 _kind)
         list(GET _parts 2 _input)
+        list(APPEND _vellum_conformance_stems ${_stem})
         set(_outputs
             "${_vellum_conformance_dir}/${_stem}.hpp"
             "${_vellum_conformance_dir}/${_stem}.cpp"
@@ -90,8 +92,12 @@ if(VELLUM_BUILD_TESTS)
         tests/design_emitter_conformance_test.cpp)
     target_link_libraries(vellum-design-emitter-conformance
         PRIVATE vellum-emitter-conformance-baked Vellum::MirrorDesign_import)
+    # The generated fixture set, so the test can prove it compares every
+    # fixture the build generates and links.
+    string(REPLACE ";" "," _vellum_conformance_stem_csv "${_vellum_conformance_stems}")
     target_compile_definitions(vellum-design-emitter-conformance PRIVATE
-        VELLUM_REPO_ROOT="${PROJECT_SOURCE_DIR}")
+        VELLUM_REPO_ROOT="${PROJECT_SOURCE_DIR}"
+        VELLUM_CONFORMANCE_STEMS="${_vellum_conformance_stem_csv}")
     set_target_properties(vellum-design-emitter-conformance PROPERTIES
         BUILD_RPATH "$<TARGET_FILE_DIR:vellum-skia-dawn-provider>")
     add_test(NAME vellum.design-emitter-conformance
