@@ -63,6 +63,14 @@ else()
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES canvas_raster_parity_test.cpp)
 endif()
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    vellum_add_framework_test(text-button-measure
+        SOURCES text_button_measure_test.cpp
+        UNITS Vellum::MirrorView_core)
+else()
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES text_button_measure_test.cpp)
+endif()
+
 vellum_add_framework_test(react-materialization
     SOURCES react_materialization_test.cpp
     UNITS Vellum::MirrorView_script)
