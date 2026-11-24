@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-af17426f1928c1d49c72f26d5bc25954a0117178",
+  "kind": "resolution",
+  "created_at": "2026-11-24T07:21:00Z",
+  "resolves": "vellum-af17426f1928c1d49c72f26d5bc25954a0117178",
+  "disposition": "framework-only",
+  "rationale": "Vellum is audio-free: drops the spectr and kelvin audio fixtures from Vellum's conformance executable and the view-audio force-load. Pulp's gate keeps both fixtures and its audio displays; nothing to port. Pulp search at origin/main 25e27ae8ce96 (git grep -w -F over the whole tree, integrations/ included) for VELLUM_VIEW_AUDIO_ARCHIVE and VELLUM_CONFORMANCE_FIXTURE returns 0; control SkiaSurface on the same search returns 389 in 112 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-09, 'Classify the pending Vellum observatory events instead of raising the budget'); no schema or API delta recorded on the event. Any later resolution overrides this.",
+  "owner": "@danielraffel",
+  "linked_commits": [
+    "af17426f1928c1d49c72f26d5bc25954a0117178"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}

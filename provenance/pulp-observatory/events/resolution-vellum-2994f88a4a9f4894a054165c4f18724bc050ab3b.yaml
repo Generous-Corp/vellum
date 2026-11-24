@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-2994f88a4a9f4894a054165c4f18724bc050ab3b",
+  "kind": "resolution",
+  "created_at": "2026-11-24T07:21:00Z",
+  "resolves": "vellum-2994f88a4a9f4894a054165c4f18724bc050ab3b",
+  "disposition": "framework-only",
+  "rationale": "Test-only: covers the Vellum graphics package's portable SHA-256 (graphics/tests/portable_sha256_test.cpp). Pulp has no graphics/ tree. Pulp search at origin/main 25e27ae8ce96 (git grep -w -F over the whole tree, integrations/ included) for portable_sha256_test, sha256_impl and sha256_digest returns 0; control SkiaSurface on the same search returns 389 in 112 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-09, 'Classify the pending Vellum observatory events instead of raising the budget'); no schema or API delta recorded on the event. Any later resolution overrides this.",
+  "owner": "@danielraffel",
+  "linked_commits": [
+    "2994f88a4a9f4894a054165c4f18724bc050ab3b"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}
