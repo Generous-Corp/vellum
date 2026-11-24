@@ -6,6 +6,7 @@ reads back the target properties the module generated. Nothing is compiled.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -19,6 +20,31 @@ REPO = HERE.parent.parent
 PROBE = HERE / "platform_targets"
 CC = shutil.which("clang") or shutil.which("cc")
 CXX = shutil.which("clang++") or shutil.which("c++")
+
+
+# The platforms the tests below probe. A declared platform missing from this
+# set fails test_every_declared_platform_is_probed instead of going unprobed.
+PROBED_PLATFORMS = {("Linux", "x86_64"), ("Windows", "AMD64")}
+
+
+def declared_non_darwin(record_root: Path | None = None) -> set[tuple[str, str]]:
+    """The non-Darwin platforms VellumMirrorPlatform.cmake declares."""
+    override = f'set(VELLUM_MIRROR_PLATFORM_RECORD_ROOT "{record_root}")\n' if record_root else ""
+    with tempfile.TemporaryDirectory() as tmp:
+        script = Path(tmp) / "declared.cmake"
+        script.write_text(
+            f'include("{HERE / "VellumMirrorPlatform.cmake"}")\n{override}'
+            'vellum_mirror_declared_platforms(_p)\nforeach(_x IN LISTS _p)\n'
+            '    message(STATUS "DECLARED ${_x}")\nendforeach()\n', encoding="utf-8")
+        result = subprocess.run(["cmake", "-P", str(script)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    found = set()
+    for line in (result.stdout + result.stderr).splitlines():
+        if "DECLARED " in line:
+            system, processor = line.split("DECLARED ", 1)[1].strip().split("|")
+            if system != "Darwin":
+                found.add((system, processor))
+    return found
 
 
 def link_tree(source: Path, destination: Path, replace: dict[str, Path]) -> None:
@@ -95,6 +121,28 @@ class MirrorPlatformTargetTests(unittest.TestCase):
     def run_platform(self, system: str, processor: str, v8: bool = True):
         with tempfile.TemporaryDirectory() as tmp:
             return probe(Path(tmp), system, processor, v8)
+
+    def test_every_declared_platform_is_probed(self) -> None:
+        self.assertEqual(declared_non_darwin(), PROBED_PLATFORMS)
+
+    def test_a_declared_platform_that_is_not_probed_is_detected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "platforms"
+            for key in ("linux-x64", "windows-x64"):
+                shutil.copytree(REPO / "provenance/framework/platforms" / key, root / key)
+            extra = root / "linux-arm64"
+            extra.mkdir()
+            text = (root / "linux-x64/record.json").read_text(encoding="utf-8")
+            text = text.replace('"platform": "linux-x64"', '"platform": "linux-arm64"')
+            text = text.replace('"processor": "x86_64"', '"processor": "aarch64"')
+            (extra / "record.json").write_text(text, encoding="utf-8")
+            index = {"schema": "vellum.framework-platform-index.v1", "platforms": {
+                key: f"provenance/framework/platforms/{key}/record.json"
+                for key in ("linux-x64", "windows-x64", "linux-arm64")}}
+            (root / "index.json").write_text(json.dumps(index), encoding="utf-8")
+            declared = declared_non_darwin(root)
+        self.assertIn(("Linux", "aarch64"), declared)
+        self.assertNotEqual(declared, PROBED_PLATFORMS)
 
     def test_linux_generates_origin_rpath_x11_host_and_so_provider(self) -> None:
         props = self.run_platform("Linux", "x86_64")
