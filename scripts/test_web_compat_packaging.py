@@ -1,6 +1,8 @@
 """Harness bundles ship as SDK resources and never replace native preludes."""
 
 import re
+import json
+import hashlib
 import subprocess
 import tempfile
 import unittest
@@ -162,6 +164,62 @@ class WebCompatPackagingTests(unittest.TestCase):
                     relative = f"lib/cmake/Vellum/scripts/{bundle}.js"
                     self.assertEqual((prefix / relative).read_bytes(),
                                      (VIEW / f"js/{bundle}.js").read_bytes())
+
+    def test_installed_sdk_helper_embeds_manifest_and_rejects_missing_prelude(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp)
+            producer = source / "producer"
+            producer.mkdir()
+            (producer / "CMakeLists.txt").write_text(
+                'cmake_minimum_required(VERSION 3.24)\n'
+                'project(WebCompatInstall VERSION 0.2.3 LANGUAGES NONE)\n'
+                'include(GNUInstallDirs)\n'
+                f'include("{ROOT / "cmake/VellumWebCompat.cmake"}")\n'
+                'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/VellumConfig.cmake"\n'
+                '  "include(\\\"\\${CMAKE_CURRENT_LIST_DIR}/web-compat/VellumWebCompatPackage.cmake\\\")\\n")\n'
+                'install(FILES "${CMAKE_CURRENT_BINARY_DIR}/VellumConfig.cmake"\n'
+                '  DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/Vellum")\n')
+            build, prefix = source / "build", source / "sdk"
+            for cmd in (["cmake", "-S", str(producer), "-B", str(build)],
+                        ["cmake", "--install", str(build), "--prefix", str(prefix)]):
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+            consumer = source / "consumer"
+            consumer.mkdir()
+            (consumer / "CMakeLists.txt").write_text(
+                'cmake_minimum_required(VERSION 3.24)\n'
+                'project(WebCompatConsumer LANGUAGES NONE)\n'
+                'find_package(Vellum CONFIG REQUIRED)\n'
+                'vellum_embed_web_compat_preludes("${CMAKE_CURRENT_BINARY_DIR}/embedded.cpp"\n'
+                '  "${CMAKE_CURRENT_BINARY_DIR}/web_compat_preludes_gen.hpp")\n'
+                'add_custom_target(embed ALL DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/embedded.cpp")\n')
+            consumer_build = source / "consumer-build"
+            result = subprocess.run([
+                "cmake", "-S", str(consumer), "-B", str(consumer_build),
+                f"-DCMAKE_PREFIX_PATH={prefix}",
+            ], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            result = subprocess.run(["cmake", "--build", str(consumer_build), "--target", "embed"],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            manifest = json.loads((prefix / "lib/cmake/Vellum/web-compat/vellum-web-compat-manifest.json").read_text())
+            generated = (consumer_build / "embedded.cpp").read_text()
+            self.assertEqual({entry["name"] for entry in manifest["preludes"]},
+                             {path.name for path in (prefix / "lib/cmake/Vellum/web-compat/preludes").glob("*.js")})
+            for entry in manifest["preludes"]:
+                installed = prefix / "lib/cmake/Vellum/web-compat/preludes" / entry["name"]
+                self.assertEqual(hashlib.sha256(installed.read_bytes()).hexdigest(), entry["sha256"])
+                self.assertIn(entry["name"], generated)
+
+            missing = prefix / "lib/cmake/Vellum/web-compat/preludes" / manifest["preludes"][0]["name"]
+            missing.unlink()
+            negative_build = source / "negative-build"
+            result = subprocess.run([
+                "cmake", "-S", str(consumer), "-B", str(negative_build),
+                f"-DCMAKE_PREFIX_PATH={prefix}",
+            ], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
 
 
 if __name__ == "__main__":
