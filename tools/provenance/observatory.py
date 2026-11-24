@@ -1266,9 +1266,13 @@ def base_pending_event_count(
 ) -> int:
     """Pending observations among the events already on git_base.
 
-    Append-only verification has already proved the base's event files are
-    unchanged, so the base ledger is the current ledger without the events
-    this change adds. Without a base nothing counts as existing debt.
+    The base ledger is taken to be the current ledger without the events this
+    change adds. That holds only when the base's event files are unchanged:
+    append-only verification proves it for committed changes in
+    git_base..HEAD, but not for uncommitted working-tree edits, which the
+    receiver's in-place reconcile produces. The receiver therefore relies on
+    its reconcile writing only new event files. Without a base nothing counts
+    as existing debt.
     """
     if git_base is None:
         return 0
