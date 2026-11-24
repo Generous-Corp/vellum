@@ -250,6 +250,19 @@ resolution, so `provenance-verify` judges a tag at its commit's committer time;
 re-running a tag's job later gives the same answer. `--now` is for that and for
 tests; nothing else should pass it.
 
+The workflow chooses, by the event that started the run and never from the
+ledger's content, how much debt already on the base may fail the run. Pushes to `main` and tags enforce every budget
+ledger-wide (`--time-budgets enforce --pending-event-scope all`). Pull requests
+and queue entries report the time budgets and count only the pending events
+they add (`report`, `introduced`; Decision 0013). The receiver's reconcile
+reports the time budgets and judges the whole ledger against the larger of the
+budget and the base's own pending count (`report`, `non-increasing`): it can
+land evidence while `main` carries debt, but it never leaves more pending events
+than `main` had once `main` is at or over budget. In every scope an event the
+run adds that is already overdue or over age fails it. A dry-run release tag is
+signed only on a commit whose ledger passes every budget at its committer time
+(`scripts/release_dry_run.py plan`).
+
 The active cursor's `pulp.last_scanned_commit` began at the exact landed Pulp
 activation boundary and advanced through reviewed reconciliation until
 Decision 0011 froze Pulp observation at

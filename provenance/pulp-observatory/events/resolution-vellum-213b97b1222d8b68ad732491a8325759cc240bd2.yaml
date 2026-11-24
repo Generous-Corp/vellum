@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-213b97b1222d8b68ad732491a8325759cc240bd2",
+  "kind": "resolution",
+  "created_at": "2026-11-24T07:21:00Z",
+  "resolves": "vellum-213b97b1222d8b68ad732491a8325759cc240bd2",
+  "disposition": "framework-only",
+  "rationale": "Vellum build wiring: gives vellum-emitter-conformance-gen the Vellum mirror include roots. Pulp has no authoring/ tree (0 files at origin/main) and builds its generator from test/cmake. Pulp search at origin/main 25e27ae8ce96 (git grep -w -F over the whole tree, integrations/ included) for _vellum_mirror_public_includes, VELLUM_MIRROR_BUILD_INFO_DIR and VELLUM_MIRROR_CHOC_ROOT returns 0; control SkiaSurface on the same search returns 389 in 112 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-09, 'Classify the pending Vellum observatory events instead of raising the budget'); no schema or API delta recorded on the event. Any later resolution overrides this.",
+  "owner": "@danielraffel",
+  "linked_commits": [
+    "213b97b1222d8b68ad732491a8325759cc240bd2"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}

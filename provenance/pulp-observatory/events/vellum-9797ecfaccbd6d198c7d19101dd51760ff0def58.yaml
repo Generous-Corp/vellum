@@ -1,0 +1,40 @@
+{
+  "class": "test",
+  "contract_keys": [
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-24T08:38:46Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-9797ecfaccbd6d198c7d19101dd51760ff0def58",
+  "include_dependency_deltas": [],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "authoring/design_pipeline/tests/design_emitter_conformance_test.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "fba9227ae1dc881f3b85588056e50e18ba4a9d1d",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "fef5dd779747e466b08d276c501a47bf7bdee7ec",
+    "to_commit": "63cd95892a803a86b51e4a0fc6fbd39c8a1e765d"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "9797ecfaccbd6d198c7d19101dd51760ff0def58",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

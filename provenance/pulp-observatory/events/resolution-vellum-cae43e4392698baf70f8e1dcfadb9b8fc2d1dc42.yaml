@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-cae43e4392698baf70f8e1dcfadb9b8fc2d1dc42",
+  "kind": "resolution",
+  "created_at": "2026-11-24T07:21:00Z",
+  "resolves": "vellum-cae43e4392698baf70f8e1dcfadb9b8fc2d1dc42",
+  "disposition": "framework-only",
+  "rationale": "Vellum build wiring: graphics/CMakeLists.txt passes -reexport_library for vellum-skia-dawn-provider only on Apple. Pulp has no graphics/ tree and no such target. Pulp search at origin/main 25e27ae8ce96 (git grep -w -F over the whole tree, integrations/ included) for reexport_library returns 0 (fixed-string vellum-skia-dawn-provider appears only in a SKILL.md sentence and a test fixture string, never as a target); control SkiaSurface on the same search returns 389 in 112 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-09, 'Classify the pending Vellum observatory events instead of raising the budget'); no schema or API delta recorded on the event. Any later resolution overrides this.",
+  "owner": "@danielraffel",
+  "linked_commits": [
+    "cae43e4392698baf70f8e1dcfadb9b8fc2d1dc42"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}

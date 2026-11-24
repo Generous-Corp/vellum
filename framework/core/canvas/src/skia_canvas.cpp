@@ -848,7 +848,10 @@ void SkiaCanvas::set_line_dash(const float* intervals, int count, float phase) {
 }
 
 void SkiaCanvas::set_font(const std::string& family, float size) {
-    font_family_ = family;
+    // Widgets name their default face "system". That is a widget alias for the
+    // platform UI font, not a CSS family, so it is resolved here, ahead of the
+    // CSS generic table, which leaves a literal `system` family alone.
+    font_family_ = family == "system" ? std::string("system-ui") : family;
     // Same reasoning as set_line_width: an unusable size must not reach the
     // glyph-to-path stroker.
     if (usable_text_geometry(size))

@@ -1647,11 +1647,27 @@ public:
     }
     float skin_track_width() const { return skin_track_width_; }
     bool has_skin_track_width() const { return has_skin_track_width_; }
+    /// The imported body beneath already paints a static track with no value
+    /// fill, so paint only the live cap and leave those authored pixels alone.
+    /// For a design whose track shows the value, leave this off.
+    void set_authored_body_only(bool enabled = true) {
+        authored_body_only_ = enabled;
+        request_repaint();
+    }
+    bool authored_body_only() const { return authored_body_only_; }
+    void set_designed_overlay(bool enabled) {
+        designed_overlay_ = enabled;
+        authored_body_only_ = enabled;
+        request_repaint();
+    }
+    bool designed_overlay() const { return designed_overlay_; }
     void clear_skin() {
         clear_skin_thumb_style();
         has_skin_track_ = has_skin_fill_ = false;
         has_skin_track_border_ = false;
         has_skin_track_width_ = false;
+        authored_body_only_ = false;
+        designed_overlay_ = false;
         request_repaint();
     }
     bool has_skin() const {
@@ -1702,6 +1718,8 @@ private:
     bool has_skin_track_border_ = false;
     float skin_track_width_ = 0.0f;
     bool has_skin_track_width_ = false;
+    bool authored_body_only_ = false;
+    bool designed_overlay_ = false;
 };
 
 /// The SDF shape a widget's chart shader is drawn on: `flat_arc` for a Knob's
