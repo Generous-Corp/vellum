@@ -17,6 +17,7 @@ observatory:
   maximum_overdue_events: 0
   maximum_pending_event_age_days: 7
   maximum_repeated_generic_fixes: 2
+  repeated_generic_fix_window_days: 14
   maximum_framework_effort_percent: 15
 notes:
   - These are private experimental targets, not public performance claims.
