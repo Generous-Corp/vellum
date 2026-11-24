@@ -7,8 +7,8 @@
     "thumb": {"x": 2, "width": 20, "height": 12, "fill": [0, 0, 0, 255]}
   },
   "oracle": {
-    "max_mismatch_fraction": 0.05,
+    "max_mismatch_fraction": 0.025,
     "channel_threshold": 8,
-    "justification": "The 5% ceiling is above the one-pixel antialiasing floor while rejecting a full-width procedural track."
+    "justification": "Measured against the real Chromium browser-source crop, the native residual floor is 2.01%; 2.5% clears that floor while rejecting the full-width procedural track."
   }
 }

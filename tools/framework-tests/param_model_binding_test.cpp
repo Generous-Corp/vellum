@@ -6,6 +6,8 @@
 #include <vellum/value/in_memory_param_model.hpp>
 #include <vellum/value/param_metadata.hpp>
 #include <vellum/view/parameter_binding.hpp>
+#include <vellum/view/design_import.hpp>
+#include <vellum/view/screenshot.hpp>
 
 #include <cmath>
 #include <cstdio>
@@ -657,6 +659,40 @@ FRAMEWORK_TEST(a_dropped_store_binding_leaves_its_widgets_writing_the_store) {
     CHECK(rs.host_begins == 5);
     CHECK(rs.host_ends == 5);
     CHECK(near(store.get_normalized(2), pad.x_value()));
+}
+
+FRAMEWORK_TEST(authored_fader_overlay_does_not_paint_a_stock_track) {
+    if (!vellum::view::raw_rgba_render_available())
+        return;
+    vellum::view::DesignIR ir;
+    ir.root.type = "frame";
+    ir.root.style.width = 24.0f;
+    ir.root.style.height = 160.0f;
+    vellum::view::IRNode fader;
+    fader.type = "fader";
+    fader.audio_widget = vellum::view::AudioWidgetType::fader;
+    fader.style.width = 24.0f;
+    fader.style.height = 160.0f;
+    fader.audio_default = 0.5f;
+    fader.attributes["pulpRouteId"] = "route:fader";
+    fader.attributes["designed_body"] = "capture";
+    ir.root.children.push_back(std::move(fader));
+    auto root = vellum::view::build_native_view_tree(ir, {});
+    CHECK(root != nullptr);
+    if (!root)
+        return;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    const auto rgba = vellum::view::render_to_rgba(*root, 24, 160, 1.0f, &width, &height);
+    CHECK(width == 24);
+    CHECK(height == 160);
+    CHECK(rgba.size() == static_cast<std::size_t>(width) * height * 4);
+    for (std::uint32_t y = 0; y < height; ++y) {
+        if (y >= 72 && y <= 88)
+            continue;
+        const std::size_t alpha = (static_cast<std::size_t>(y) * width + width / 2) * 4 + 3;
+        CHECK(rgba[alpha] == 0);
+    }
 }
 
 }  // namespace

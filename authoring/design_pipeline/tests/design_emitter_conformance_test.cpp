@@ -884,6 +884,32 @@ TEST_CASE("ui.js leaves a theme-painted control it has no case for as a plain fr
     }
 }
 
+TEST_CASE("authored faders use the designed overlay in every generated lane",
+          "[view][import][emitter-conformance][fader]") {
+    DesignIR ir;
+    ir.root.type = "frame";
+    ir.root.stable_anchor_id = "root";
+    ir.root.style.width = 120.0f;
+    ir.root.style.height = 120.0f;
+    IRNode fader;
+    fader.type = "fader";
+    fader.audio_widget = AudioWidgetType::fader;
+    fader.stable_anchor_id = "fader";
+    fader.style.width = 24.0f;
+    fader.style.height = 96.0f;
+    fader.attributes["pulpRouteId"] = "route:fader";
+    fader.attributes["designed_body"] = "capture";
+    fader.attributes["design_track"] = "#111111";
+    fader.attributes["design_accent"] = "#222222";
+    ir.root.children.push_back(fader);
+
+    const auto js = generate_pulp_js(ir, CodeGenOptions{});
+    CHECK(js.find("setDesignedOverlay") != std::string::npos);
+    CHECK(js.find("setFaderSkin('fader', '#111111'") == std::string::npos);
+    const auto cpp = generate_pulp_cpp(ir, {});
+    CHECK(cpp.source.find("set_designed_overlay(true)") != std::string::npos);
+}
+
 TEST_CASE("staged assets never write outside the staging directory",
           "[view][import][emitter-conformance]") {
     CHECK(is_contained_relative("images/a.png"));

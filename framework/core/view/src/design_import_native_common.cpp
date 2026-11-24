@@ -2428,6 +2428,13 @@ std::unique_ptr<View> make_widget(const IRNode& node,
                 fader->set_thumb_size(semantics.fader_thumb_width.value_or(0.0f),
                                       semantics.fader_thumb_height.value_or(0.0f));
             }
+            if (body_is_painted_beneath(node) &&
+                !semantics.fader_thumb_width && !semantics.fader_thumb_height) {
+                const auto captured_w = attr_float(node, "fader_indicator_natural_w");
+                const auto captured_h = attr_float(node, "fader_indicator_natural_h");
+                if (captured_w && captured_h && *captured_w > 0.0f && *captured_h > 0.0f)
+                    fader->set_thumb_size(*captured_w, *captured_h);
+            }
             if (semantics.fader_thumb_corner_radius)
                 fader->set_thumb_corner_radius(*semantics.fader_thumb_corner_radius);
             if (options.preview_mode) fader->set_render_style(WidgetRenderStyle::minimal);
@@ -2452,7 +2459,7 @@ std::unique_ptr<View> make_widget(const IRNode& node,
                         fader->set_skin_thumb_fallback_color(*color);
             } else {
                 if (body_is_painted_beneath(node)) {
-                    fader->set_authored_body_only();
+                    fader->set_designed_overlay(true);
                     if (const auto hex = attr(node, "design_accent"))
                         if (const auto color = parse_any_css_color(*hex))
                             fader->set_skin_thumb_color(*color);

@@ -452,6 +452,8 @@ void emit_widget_specific(std::ostringstream& out,
                 emit_line(out, depth, opts.indent_spaces,
                           std::string(var) + "->set_thumb_corner_radius(" + float_expr(ctx, *semantics.fader_thumb_corner_radius) + ");");
             }
+            if (body_is_painted_beneath(node))
+                emit_line(out, depth, opts.indent_spaces, std::string(var) + "->set_designed_overlay(true);");
             break;
         }
         case NativeWidgetKind::meter: {

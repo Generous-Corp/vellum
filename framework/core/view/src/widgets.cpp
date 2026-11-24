@@ -983,8 +983,7 @@ void Fader::paint_stock_thumb(canvas::Canvas& canvas, float pos, canvas::Color t
         // When the importer derived a thin track width, it also sized the
         // widget box to the captured thumb width — so the thumb fills the
         // box (no 0.62 shrink), and the track is the thin line.
-        const float skin_thumb_frac = has_skin_track_width_ ? 1.0f
-            : authored_body_only_ ? 0.8333333f : 0.62f;
+        const float skin_thumb_frac = has_skin_track_width_ ? 1.0f : 0.62f;
         const float skin_default_w = vert ? std::min(b.width, track_width) * skin_thumb_frac
                                           : std::max(10.0f, track_length * 0.10f);
         // A captured fader thumb is a flat slab — wider than tall (~2:1).
@@ -1174,7 +1173,7 @@ void Fader::paint(canvas::Canvas& canvas) {
         // goes on top.
         if (chart_only)
             paint_stock_thumb(canvas, pos, thumb_color);
-    } else if (render_style_ == WidgetRenderStyle::minimal) {
+    } else if (render_style_ == WidgetRenderStyle::minimal && !authored_body_only_) {
         // ── Minimal: thin track only, no fill, no thumb (matches design tools) ──
         auto track_color = resolve_color("control.track", canvas::Color::rgba8(69, 71, 90));
         canvas.set_fill_color(track_color);
@@ -1197,13 +1196,11 @@ void Fader::paint(canvas::Canvas& canvas) {
         // full-image sprite. Falls back to theme tokens when unset.
         const bool skinned = has_skin();
 
-        // An authored body already contains the hollow track and its value
-        // fill. Only the live thumb is supplied by this widget.
+        // An authored body already contains the track and value fill. Keep
+        // the live marker and label below this shared body tail.
         if (authored_body_only_) {
             paint_stock_thumb(canvas, pos, thumb_color);
-            return;
-        }
-
+        } else {
         // Track
         auto track_color = has_skin_track_
             ? track_color_
@@ -1264,6 +1261,7 @@ void Fader::paint(canvas::Canvas& canvas) {
         // value-driven, so the result is still a working fader rather than a
         // static screenshot.
         paint_stock_thumb(canvas, pos, thumb_color);
+        }
     }
 
     // Captured indicator art is a final compositing layer, independent of the

@@ -551,8 +551,9 @@ static void generate_node(std::ostringstream& ss, const IRNode& node,
                 };
                 const auto indicator = select_indicator_color(
                     node, "fader_ind_color");
-                if (!color("design_track").empty() ||
-                    !color("design_accent").empty() || !indicator.color.empty()) {
+                if (!browser_control_overlay &&
+                    (!color("design_track").empty() ||
+                     !color("design_accent").empty() || !indicator.color.empty())) {
                     ss << ind << "setFaderSkin(" << var << "._id, '"
                        << color("design_track") << "', '"
                        << color("design_accent") << "', '"
@@ -609,10 +610,19 @@ static void generate_node(std::ostringstream& ss, const IRNode& node,
                    << js_single_quote_escape(accent->second) << "');\n";
             }
             if (browser_control_overlay &&
-                (node.audio_widget == AudioWidgetType::toggle ||
+                (node.audio_widget == AudioWidgetType::fader ||
+                 node.audio_widget == AudioWidgetType::toggle ||
                  node.audio_widget == AudioWidgetType::stepper ||
                  node.audio_widget == AudioWidgetType::selector))
                 ss << ind << "setDesignedOverlay(" << var << "._id, true);\n";
+            if (browser_control_overlay && node.audio_widget == AudioWidgetType::fader &&
+                finite_numeric_attribute(node, "fader_indicator_natural_w", 0.0) > 0.0 &&
+                finite_numeric_attribute(node, "fader_indicator_natural_h", 0.0) > 0.0)
+                ss << ind << "setFaderSkin(" << var << "._id, '', '', '', '', "
+                   << finite_numeric_attribute(node, "fader_indicator_natural_w", 0.0)
+                   << ", " << finite_numeric_attribute(node, "fader_indicator_natural_h", 0.0)
+                   << ", " << finite_numeric_attribute(node, "fader_thumb_corner_radius", 0.0)
+                   << ", true);\n";
             emit_js_param_binding(ss, ind, var + "._id", node);
 
             // Same anchor contract as every non-widget node below: the
@@ -1764,7 +1774,7 @@ static void emit_js_audio_widget(const NativeEmit& e) {
             const std::string track = attr("design_track");
             const std::string fill = attr("design_accent");
             const std::string thumb = attr("design_indicator");
-            if (!track.empty() || !fill.empty() || !thumb.empty()) {
+            if (!browser_control_overlay && (!track.empty() || !fill.empty() || !thumb.empty())) {
                 ss << ind << "setFaderSkin('" << id << "', '"
                    << js_single_quote_escape(track) << "', '"
                    << js_single_quote_escape(fill) << "', '"
@@ -1777,7 +1787,7 @@ static void emit_js_audio_widget(const NativeEmit& e) {
         // the native fader renders the captured look while the thumb still
         // moves with setValue(). No per-instance hardcoding: every value
         // comes from node.attributes stamped by the sampler.
-        if (opts.skin_faders) {
+        if (opts.skin_faders && !browser_control_overlay) {
             auto attr = [&](const char* k) -> std::string {
                 auto it = node.attributes.find(k);
                 return it != node.attributes.end() ? it->second : std::string();
@@ -2003,10 +2013,19 @@ static void emit_js_audio_widget(const NativeEmit& e) {
     if (!needs_label_wrapper) emit_js_absolute_position(e, id);
     emit_js_visual_overrides(e, id);
     if (browser_control_overlay &&
-        (wtype == AudioWidgetType::toggle ||
+        (wtype == AudioWidgetType::fader ||
+         wtype == AudioWidgetType::toggle ||
          wtype == AudioWidgetType::stepper ||
          wtype == AudioWidgetType::selector))
         ss << ind << "setDesignedOverlay('" << id << "', true);\n";
+    if (browser_control_overlay && wtype == AudioWidgetType::fader &&
+        finite_numeric_attribute(node, "fader_indicator_natural_w", 0.0) > 0.0 &&
+        finite_numeric_attribute(node, "fader_indicator_natural_h", 0.0) > 0.0)
+        ss << ind << "setFaderSkin('" << id << "', '', '', '', '', "
+           << finite_numeric_attribute(node, "fader_indicator_natural_w", 0.0)
+           << ", " << finite_numeric_attribute(node, "fader_indicator_natural_h", 0.0)
+           << ", " << finite_numeric_attribute(node, "fader_thumb_corner_radius", 0.0)
+           << ", true);\n";
     // The binding is the reason an audio widget exists, and this arm did not
     // emit one. It printed the parameter's name in the grey sub-stack above
     // instead, which reads as wiring and is a caption.
