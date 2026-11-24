@@ -71,6 +71,9 @@
 #include <cxxabi.h>
 #endif
 
+#ifndef VELLUM_CONFORMANCE_STEMS
+#define VELLUM_CONFORMANCE_STEMS ""
+#endif
 #ifndef VELLUM_REPO_ROOT
 #define VELLUM_REPO_ROOT ""
 #endif
@@ -86,11 +89,64 @@ namespace fs = std::filesystem;
     void conformance_bind(vellum::view::View& root, vellum::view::NativeImportBindingContext& ctx);    \
     }
 VELLUM_CONFORMANCE_FIXTURE(form_controls_08)
+VELLUM_CONFORMANCE_FIXTURE(spectr)
+VELLUM_CONFORMANCE_FIXTURE(kelvin)
 VELLUM_CONFORMANCE_FIXTURE(keyed_list_18)
 VELLUM_CONFORMANCE_FIXTURE(fidelity_scene)
 #undef VELLUM_CONFORMANCE_FIXTURE
 
 namespace {
+
+// The conformance executable supplies Vellum-owned display widgets so audio
+// fixture emitters can be checked without linking Pulp's audio provider.
+class ConformanceLevelDisplay final : public View, public LevelDisplay {
+  public:
+    void set_levels(float, float) override {}
+    void set_level_orientation(Orientation) override {}
+    void set_level_fill(std::optional<vellum::canvas::Color>,
+                        std::vector<vellum::canvas::Color>) override {}
+    void clear_level_fill() override {}
+    void set_level_bar_ratio(float) override {}
+    void set_level_render_style(WidgetRenderStyle) override {}
+};
+
+class ConformanceSeriesDisplay final : public View, public SeriesDisplay {
+  public:
+    void set_series(const float*, std::size_t) override {}
+    void set_series_preview(std::string_view) override {}
+};
+
+class ConformanceBinDisplay final : public View, public BinDisplay {
+  public:
+    void set_bins(const float*, std::size_t) override {}
+};
+
+/// How many times each stand-in was requested by id. A lane that asked for an
+/// id the registry does not hold gets a placeholder instead, so a stand-in
+/// that no fixture ever instantiates means the id and the emitters disagree.
+std::map<std::string, int>& display_requests() {
+    static std::map<std::string, int> requests;
+    return requests;
+}
+
+std::unique_ptr<View> make_conformance_level_display() {
+    ++display_requests()["pulp.level"];
+    return std::make_unique<ConformanceLevelDisplay>();
+}
+std::unique_ptr<View> make_conformance_series_display() {
+    ++display_requests()["pulp.series"];
+    return std::make_unique<ConformanceSeriesDisplay>();
+}
+std::unique_ptr<View> make_conformance_bin_display() {
+    ++display_requests()["pulp.bins"];
+    return std::make_unique<ConformanceBinDisplay>();
+}
+
+void register_conformance_displays() {
+    register_data_display({"pulp.level", make_conformance_level_display, {}});
+    register_data_display({"pulp.series", make_conformance_series_display, {}});
+    register_data_display({"pulp.bins", make_conformance_bin_display, {}});
+}
 
 // ── projection ──────────────────────────────────────────────────────────────
 
@@ -311,6 +367,10 @@ std::vector<Fixture> fixtures() {
          c::form_controls_08::conformance_build, c::form_controls_08::conformance_bind},
         {"keyed-list-18", dir / "keyed-list-18.ir.json", false, c::keyed_list_18::conformance_build,
          c::keyed_list_18::conformance_bind},
+        {"spectr", dir / "spectr.ir.json", false, c::spectr::conformance_build,
+         c::spectr::conformance_bind},
+        {"kelvin", dir / "kelvin.ir.json", false, c::kelvin::conformance_build,
+         c::kelvin::conformance_bind},
         {"fidelity-scene", root / "fixtures/emitter-conformance/fidelity-scene-no-display.pulp.json", true,
          c::fidelity_scene::conformance_build, c::fidelity_scene::conformance_bind},
     };
@@ -456,6 +516,9 @@ struct JsRun {
     Projection projection;
     std::vector<std::string> rejected;
     std::set<std::string> attempted_params;
+    /// Every parameter a binding named, parameter or meter: a meter reads a
+    /// parameter, so the bridge accepts it exactly when that parameter exists.
+    std::set<std::string> attempted_sources;
 };
 
 /// Runs the generated ui.js on the bridge. Every parameter in `declared` is
@@ -496,6 +559,7 @@ JsRun run_js_lane(const DesignIR& ir, const fs::path& assets,
                         std::string(list[0] == 'p' ? "param:" : "meter:") + target);
             if (list[0] == 'p')
                 run.attempted_params.insert(target);
+            run.attempted_sources.insert(target);
         }
     }
     const auto rejected = recorded["rejected"];
@@ -505,6 +569,7 @@ JsRun run_js_lane(const DesignIR& ir, const fs::path& assets,
         run.rejected.push_back(list + ":" + std::string(rejected[i][0].toString()) + ":" + target);
         if (list == "params")
             run.attempted_params.insert(target);
+        run.attempted_sources.insert(target);
     }
     return run;
 }
@@ -514,7 +579,7 @@ JsRun run_js_lane(const DesignIR& ir, const fs::path& assets,
 JsRun js_run(const DesignIR& ir, const fs::path& assets,
              const std::set<std::string>& skip = {}) {
     const auto discovery = run_js_lane(ir, assets, {}, {});
-    return run_js_lane(ir, assets, discovery.attempted_params, skip);
+    return run_js_lane(ir, assets, discovery.attempted_sources, skip);
 }
 
 /// The projection of a run in which the bridge accepted every binding.
@@ -666,30 +731,24 @@ std::string describe(const Divergence& d) {
            "', " + d.lane + " '" + d.actual + "'";
 }
 
-/// Audio display widgets need Pulp's view-audio provider, which this audio-free
-/// gate never links, so no fixture it loads may carry one.
-bool has_display_widget(const IRNode& node) {
-    if (node.audio_widget == AudioWidgetType::meter ||
-        node.audio_widget == AudioWidgetType::waveform ||
-        node.audio_widget == AudioWidgetType::spectrum)
-        return true;
-    for (const auto& child : node.children)
-        if (has_display_widget(child))
-            return true;
-    return false;
-}
-
-std::vector<Divergence> all_divergences() {
+/// `compared`, when given, receives "<lane>/<fixture>" for every comparison made,
+/// so a test can prove no emitter or fixture silently dropped out.
+std::vector<Divergence> all_divergences(std::set<std::string>* compared = nullptr) {
     std::vector<Divergence> out;
+    const auto note = [&](const char* lane, const Fixture& fixture) {
+        if (compared)
+            compared->insert(std::string(lane) + "/" + fixture.name);
+    };
     for (const auto& fixture : fixtures()) {
         INFO("fixture " << fixture.name);
         const auto ir = load(fixture);
-        REQUIRE_FALSE(has_display_widget(ir.root));
         const StagedAssets assets(ir);
         const auto native = native_lane(ir, assets.dir());
         REQUIRE_FALSE(native.empty());
+        note("js", fixture);
         for (auto&& d : compare("js", fixture.name, native, js_lane(ir, assets.dir())))
             out.push_back(std::move(d));
+        note("cpp", fixture);
         for (auto&& d : compare("cpp", fixture.name, native, cpp_lane(fixture, ir, assets.dir())))
             out.push_back(std::move(d));
         // SwiftUI compares only the anchors that bind on at least one side.
@@ -697,6 +756,7 @@ std::vector<Divergence> all_divergences() {
         for (const auto& [anchor, fields] : native)
             if (fields.count("binding"))
                 native_bindings[anchor]["binding"] = fields.at("binding");
+        note("swiftui", fixture);
         for (auto&& d :
              compare("swiftui", fixture.name, native_bindings, swift_lane(ir), {"binding"}))
             out.push_back(std::move(d));
@@ -1191,12 +1251,64 @@ TEST_CASE("staged assets never write outside the staging directory",
     CHECK_FALSE(fs::exists(escaped));
 }
 
+TEST_CASE("every generated fixture is compared, by exact name", "[emitter-conformance]") {
+    std::set<std::string> compared;
+    for (const auto& fixture : fixtures())
+        compared.insert(fixture.name);
+    CHECK(compared ==
+          std::set<std::string>{"form-controls-08", "spectr", "kelvin", "keyed-list-18",
+                                "fidelity-scene"});
+
+    // The build's generated set (one stem per CMake row) must equal the
+    // compared set, so a fixture that is generated and linked but never
+    // listed, or listed but not generated, fails here.
+    std::set<std::string> generated;
+    std::stringstream stems(VELLUM_CONFORMANCE_STEMS);
+    for (std::string stem; std::getline(stems, stem, ',');) {
+        std::replace(stem.begin(), stem.end(), '_', '-');
+        generated.insert(stem);
+    }
+    CHECK(generated == compared);
+    CHECK(fixtures().back().name == "fidelity-scene");
+}
+
+TEST_CASE("every emitter lane is compared for every fixture", "[emitter-conformance]") {
+    std::set<std::string> compared;
+    (void)all_divergences(&compared);
+    std::set<std::string> expected;
+    for (const char* lane : {"js", "cpp", "swiftui"})
+        for (const char* fixture :
+             {"form-controls-08", "spectr", "kelvin", "keyed-list-18", "fidelity-scene"})
+            expected.insert(std::string(lane) + "/" + fixture);
+    CHECK(compared == expected);
+}
+
+TEST_CASE("the display stand-ins are reached through the ids the emitters use",
+          "[emitter-conformance]") {
+    // Every lane builds displays through make_data_display(<id>). A stand-in
+    // that no fixture requests means the importer names an id the registry
+    // does not hold, or no fixture carries that display; either way the gate
+    // cannot see a mismatch for it. The fixtures reach the level display only;
+    // the series and bin stand-ins stay registered but are not exercised.
+    display_requests().clear();
+    for (const auto& fixture : fixtures()) {
+        const auto ir = load(fixture);
+        const StagedAssets assets(ir);
+        (void)native_lane(ir, assets.dir());
+    }
+    CHECK(display_requests()["pulp.level"] > 0);
+    std::set<std::string> requested;
+    for (const auto& [id, count] : display_requests())
+        if (count > 0)
+            requested.insert(id);
+    CHECK(requested == std::set<std::string>{"pulp.level"});
+}
+
 TEST_CASE("the JS lane records only bindings the bridge accepted, and a rejected one is reported",
           "[emitter-conformance]") {
     const auto fixture = fixtures().back();
     REQUIRE(fixture.name == "fidelity-scene");
     const auto ir = load(fixture);
-    REQUIRE_FALSE(has_display_widget(ir.root));
     const StagedAssets assets(ir);
 
     const auto run = js_run(ir, assets.dir());
@@ -1264,4 +1376,7 @@ TEST_CASE("the conformance comparison reports planted divergences",
     }
 }
 
-int main() { return mini_test::run_all(); }
+int main() {
+    register_conformance_displays();
+    return mini_test::run_all();
+}
