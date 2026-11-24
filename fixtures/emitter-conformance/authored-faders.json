@@ -1,0 +1,791 @@
+{
+ "provenance": "Per-fader crops of two generated browser-capture panels at device scale 2: panel is the static capture beneath the control plus the persisted fader node; browser is the Chromium rendering of the same box, the truth the native lane is measured against.",
+ "channel_threshold": 8,
+ "max_mismatch_fraction": 0.15,
+ "cases": [
+  {
+   "name": "subbass-param_3",
+   "width": 24,
+   "height": 88,
+   "scale": 2.0,
+   "panel": {
+    "version": 1,
+    "source": "html",
+    "capture_method": "chromium-cdp",
+    "source_adapter": "browser-capture",
+    "source_version": "pulp-browser-capture-v1",
+    "root": {
+     "type": "frame",
+     "name": "Browser-evaluated HTML",
+     "style": {
+      "objectFit": "fill",
+      "overflow": "hidden",
+      "width": 24,
+      "height": 88
+     },
+     "layout": {
+      "direction": "column",
+      "gap": 0,
+      "paddingTop": 0,
+      "paddingRight": 0,
+      "paddingBottom": 0,
+      "paddingLeft": 0,
+      "justify": "flex-start",
+      "align": "stretch",
+      "wrap": false,
+      "widthMode": "fixed",
+      "heightMode": "fixed"
+     },
+     "attributes": {
+      "asset_ref": "reference:browser-static",
+      "browser_authored_frame_height": "88.000000",
+      "browser_authored_frame_width": "24.000000",
+      "browser_authored_frame_x": "0.000000",
+      "browser_authored_frame_y": "0.000000",
+      "browser_device_scale_factor": "2.000000"
+     },
+     "stable_anchor_id": "browser:root",
+     "anchor_strategy": "adapter",
+     "source_adapter": "browser-capture",
+     "source_version": "pulp-browser-capture-v1",
+     "render_mode": "faithful_capture",
+     "capture_asset_id": "reference:browser-static",
+     "children": [
+      {
+       "type": "frame",
+       "name": "",
+       "style": {
+        "backgroundColor": "rgb(255, 255, 255)",
+        "color": "rgb(0, 0, 0)",
+        "borderRadius": 0,
+        "border": "1px solid rgb(0, 0, 0)",
+        "borderColor": "rgb(0, 0, 0)",
+        "borderWidth": 1,
+        "borderStyle": "solid",
+        "borderTopColor": "rgb(0, 0, 0)",
+        "borderRightColor": "rgb(0, 0, 0)",
+        "borderBottomColor": "rgb(0, 0, 0)",
+        "borderLeftColor": "rgb(0, 0, 0)",
+        "borderTopWidth": 1,
+        "borderRightWidth": 1,
+        "borderBottomWidth": 1,
+        "borderLeftWidth": 1,
+        "borderTopLeftRadius": 0,
+        "borderTopRightRadius": 0,
+        "borderBottomRightRadius": 0,
+        "borderBottomLeftRadius": 0,
+        "fontFamily": "Chicago, Charcoal, Geneva, Verdana, Tahoma, sans-serif",
+        "fontSize": 16,
+        "fontWeight": 400,
+        "whiteSpace": "normal",
+        "textOverflow": "clip",
+        "position": "absolute",
+        "top": 0,
+        "left": 0,
+        "zIndex": 3,
+        "width": 24,
+        "height": 88
+       },
+       "layout": {
+        "direction": "column",
+        "gap": 0,
+        "paddingTop": 0,
+        "paddingRight": 0,
+        "paddingBottom": 0,
+        "paddingLeft": 0,
+        "justify": "flex-start",
+        "align": "stretch",
+        "wrap": false,
+        "widthMode": "fixed",
+        "heightMode": "fixed"
+       },
+       "audioWidget": "fader",
+       "min": 0,
+       "max": 1,
+       "default": 0.9,
+       "attributes": {
+        "binding": "param_3",
+        "captured_raster_dpr": "2.000000",
+        "captured_raster_origin_x_px": "0",
+        "captured_raster_origin_y_px": "0",
+        "design_accent": "#000000",
+        "design_indicator": "#000000",
+        "design_track": "#000000",
+        "designed_body": "capture",
+        "fader_body_includes_static_track": "1",
+        "fader_body_origin_x": "0",
+        "fader_body_origin_y": "0",
+        "fader_control_natural_h": "176",
+        "fader_control_natural_w": "48",
+        "fader_ind_color": "#000000ff",
+        "fader_indicator_cross": "0.500000",
+        "pulpParamKey": "param_3",
+        "pulpRouteId": "capture:param_3:11"
+       },
+       "stable_anchor_id": "capture:param_3:11",
+       "anchor_strategy": "path",
+       "children": []
+      }
+     ]
+    },
+    "assetManifest": {
+     "version": 1,
+     "assets": [
+      {
+       "asset_id": "reference:browser-static",
+       "original_uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAACwCAYAAABJsu1fAAAAs0lEQVR42u3RsQ2AQBADQRvRf8tHRAEfoUOzkdORm2SyuCvLu98xs+uItv94AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOCkJhkPfNgD9JUGX1yIj5gAAAAASUVORK5CYII=",
+       "content_hash": "0c9ebe80b2820ba7c505e19f86d28be8117f4074e8b83d94835ff1d3b1e010a5",
+       "mime": "image/png",
+       "width": 48,
+       "height": 176,
+       "diagnostics": []
+      }
+     ]
+    }
+   },
+   "browser": {
+    "version": 1,
+    "source": "html",
+    "capture_method": "chromium-cdp",
+    "source_adapter": "browser-capture",
+    "source_version": "pulp-browser-capture-v1",
+    "root": {
+     "type": "frame",
+     "name": "Browser-evaluated HTML",
+     "style": {
+      "objectFit": "fill",
+      "overflow": "hidden",
+      "width": 24,
+      "height": 88
+     },
+     "layout": {
+      "direction": "column",
+      "gap": 0,
+      "paddingTop": 0,
+      "paddingRight": 0,
+      "paddingBottom": 0,
+      "paddingLeft": 0,
+      "justify": "flex-start",
+      "align": "stretch",
+      "wrap": false,
+      "widthMode": "fixed",
+      "heightMode": "fixed"
+     },
+     "attributes": {
+      "asset_ref": "reference:browser",
+      "browser_authored_frame_height": "88.000000",
+      "browser_authored_frame_width": "24.000000",
+      "browser_authored_frame_x": "0.000000",
+      "browser_authored_frame_y": "0.000000",
+      "browser_device_scale_factor": "2.000000"
+     },
+     "stable_anchor_id": "browser:root",
+     "anchor_strategy": "adapter",
+     "source_adapter": "browser-capture",
+     "source_version": "pulp-browser-capture-v1",
+     "render_mode": "faithful_capture",
+     "capture_asset_id": "reference:browser",
+     "children": []
+    },
+    "assetManifest": {
+     "version": 1,
+     "assets": [
+      {
+       "asset_id": "reference:browser",
+       "original_uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAACwCAYAAABJsu1fAAABBElEQVR42u3dMQ6DIBQGYGh6GA7F7KFg5Z52ImltmjIpmO9NJjq8L0/0VwdjCGEPC9cjLF7PvrHvaw0ixniPCQAAAAAAAAAASKNvlXOeuuHW2mcq7Q80PU73mDprHfu0BgAAAAAAAKbKQr9q27ZTGyulDB03nIXOfvX4r4++f3gCtdYpTyFp1FUIAAAA4F5ZKKW0FODrTuwzqzUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEK75iYgJXFQv2m4qqC4CVTEAAAAASUVORK5CYII=",
+       "content_hash": "ed0647c21122489a955cb506f2e82fccd94d41bb1514651b5ab5cb1b0f1e68bf",
+       "mime": "image/png",
+       "width": 48,
+       "height": 176,
+       "diagnostics": []
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "subbass-param_9",
+   "width": 24,
+   "height": 88,
+   "scale": 2.0,
+   "panel": {
+    "version": 1,
+    "source": "html",
+    "capture_method": "chromium-cdp",
+    "source_adapter": "browser-capture",
+    "source_version": "pulp-browser-capture-v1",
+    "root": {
+     "type": "frame",
+     "name": "Browser-evaluated HTML",
+     "style": {
+      "objectFit": "fill",
+      "overflow": "hidden",
+      "width": 24,
+      "height": 88
+     },
+     "layout": {
+      "direction": "column",
+      "gap": 0,
+      "paddingTop": 0,
+      "paddingRight": 0,
+      "paddingBottom": 0,
+      "paddingLeft": 0,
+      "justify": "flex-start",
+      "align": "stretch",
+      "wrap": false,
+      "widthMode": "fixed",
+      "heightMode": "fixed"
+     },
+     "attributes": {
+      "asset_ref": "reference:browser-static",
+      "browser_authored_frame_height": "88.000000",
+      "browser_authored_frame_width": "24.000000",
+      "browser_authored_frame_x": "0.000000",
+      "browser_authored_frame_y": "0.000000",
+      "browser_device_scale_factor": "2.000000"
+     },
+     "stable_anchor_id": "browser:root",
+     "anchor_strategy": "adapter",
+     "source_adapter": "browser-capture",
+     "source_version": "pulp-browser-capture-v1",
+     "render_mode": "faithful_capture",
+     "capture_asset_id": "reference:browser-static",
+     "children": [
+      {
+       "type": "frame",
+       "name": "",
+       "style": {
+        "backgroundColor": "rgb(255, 255, 255)",
+        "color": "rgb(0, 0, 0)",
+        "borderRadius": 0,
+        "border": "1px solid rgb(0, 0, 0)",
+        "borderColor": "rgb(0, 0, 0)",
+        "borderWidth": 1,
+        "borderStyle": "solid",
+        "borderTopColor": "rgb(0, 0, 0)",
+        "borderRightColor": "rgb(0, 0, 0)",
+        "borderBottomColor": "rgb(0, 0, 0)",
+        "borderLeftColor": "rgb(0, 0, 0)",
+        "borderTopWidth": 1,
+        "borderRightWidth": 1,
+        "borderBottomWidth": 1,
+        "borderLeftWidth": 1,
+        "borderTopLeftRadius": 0,
+        "borderTopRightRadius": 0,
+        "borderBottomRightRadius": 0,
+        "borderBottomLeftRadius": 0,
+        "fontFamily": "Chicago, Charcoal, Geneva, Verdana, Tahoma, sans-serif",
+        "fontSize": 16,
+        "fontWeight": 400,
+        "whiteSpace": "normal",
+        "textOverflow": "clip",
+        "position": "absolute",
+        "top": 0,
+        "left": 0,
+        "zIndex": 9,
+        "width": 24,
+        "height": 88
+       },
+       "layout": {
+        "direction": "column",
+        "gap": 0,
+        "paddingTop": 0,
+        "paddingRight": 0,
+        "paddingBottom": 0,
+        "paddingLeft": 0,
+        "justify": "flex-start",
+        "align": "stretch",
+        "wrap": false,
+        "widthMode": "fixed",
+        "heightMode": "fixed"
+       },
+       "audioWidget": "fader",
+       "min": 0,
+       "max": 1,
+       "default": 0,
+       "attributes": {
+        "binding": "param_9",
+        "captured_raster_dpr": "2.000000",
+        "captured_raster_origin_x_px": "0",
+        "captured_raster_origin_y_px": "0",
+        "design_accent": "#000000",
+        "design_indicator": "#000000",
+        "design_track": "#000000",
+        "designed_body": "capture",
+        "fader_body_includes_static_track": "1",
+        "fader_body_origin_x": "0",
+        "fader_body_origin_y": "0",
+        "fader_control_natural_h": "176",
+        "fader_control_natural_w": "48",
+        "fader_ind_color": "#000000ff",
+        "fader_indicator_cross": "0.500000",
+        "pulpParamKey": "param_9",
+        "pulpRouteId": "capture:param_9:41"
+       },
+       "stable_anchor_id": "capture:param_9:41",
+       "anchor_strategy": "path",
+       "children": []
+      }
+     ]
+    },
+    "assetManifest": {
+     "version": 1,
+     "assets": [
+      {
+       "asset_id": "reference:browser-static",
+       "original_uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAACwCAYAAABJsu1fAAAAs0lEQVR42u3RsQ2AQBADQRvRf8tHRAEfoUOzkdORm2SyuCvLu98xs+uItv94AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOCkJhkPfNgD9JUGX1yIj5gAAAAASUVORK5CYII=",
+       "content_hash": "0c9ebe80b2820ba7c505e19f86d28be8117f4074e8b83d94835ff1d3b1e010a5",
+       "mime": "image/png",
+       "width": 48,
+       "height": 176,
+       "diagnostics": []
+      }
+     ]
+    }
+   },
+   "browser": {
+    "version": 1,
+    "source": "html",
+    "capture_method": "chromium-cdp",
+    "source_adapter": "browser-capture",
+    "source_version": "pulp-browser-capture-v1",
+    "root": {
+     "type": "frame",
+     "name": "Browser-evaluated HTML",
+     "style": {
+      "objectFit": "fill",
+      "overflow": "hidden",
+      "width": 24,
+      "height": 88
+     },
+     "layout": {
+      "direction": "column",
+      "gap": 0,
+      "paddingTop": 0,
+      "paddingRight": 0,
+      "paddingBottom": 0,
+      "paddingLeft": 0,
+      "justify": "flex-start",
+      "align": "stretch",
+      "wrap": false,
+      "widthMode": "fixed",
+      "heightMode": "fixed"
+     },
+     "attributes": {
+      "asset_ref": "reference:browser",
+      "browser_authored_frame_height": "88.000000",
+      "browser_authored_frame_width": "24.000000",
+      "browser_authored_frame_x": "0.000000",
+      "browser_authored_frame_y": "0.000000",
+      "browser_device_scale_factor": "2.000000"
+     },
+     "stable_anchor_id": "browser:root",
+     "anchor_strategy": "adapter",
+     "source_adapter": "browser-capture",
+     "source_version": "pulp-browser-capture-v1",
+     "render_mode": "faithful_capture",
+     "capture_asset_id": "reference:browser",
+     "children": []
+    },
+    "assetManifest": {
+     "version": 1,
+     "assets": [
+      {
+       "asset_id": "reference:browser",
+       "original_uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAACwCAYAAABJsu1fAAAA0ElEQVR42u3dMQqAMBAEwD3x/1+OlU0qQdGczFa2w0a4bivJSONsaZ79/BijVxFV9Y8GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHJ3ky/T1t2qmbcDPSEAAAAAAACAJ2+hqzdIXtof1sDqV6qfGAAAAACgdSrJ0MCHOQBHagxoAuxrZgAAAABJRU5ErkJggg==",
+       "content_hash": "5e45871089a000fc20c974c328be6ce2d914282cfe6ea7ba056b990449656938",
+       "mime": "image/png",
+       "width": 48,
+       "height": 176,
+       "diagnostics": []
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "strings-param_7",
+   "width": 44,
+   "height": 180,
+   "scale": 2.0,
+   "panel": {
+    "version": 1,
+    "source": "html",
+    "capture_method": "chromium-cdp",
+    "source_adapter": "browser-capture",
+    "source_version": "pulp-browser-capture-v1",
+    "root": {
+     "type": "frame",
+     "name": "Browser-evaluated HTML",
+     "style": {
+      "objectFit": "fill",
+      "overflow": "hidden",
+      "width": 44,
+      "height": 180
+     },
+     "layout": {
+      "direction": "column",
+      "gap": 0,
+      "paddingTop": 0,
+      "paddingRight": 0,
+      "paddingBottom": 0,
+      "paddingLeft": 0,
+      "justify": "flex-start",
+      "align": "stretch",
+      "wrap": false,
+      "widthMode": "fixed",
+      "heightMode": "fixed"
+     },
+     "attributes": {
+      "asset_ref": "reference:browser-static",
+      "browser_authored_frame_height": "180.000000",
+      "browser_authored_frame_width": "44.000000",
+      "browser_authored_frame_x": "0.000000",
+      "browser_authored_frame_y": "0.000000",
+      "browser_device_scale_factor": "2.000000"
+     },
+     "stable_anchor_id": "browser:root",
+     "anchor_strategy": "adapter",
+     "source_adapter": "browser-capture",
+     "source_version": "pulp-browser-capture-v1",
+     "render_mode": "faithful_capture",
+     "capture_asset_id": "reference:browser-static",
+     "children": [
+      {
+       "type": "frame",
+       "name": "",
+       "style": {
+        "color": "rgb(75, 56, 39)",
+        "borderRadius": 0,
+        "borderWidth": 0,
+        "borderTopWidth": 0,
+        "borderRightWidth": 0,
+        "borderBottomWidth": 0,
+        "borderLeftWidth": 0,
+        "borderTopLeftRadius": 0,
+        "borderTopRightRadius": 0,
+        "borderBottomRightRadius": 0,
+        "borderBottomLeftRadius": 0,
+        "fontFamily": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "fontSize": 16,
+        "fontWeight": 400,
+        "whiteSpace": "normal",
+        "textOverflow": "clip",
+        "position": "absolute",
+        "top": 0,
+        "left": 0,
+        "zIndex": 1,
+        "width": 44,
+        "height": 180
+       },
+       "layout": {
+        "direction": "column",
+        "gap": 0,
+        "paddingTop": 0,
+        "paddingRight": 0,
+        "paddingBottom": 0,
+        "paddingLeft": 0,
+        "justify": "flex-start",
+        "align": "stretch",
+        "wrap": false,
+        "widthMode": "fixed",
+        "heightMode": "fixed"
+       },
+       "audioWidget": "fader",
+       "min": 0,
+       "max": 1,
+       "default": 0.38,
+       "attributes": {
+        "binding": "param_7",
+        "captured_raster_dpr": "2.000000",
+        "captured_raster_origin_x_px": "0",
+        "captured_raster_origin_y_px": "0",
+        "design_accent": "#dd5a1e",
+        "design_indicator": "#2a1d12",
+        "design_track": "#9b8460",
+        "designed_body": "capture",
+        "fader_body_includes_static_track": "1",
+        "fader_body_origin_x": "0",
+        "fader_body_origin_y": "0",
+        "fader_control_natural_h": "360",
+        "fader_control_natural_w": "88",
+        "fader_ind_color": "#a93d10ff",
+        "fader_indicator_cross": "0.500000",
+        "pulpParamKey": "param_7",
+        "pulpRouteId": "capture:param_7:2"
+       },
+       "stable_anchor_id": "capture:param_7:2",
+       "anchor_strategy": "path",
+       "children": []
+      }
+     ]
+    },
+    "assetManifest": {
+     "version": 1,
+     "assets": [
+      {
+       "asset_id": "reference:browser-static",
+       "original_uri": "data:image/png;base64,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",
+       "content_hash": "cc6da129084e9728a13958232cdd7d0f89c79a4594792512e0dc418b40c12506",
+       "mime": "image/png",
+       "width": 88,
+       "height": 360,
+       "diagnostics": []
+      }
+     ]
+    }
+   },
+   "browser": {
+    "version": 1,
+    "source": "html",
+    "capture_method": "chromium-cdp",
+    "source_adapter": "browser-capture",
+    "source_version": "pulp-browser-capture-v1",
+    "root": {
+     "type": "frame",
+     "name": "Browser-evaluated HTML",
+     "style": {
+      "objectFit": "fill",
+      "overflow": "hidden",
+      "width": 44,
+      "height": 180
+     },
+     "layout": {
+      "direction": "column",
+      "gap": 0,
+      "paddingTop": 0,
+      "paddingRight": 0,
+      "paddingBottom": 0,
+      "paddingLeft": 0,
+      "justify": "flex-start",
+      "align": "stretch",
+      "wrap": false,
+      "widthMode": "fixed",
+      "heightMode": "fixed"
+     },
+     "attributes": {
+      "asset_ref": "reference:browser",
+      "browser_authored_frame_height": "180.000000",
+      "browser_authored_frame_width": "44.000000",
+      "browser_authored_frame_x": "0.000000",
+      "browser_authored_frame_y": "0.000000",
+      "browser_device_scale_factor": "2.000000"
+     },
+     "stable_anchor_id": "browser:root",
+     "anchor_strategy": "adapter",
+     "source_adapter": "browser-capture",
+     "source_version": "pulp-browser-capture-v1",
+     "render_mode": "faithful_capture",
+     "capture_asset_id": "reference:browser",
+     "children": []
+    },
+    "assetManifest": {
+     "version": 1,
+     "assets": [
+      {
+       "asset_id": "reference:browser",
+       "original_uri": "data:image/png;base64,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",
+       "content_hash": "1f00852dbf6c352f158a1233cf8211f13e1de186316a9703a9b69708b73f9529",
+       "mime": "image/png",
+       "width": 88,
+       "height": 360,
+       "diagnostics": []
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "strings-param_2",
+   "width": 44,
+   "height": 180,
+   "scale": 2.0,
+   "panel": {
+    "version": 1,
+    "source": "html",
+    "capture_method": "chromium-cdp",
+    "source_adapter": "browser-capture",
+    "source_version": "pulp-browser-capture-v1",
+    "root": {
+     "type": "frame",
+     "name": "Browser-evaluated HTML",
+     "style": {
+      "objectFit": "fill",
+      "overflow": "hidden",
+      "width": 44,
+      "height": 180
+     },
+     "layout": {
+      "direction": "column",
+      "gap": 0,
+      "paddingTop": 0,
+      "paddingRight": 0,
+      "paddingBottom": 0,
+      "paddingLeft": 0,
+      "justify": "flex-start",
+      "align": "stretch",
+      "wrap": false,
+      "widthMode": "fixed",
+      "heightMode": "fixed"
+     },
+     "attributes": {
+      "asset_ref": "reference:browser-static",
+      "browser_authored_frame_height": "180.000000",
+      "browser_authored_frame_width": "44.000000",
+      "browser_authored_frame_x": "0.000000",
+      "browser_authored_frame_y": "0.000000",
+      "browser_device_scale_factor": "2.000000"
+     },
+     "stable_anchor_id": "browser:root",
+     "anchor_strategy": "adapter",
+     "source_adapter": "browser-capture",
+     "source_version": "pulp-browser-capture-v1",
+     "render_mode": "faithful_capture",
+     "capture_asset_id": "reference:browser-static",
+     "children": [
+      {
+       "type": "frame",
+       "name": "",
+       "style": {
+        "color": "rgb(75, 56, 39)",
+        "borderRadius": 0,
+        "borderWidth": 0,
+        "borderTopWidth": 0,
+        "borderRightWidth": 0,
+        "borderBottomWidth": 0,
+        "borderLeftWidth": 0,
+        "borderTopLeftRadius": 0,
+        "borderTopRightRadius": 0,
+        "borderBottomRightRadius": 0,
+        "borderBottomLeftRadius": 0,
+        "fontFamily": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "fontSize": 16,
+        "fontWeight": 400,
+        "whiteSpace": "normal",
+        "textOverflow": "clip",
+        "position": "absolute",
+        "top": 0,
+        "left": 0,
+        "zIndex": 3,
+        "width": 44,
+        "height": 180
+       },
+       "layout": {
+        "direction": "column",
+        "gap": 0,
+        "paddingTop": 0,
+        "paddingRight": 0,
+        "paddingBottom": 0,
+        "paddingLeft": 0,
+        "justify": "flex-start",
+        "align": "stretch",
+        "wrap": false,
+        "widthMode": "fixed",
+        "heightMode": "fixed"
+       },
+       "audioWidget": "fader",
+       "min": 0,
+       "max": 1,
+       "default": 0.78,
+       "attributes": {
+        "binding": "param_2",
+        "captured_raster_dpr": "2.000000",
+        "captured_raster_origin_x_px": "0",
+        "captured_raster_origin_y_px": "0",
+        "design_accent": "#dd5a1e",
+        "design_indicator": "#2a1d12",
+        "design_track": "#9b8460",
+        "designed_body": "capture",
+        "fader_body_includes_static_track": "1",
+        "fader_body_origin_x": "0",
+        "fader_body_origin_y": "0",
+        "fader_control_natural_h": "360",
+        "fader_control_natural_w": "88",
+        "fader_ind_color": "#a93d10ff",
+        "fader_indicator_cross": "0.500000",
+        "pulpParamKey": "param_2",
+        "pulpRouteId": "capture:param_2:10"
+       },
+       "stable_anchor_id": "capture:param_2:10",
+       "anchor_strategy": "path",
+       "children": []
+      }
+     ]
+    },
+    "assetManifest": {
+     "version": 1,
+     "assets": [
+      {
+       "asset_id": "reference:browser-static",
+       "original_uri": "data:image/png;base64,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",
+       "content_hash": "9bce16684174cb132e4f0625228417baa583b177ab4b011a82159352583e1eed",
+       "mime": "image/png",
+       "width": 88,
+       "height": 360,
+       "diagnostics": []
+      }
+     ]
+    }
+   },
+   "browser": {
+    "version": 1,
+    "source": "html",
+    "capture_method": "chromium-cdp",
+    "source_adapter": "browser-capture",
+    "source_version": "pulp-browser-capture-v1",
+    "root": {
+     "type": "frame",
+     "name": "Browser-evaluated HTML",
+     "style": {
+      "objectFit": "fill",
+      "overflow": "hidden",
+      "width": 44,
+      "height": 180
+     },
+     "layout": {
+      "direction": "column",
+      "gap": 0,
+      "paddingTop": 0,
+      "paddingRight": 0,
+      "paddingBottom": 0,
+      "paddingLeft": 0,
+      "justify": "flex-start",
+      "align": "stretch",
+      "wrap": false,
+      "widthMode": "fixed",
+      "heightMode": "fixed"
+     },
+     "attributes": {
+      "asset_ref": "reference:browser",
+      "browser_authored_frame_height": "180.000000",
+      "browser_authored_frame_width": "44.000000",
+      "browser_authored_frame_x": "0.000000",
+      "browser_authored_frame_y": "0.000000",
+      "browser_device_scale_factor": "2.000000"
+     },
+     "stable_anchor_id": "browser:root",
+     "anchor_strategy": "adapter",
+     "source_adapter": "browser-capture",
+     "source_version": "pulp-browser-capture-v1",
+     "render_mode": "faithful_capture",
+     "capture_asset_id": "reference:browser",
+     "children": []
+    },
+    "assetManifest": {
+     "version": 1,
+     "assets": [
+      {
+       "asset_id": "reference:browser",
+       "original_uri": "data:image/png;base64,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",
+       "content_hash": "23cd512677af1d992a95cde1d3e41e7e8b573eba80f365c61791cd85b8b2f31c",
+       "mime": "image/png",
+       "width": 88,
+       "height": 360,
+       "diagnostics": []
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

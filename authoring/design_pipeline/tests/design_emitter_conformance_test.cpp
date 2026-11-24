@@ -1095,6 +1095,79 @@ TEST_CASE("a generated script paints the same authored fader cap as the native l
     }
 }
 
+/// Fraction of pixels whose largest channel difference exceeds `threshold`.
+double mismatch_fraction(const std::vector<std::uint8_t>& a, const std::vector<std::uint8_t>& b,
+                         int threshold) {
+    REQUIRE(a.size() == b.size());
+    std::size_t differ = 0;
+    for (std::size_t i = 0; i + 3 < a.size(); i += 4) {
+        int worst = 0;
+        for (std::size_t c = 0; c < 3; ++c)
+            worst = std::max(worst, std::abs(int(a[i + c]) - int(b[i + c])));
+        if (worst > threshold) ++differ;
+    }
+    return a.empty() ? 1.0 : double(differ) / double(a.size() / 4);
+}
+
+std::vector<std::uint8_t> render_ir(const DesignIR& ir, float width, float height, float scale) {
+    auto root = build_native_view_tree(ir, ir.asset_manifest, {});
+    REQUIRE(root != nullptr);
+    std::uint32_t w = 0, h = 0;
+    auto rgba = render_to_rgba(*root, static_cast<std::uint32_t>(width),
+                               static_cast<std::uint32_t>(height), scale, &w, &h);
+    REQUIRE(w == static_cast<std::uint32_t>(std::lround(width * scale)));
+    REQUIRE(h == static_cast<std::uint32_t>(std::lround(height * scale)));
+    return rgba;
+}
+
+// Per-fader crops of real browser-capture panels: the static capture beneath
+// the control plus its persisted fader node, against Chromium's own rendering
+// of the same box. The native cap may differ from the authored cap only in
+// detail a flat slab cannot carry (an inner rule, a gradient); a stock track,
+// fill or pill cap differs far more. The negative control renders the same
+// crop with the static-track declaration removed, which restores the live
+// stock track and fill, and must exceed the tolerance, so a pass is not the
+// metric failing to see the defect.
+TEST_CASE("authored faders render close to their browser capture",
+          "[view][import][emitter-conformance][fader][render]") {
+    if (!raw_rgba_render_available())
+        return;
+    const auto doc = choc::json::parse(
+        read_file(fs::path(VELLUM_REPO_ROOT) / "fixtures/emitter-conformance/authored-faders.json"));
+    const int threshold = doc["channel_threshold"].getWithDefault<int>(8);
+    const double tolerance = doc["max_mismatch_fraction"].getWithDefault<double>(0.0);
+    REQUIRE(tolerance > 0.0);
+    const auto cases = doc["cases"];
+    REQUIRE(cases.size() >= 4);
+    for (uint32_t i = 0; i < cases.size(); ++i) {
+        const auto entry = cases[i];
+        const std::string name(entry["name"].toString());
+        INFO(name);
+        const float width = entry["width"].getWithDefault<float>(0.0f);
+        const float height = entry["height"].getWithDefault<float>(0.0f);
+        const float scale = entry["scale"].getWithDefault<float>(2.0f);
+        const auto panel = parse_design_ir_json(choc::json::toString(entry["panel"]));
+        const auto browser = parse_design_ir_json(choc::json::toString(entry["browser"]));
+        const auto truth = render_ir(browser, width, height, scale);
+        const auto native = render_ir(panel, width, height, scale);
+        // Instrument control: the browser crop and the bare static crop are
+        // different images, so a renderer that dropped either reads as a gap.
+        auto bare = panel;
+        bare.root.children.clear();
+        CHECK(mismatch_fraction(truth, render_ir(bare, width, height, scale), threshold) > 0.01);
+
+        const double residual = mismatch_fraction(truth, native, threshold);
+        auto live = panel;
+        REQUIRE(live.root.children.size() == 1);
+        live.root.children[0].attributes.erase("fader_body_includes_static_track");
+        const double defect = mismatch_fraction(truth, render_ir(live, width, height, scale), threshold);
+        std::printf("    %s: cap-only residual %.2f%%, live-track control %.2f%%, tolerance %.2f%%\n",
+                    name.c_str(), residual * 100.0, defect * 100.0, tolerance * 100.0);
+        CHECK(residual <= tolerance);
+        CHECK(defect > tolerance);
+    }
+}
+
 TEST_CASE("staged assets never write outside the staging directory",
           "[view][import][emitter-conformance]") {
     CHECK(is_contained_relative("images/a.png"));
