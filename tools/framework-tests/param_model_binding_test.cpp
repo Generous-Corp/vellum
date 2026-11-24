@@ -10,6 +10,8 @@
 #include <vellum/view/screenshot.hpp>
 
 #include <cmath>
+#include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <memory>
 #include <optional>
@@ -661,13 +663,19 @@ FRAMEWORK_TEST(a_dropped_store_binding_leaves_its_widgets_writing_the_store) {
     CHECK(near(store.get_normalized(2), pad.x_value()));
 }
 
-FRAMEWORK_TEST(authored_fader_overlay_does_not_paint_a_stock_track) {
-    if (!vellum::view::raw_rgba_render_available())
-        return;
+// A browser-captured fader with a declared static track: the panel capture
+// beneath it already holds the authored track, so the live control paints
+// only its cap. Rendered with and without the fader over the same opaque
+// panel, the centre column may differ in exactly one short run (the cap, in
+// the authored cap colour) at the value position. A stock track or value fill
+// would differ along the whole column.
+vellum::view::DesignIR authored_fader_panel(bool with_fader) {
     vellum::view::DesignIR ir;
     ir.root.type = "frame";
     ir.root.style.width = 24.0f;
     ir.root.style.height = 160.0f;
+    if (!with_fader)
+        return ir;
     vellum::view::IRNode fader;
     fader.type = "fader";
     fader.audio_widget = vellum::view::AudioWidgetType::fader;
@@ -676,23 +684,63 @@ FRAMEWORK_TEST(authored_fader_overlay_does_not_paint_a_stock_track) {
     fader.audio_default = 0.5f;
     fader.attributes["pulpRouteId"] = "route:fader";
     fader.attributes["designed_body"] = "capture";
+    fader.attributes["fader_body_includes_static_track"] = "1";
+    fader.attributes["design_track"] = "#00ff00";
+    fader.attributes["design_accent"] = "#0000ff";
+    fader.attributes["fader_ind_color"] = "#ff0000ff";
     ir.root.children.push_back(std::move(fader));
-    auto root = vellum::view::build_native_view_tree(ir, {});
-    CHECK(root != nullptr);
+    return ir;
+}
+
+std::vector<std::uint8_t> render_authored_fader_panel(bool with_fader) {
+    auto root = vellum::view::build_native_view_tree(authored_fader_panel(with_fader), {});
     if (!root)
-        return;
+        return {};
     std::uint32_t width = 0;
     std::uint32_t height = 0;
-    const auto rgba = vellum::view::render_to_rgba(*root, 24, 160, 1.0f, &width, &height);
-    CHECK(width == 24);
-    CHECK(height == 160);
-    CHECK(rgba.size() == static_cast<std::size_t>(width) * height * 4);
-    for (std::uint32_t y = 0; y < height; ++y) {
-        if (y >= 72 && y <= 88)
+    auto rgba = vellum::view::render_to_rgba(*root, 24, 160, 1.0f, &width, &height);
+    if (width != 24 || height != 160 || rgba.size() != 24u * 160u * 4u)
+        return {};
+    return rgba;
+}
+
+FRAMEWORK_TEST(authored_fader_overlay_does_not_paint_a_stock_track) {
+    if (!vellum::view::raw_rgba_render_available())
+        return;
+    const auto panel = render_authored_fader_panel(false);
+    const auto with_fader = render_authored_fader_panel(true);
+    CHECK(!panel.empty());
+    CHECK(!with_fader.empty());
+    if (panel.empty() || with_fader.empty())
+        return;
+    const auto pixel = [](const std::vector<std::uint8_t>& rgba, std::uint32_t y) {
+        return &rgba[(static_cast<std::size_t>(y) * 24u + 12u) * 4u];
+    };
+    int first = -1;
+    int last = -1;
+    int changed = 0;
+    for (std::uint32_t y = 0; y < 160; ++y) {
+        const auto* a = pixel(panel, y);
+        const auto* b = pixel(with_fader, y);
+        if (std::abs(a[0] - b[0]) + std::abs(a[1] - b[1]) + std::abs(a[2] - b[2]) <= 6)
             continue;
-        const std::size_t alpha = (static_cast<std::size_t>(y) * width + width / 2) * 4 + 3;
-        CHECK(rgba[alpha] == 0);
+        ++changed;
+        if (first < 0)
+            first = static_cast<int>(y);
+        last = static_cast<int>(y);
     }
+    // Positive control: the cap is drawn, so the measurement can see paint.
+    CHECK(changed > 0);
+    if (changed == 0)
+        return;
+    // One contiguous run, short enough to be a cap and not a track or fill,
+    // straddling the value position (0.5 of a 160px vertical fader).
+    CHECK(changed == last - first + 1);
+    CHECK(last - first + 1 <= 40);
+    CHECK(first <= 80 && last >= 80);
+    // The run is the authored cap colour, not a stock grey or the fill.
+    const auto* cap = pixel(with_fader, static_cast<std::uint32_t>((first + last) / 2));
+    CHECK(cap[0] > 200 && cap[1] < 60 && cap[2] < 60);
 }
 
 }  // namespace
