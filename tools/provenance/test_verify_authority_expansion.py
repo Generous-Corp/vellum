@@ -3139,11 +3139,14 @@ class ProvenanceWorkflowScopeTests(unittest.TestCase):
         audit, _, evidence = completed.stdout.strip().partition(" ")
         return audit, "--defer-live-open-pr-audit" in evidence.split()
 
-    def test_live_open_pr_audit_runs_on_main_pushes_and_pretag_replay(self) -> None:
+    def test_live_open_pr_audit_runs_only_for_pretag_replay_and_dry_run_tags(self) -> None:
         # (ref, event, live audit, deferred). A release tag reads nothing live
-        # and defers nothing: it judges the snapshot signed into its tag.
+        # and defers nothing: it judges the snapshot signed into its tag. A
+        # main or branch push defers, as it did before this change: a release
+        # bump PR open on main would otherwise turn every main push red.
         for ref, event, live, deferred_expected in (
-            ("refs/heads/main", "push", True, False),
+            ("refs/heads/main", "push", False, True),
+            ("refs/heads/feature/x", "push", False, True),
             ("refs/pull/7/merge", "pull_request", False, True),
             ("refs/heads/gh-readonly-queue/main/pr-7-abc", "merge_group", False, True),
             ("refs/tags/authority/x", "push", False, True),

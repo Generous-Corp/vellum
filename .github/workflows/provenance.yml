@@ -533,13 +533,13 @@ jobs:
           # live-open-pr-audit-scope: begin
           # A release tag's run judges the open-PR snapshot (and release-bump
           # evidence) signed into its attestation at selection: no live read,
-          # and nothing deferred. Main pushes keep the live overlap audit. The
-          # pre-tag replay uses the live path to create the snapshot that the
-          # release later signs. A release dry run has no selection snapshot,
-          # so its own tag run judges a live one. Every other run (a pull
-          # request, the merge queue, an authority tag) defers the audit.
+          # and nothing deferred. The pre-tag replay uses the live path to
+          # create the snapshot that the release later signs. A release dry run
+          # has no selection snapshot, so its own tag run judges a live one.
+          # Every other run (a branch or main push, a pull request, the merge
+          # queue, an authority tag) defers the audit, as it did before.
           live_open_pr_audit=false
-          if [[ ("$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/*) || "${VELLUM_PRETAG_REPLAY:-}" == 1 || "$GITHUB_REF" == refs/tags/dry-run/* ]]; then
+          if [[ "${VELLUM_PRETAG_REPLAY:-}" == 1 || "$GITHUB_REF" == refs/tags/dry-run/* ]]; then
             live_open_pr_audit=true
           fi
           if [[ "$live_open_pr_audit" != true && "$GITHUB_REF" != refs/tags/v[0-9]* ]]; then
