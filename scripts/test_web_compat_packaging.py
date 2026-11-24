@@ -265,11 +265,16 @@ class WebCompatPackagingTests(unittest.TestCase):
                 self.assertIn(expected, names)
             findings = []
             for path in installed:
-                name = "sdk/" + path.relative_to(prefix).as_posix()
-                findings.extend(install_core.payload_contamination_findings(
-                    name, path.read_bytes()))
+                relative = path.relative_to(prefix).as_posix()
+                # The archive names members under sdk/; an installed prefix
+                # is judged by its prefix-relative path.
+                for name in ("sdk/" + relative, relative):
+                    findings.extend(install_core.payload_contamination_findings(
+                        name, path.read_bytes()))
             self.assertEqual(findings, [])
 
+    @unittest.skipUnless(shutil.which("c++") or shutil.which("clang++"),
+                         "the consumer compiles and links a C++ target")
     def test_consumer_compiles_links_and_inflates_a_prelude(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
