@@ -15,18 +15,20 @@ function(vellum_mirror_platform_args out_var)
     endif()
 endfunction()
 
-# Packaging and linking the mirror libraries uses Apple-only properties and
-# linker flags (frameworks, exported and unexported symbol lists, reexport,
-# dead-strip). The platform record plans and verifies every system, but only
-# Darwin has packaging rules; any other system stops here with a clear error
-# instead of failing in the linker.
+# Packaging and linking the mirror libraries has a small Apple-specific tail
+# (frameworks, symbol-list controls, re-export, and dead-strip). The closure
+# planner already refuses systems without a verified platform record, so the
+# mirror can use the ordinary shared-library rules on declared non-Darwin
+# systems.
 function(vellum_mirror_require_packaging)
-    if(APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR
+       CMAKE_SYSTEM_NAME STREQUAL "Linux" OR
+       CMAKE_SYSTEM_NAME STREQUAL "Windows")
         return()
     endif()
     message(FATAL_ERROR
-        "Vellum: mirror packaging for ${CMAKE_SYSTEM_NAME} is not implemented yet; "
-        "it arrives with that platform's record PR")
+        "Vellum: mirror packaging for ${CMAKE_SYSTEM_NAME} requires a verified "
+        "platform closure record")
 endfunction()
 
 # -ffile-prefix-map is a GNU and Clang front-end option. MSVC and clang-cl do

@@ -697,6 +697,11 @@ if(VELLUM_BUILD_TESTS)
             -s tools/mirror -p "test_*.py"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     if(VELLUM_PACKAGE_HAS_MIRROR)
+        add_test(NAME vellum.mirror-export-targets
+            COMMAND "${CMAKE_COMMAND}"
+                "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunMirrorExportConsumer.cmake")
         set(_vellum_view_audio_archive_arg)
         if(DEFINED VELLUM_VIEW_AUDIO_ARCHIVE AND
            NOT VELLUM_VIEW_AUDIO_ARCHIVE STREQUAL "")

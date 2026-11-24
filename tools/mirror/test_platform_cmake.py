@@ -26,17 +26,18 @@ class PlatformCmakeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stderr, "")
 
-    def test_linux_record_stops_with_a_clear_error_at_packaging(self) -> None:
+    def test_linux_record_is_accepted_at_packaging(self) -> None:
         result = run_cmake('set(CMAKE_SYSTEM_NAME Linux)\nvellum_mirror_require_packaging()')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("mirror packaging for Linux is not implemented yet; "
-                      "it arrives with that platform's record PR",
-                      " ".join(result.stderr.split()))
+        self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_windows_record_stops_with_a_clear_error_at_packaging(self) -> None:
+    def test_windows_record_is_accepted_at_packaging(self) -> None:
         result = run_cmake('set(CMAKE_SYSTEM_NAME Windows)\nvellum_mirror_require_packaging()')
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_undeclared_record_is_refused(self) -> None:
+        result = run_cmake('set(CMAKE_SYSTEM_NAME FreeBSD)\nvellum_mirror_require_packaging()')
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("mirror packaging for Windows is not implemented yet", result.stderr)
+        self.assertIn("requires a verified platform closure", " ".join(result.stderr.split()))
 
     def prefix_flags(self, c_id: str, cxx_id: str, variant: str = "") -> str:
         result = run_cmake(
