@@ -84,6 +84,7 @@ observatory:
   maximum_overdue_events: 0
   maximum_pending_event_age_days: 7
   maximum_repeated_generic_fixes: 2
+  repeated_generic_fix_window_days: 14
   maximum_framework_effort_percent: 15
 """,
     )
@@ -2345,6 +2346,164 @@ class ObservatoryTests(unittest.TestCase):
             ):
                 observatory.load_events(root)
 
+
+
+class RepeatedGenericFixWindowTests(unittest.TestCase):
+    """The repeated-fix budget counts a burst inside its window, not old debt."""
+
+    NOW = "2026-11-24T12:00:00Z"
+    BUDGETS = {
+        "security_or_p0_classification_hours": 24,
+        "ordinary_framework_classification_business_days": 3,
+        "other_classification_days": 7,
+        "maximum_pending_events": 20,
+        "maximum_overdue_events": 0,
+        "maximum_pending_event_age_days": 7,
+        "maximum_repeated_generic_fixes": 2,
+        "maximum_framework_effort_percent": 15,
+        "repeated_generic_fix_window_days": 14,
+    }
+
+    @staticmethod
+    def events(
+        resolved: list[str], *, direction: str = "Pulp-to-framework", disposition: str = "port-required",
+    ) -> list[tuple[Path, dict[str, object]]]:
+        """One observation per timestamp on contract `render`, each resolved at that time."""
+        events: list[tuple[Path, dict[str, object]]] = []
+        for index, stamp in enumerate(resolved):
+            sha = f"{index + 1:040x}"
+            source = "Generous-Corp/pulp" if direction == "Pulp-to-framework" else "Generous-Corp/vellum"
+            observation = {
+                "schema_version": 1, "event_id": f"obs-{sha}", "kind": "observation",
+                "source_repository": source, "source_commit": sha,
+                "discovered_at": "2026-07-01T00:00:00Z",
+                "scan_cursor": {"from_commit": "b" * 40, "to_commit": "c" * 40},
+                "direction": direction, "mapped_contracts": ["render"],
+                "mapped_paths": ["core/render/a.cpp"], "transitive_paths": [], "rename_candidates": [],
+                "patch_id": None, "include_dependency_deltas": [], "schema_api_deltas": [],
+                "class": "correctness", "severity": None, "disposition": "pending", "rationale": "Review.",
+                "owner": "@danielraffel", "linked_commits": [], "linked_pull_requests": [],
+                "contract_tests": ["render-contract"], "contract_keys": ["render"],
+                "shared_contract_release_blocker": False, "effort_minutes": 0,
+            }
+            resolution = {
+                "schema_version": 1, "event_id": f"resolution-{sha}", "kind": "resolution",
+                "created_at": stamp, "resolves": observation["event_id"],
+                "disposition": disposition, "rationale": "Classified.", "owner": "@danielraffel",
+                "linked_commits": [sha], "linked_pull_requests": [], "contract_tests": ["render-contract"],
+                "shared_contract_release_blocker": False, "effort_minutes": 5,
+            }
+            events += [(Path(f"obs-{index}"), observation), (Path(f"resolution-{index}"), resolution)]
+        return events
+
+    def report(
+        self, events: list[tuple[Path, dict[str, object]]], *, budgets: dict[str, int] | None = None,
+        now: str | None = NOW,
+    ) -> dict[str, object]:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            write_json(
+                root / "provenance/authority/trust-policy.v1.json",
+                {"schema_version": 1, "state": "disabled", "repositories": {
+                    "pulp": {"repository_id": None, "reader_app_id": None, "required_check_app_ids": {}},
+                    "vellum": {"repository_id": None, "reader_app_id": None, "required_check_app_ids": {}},
+                }},
+            )
+            lock = {"state": "prepared", "vellum_authority_start_commit": None, "pulp_activation_commit": None}
+            cursor = {"effort_window": {"framework_effort_minutes": 0, "observatory_effort_minutes": 0}}
+            return observatory.build_report(
+                root=root, lock=lock, cursor=cursor, events=events,
+                budgets=budgets if budgets is not None else self.BUDGETS,
+                now=observatory.parse_utc(now, "now") if now else None, coverage_gaps=[],
+            )
+
+    def test_a_burst_inside_the_window_over_the_limit_fails(self) -> None:
+        report = self.report(self.events(["2026-11-23T00:00:00Z"] * 3))
+        self.assertEqual(report["repeated_generic_fixes"], {"render": 3})
+        self.assertIn("repeated-generic-fix-threshold-exceeded", report["budget_violations"])
+
+    def test_framework_to_pulp_fixes_do_not_count(self) -> None:
+        for disposition in ("port-required", "ported"):
+            with self.subTest(disposition=disposition):
+                report = self.report(self.events(
+                    ["2026-11-23T00:00:00Z"] * 3, direction="framework-to-Pulp", disposition=disposition))
+                self.assertEqual(report["repeated_generic_fixes"], {})
+                self.assertEqual(report["health"], "pass")
+        mixed = self.events(["2026-11-23T00:00:00Z"] * 2) + [
+            (Path(f"vellum-{path}"), {**event, "event_id": f"vellum-{event['event_id']}",
+                                      **({"resolves": f"vellum-{event['resolves']}"} if "resolves" in event else
+                                         {"direction": "framework-to-Pulp"})})
+            for path, event in self.events(["2026-11-23T00:00:00Z"])
+        ]
+        self.assertEqual(self.report(mixed)["repeated_generic_fixes"], {"render": 2})
+
+    def test_the_same_fixes_older_than_the_window_pass(self) -> None:
+        report = self.report(self.events(["2026-11-01T00:00:00Z"] * 3))
+        self.assertEqual(report["repeated_generic_fixes"], {})
+        self.assertNotIn("repeated-generic-fix-threshold-exceeded", report["budget_violations"])
+        self.assertEqual(report["health"], "pass")
+
+    def test_a_fix_exactly_at_the_window_edge_counts(self) -> None:
+        inside = ["2026-11-23T00:00:00Z", "2026-11-23T00:00:00Z"]
+        at_edge = self.report(self.events([*inside, "2026-11-10T12:00:00Z"]))
+        self.assertEqual(at_edge["repeated_generic_fixes"], {"render": 3})
+        self.assertIn("repeated-generic-fix-threshold-exceeded", at_edge["budget_violations"])
+        past_edge = self.report(self.events([*inside, "2026-11-10T11:59:59Z"]))
+        self.assertEqual(past_edge["repeated_generic_fixes"], {"render": 2})
+        self.assertNotIn("repeated-generic-fix-threshold-exceeded", past_edge["budget_violations"])
+
+    def test_a_later_resolution_dates_the_fix(self) -> None:
+        events = self.events(["2026-11-01T00:00:00Z"] * 3)
+        for index in range(3):
+            observation = events[index * 2][1]
+            events.append((Path(f"ported-{index}"), {
+                **events[index * 2 + 1][1], "event_id": f"ported-{index}",
+                "created_at": "2026-11-23T00:00:00Z", "disposition": "ported",
+                "resolves": observation["event_id"],
+            }))
+        self.assertEqual(self.report(events)["repeated_generic_fixes"], {"render": 3})
+
+    def test_without_the_window_key_every_fix_counts(self) -> None:
+        budgets = {key: value for key, value in self.BUDGETS.items() if key != "repeated_generic_fix_window_days"}
+        self.assert_legacy_fix_counts(budgets=budgets)
+
+    def test_without_a_time_every_fix_counts(self) -> None:
+        self.assert_legacy_fix_counts(now=None)
+
+    def assert_legacy_fix_counts(self, **options: object) -> None:
+        for direction in ("Pulp-to-framework", "framework-to-Pulp"):
+            for disposition in ("port-required", "ported"):
+                with self.subTest(direction=direction, disposition=disposition):
+                    report = self.report(self.events(
+                        ["2026-08-01T00:00:00Z"] * 3,
+                        direction=direction, disposition=disposition,
+                    ), **options)
+                    self.assertEqual(report["repeated_generic_fixes"], {"render": 3})
+                    self.assertIn("repeated-generic-fix-threshold-exceeded", report["budget_violations"])
+                    self.assertEqual(report["health"], "fail")
+
+    def test_the_window_key_is_optional_and_must_be_positive(self) -> None:
+        required = "".join(
+            f"  {key}: {value}\n" for key, value in self.BUDGETS.items()
+            if key != "repeated_generic_fix_window_days"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "budgets.yaml"
+            write(path, "observatory:\n" + required)
+            self.assertNotIn("repeated_generic_fix_window_days", observatory.load_budgets(path))
+            write(path, "observatory:\n" + required + "  repeated_generic_fix_window_days: 14\n")
+            self.assertEqual(observatory.load_budgets(path)["repeated_generic_fix_window_days"], 14)
+            write(path, "observatory:\n" + required + "  repeated_generic_fix_window_days: 0\n")
+            with self.assertRaisesRegex(observatory.ObservatoryError, "at least 1"):
+                observatory.load_budgets(path)
+            write(path, "observatory:\n" + required + "  repeated_generic_fix_window_dayz: 14\n")
+            with self.assertRaisesRegex(observatory.ObservatoryError, "unknown"):
+                observatory.load_budgets(path)
+
+    def test_the_committed_budgets_window_the_repeated_fix_limit(self) -> None:
+        budgets = observatory.load_budgets(observatory.ROOT / observatory.BUDGETS_PATH)
+        self.assertEqual(budgets["maximum_repeated_generic_fixes"], 2)
+        self.assertEqual(budgets["repeated_generic_fix_window_days"], 14)
 
 
 class OwnCommitEventTests(unittest.TestCase):
