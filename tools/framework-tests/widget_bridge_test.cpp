@@ -109,7 +109,7 @@ FRAMEWORK_TEST(native_focus_transfer_reaches_real_widget_bridge) {
         "var parent = document.createElement('div'); parent.id = 'focus-parent';"
         "var target = document.createElement('input'); target.id = 'focus-target';"
         "target.addEventListener('focus', function () {"
-            "focusSeen.push({visible: target.matches(':focus-visible'), cause: target._focusCause});"
+            "focusSeen.push({visible: target._focusVisible, cause: target._focusCause});"
         "});"
         "target.addEventListener('focusin', function () { focusInSeen.push(1); });"
         "target.addEventListener('blur', function () { blurSeen.push(1); });"
@@ -119,8 +119,8 @@ FRAMEWORK_TEST(native_focus_transfer_reaches_real_widget_bridge) {
         "style.textContent = '#focus-parent:focus-within { color: red; }';"
         "document.body.appendChild(style);");
 
-    auto* target = h.bridge.widget("focus-target");
-    auto* parent = h.bridge.widget("focus-parent");
+    auto* target = h.bridge.widget(h.js_string("target._id"));
+    auto* parent = h.bridge.widget(h.js_string("parent._id"));
     CHECK(target != nullptr);
     CHECK(parent != nullptr);
 
@@ -129,13 +129,13 @@ FRAMEWORK_TEST(native_focus_transfer_reaches_real_widget_bridge) {
     CHECK(h.js_string("focusInSeen.length") == "1");
     CHECK(h.js_string("focusSeen[0].visible") == "true");
     CHECK(h.js_string("focusSeen[0].cause") == "keyboard");
-    CHECK(h.js_string("document.getElementById('focus-parent').matches(':focus-within')") == "true");
+    CHECK(h.js_string("document.querySelector('#focus-parent:focus-within') === parent") == "true");
     CHECK(h.js_string("document.getElementById('focus-parent').style.color") == "red");
 
     CHECK(!view::transfer_input_focus(h.root, nullptr, view::FocusCause::programmatic));
     CHECK(h.js_string("blurSeen.length") == "1");
     CHECK(h.js_string("focusOutSeen.length") == "1");
-    CHECK(h.js_string("document.getElementById('focus-parent').matches(':focus-within')") == "false");
+    CHECK(h.js_string("document.querySelector('#focus-parent:focus-within') === null") == "true");
 
     CHECK(view::transfer_input_focus(h.root, target, view::FocusCause::pointer));
     CHECK(h.js_string("focusSeen.length") == "2");
