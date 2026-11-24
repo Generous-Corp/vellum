@@ -264,7 +264,8 @@ void BridgeRegistrars::register_pointer_event_api(WidgetBridge& self) {
         }
         if (focused_input_under_root(self.root_) == view)
             return choc::value::createBool(true);
-        return choc::value::createBool(transfer_input_focus(self.root_, view));
+        return choc::value::createBool(transfer_input_focus(self.root_, view,
+                                                             FocusCause::programmatic));
     });
     // clearFocus(id) - blur `id` if, and only if, it holds this root's focus.
     // A stale blur for a view that already lost focus must not knock focus
@@ -273,7 +274,7 @@ void BridgeRegistrars::register_pointer_event_api(WidgetBridge& self) {
         View* view = self.widget(args.get<std::string>(0, ""));
         if (!view || focused_input_under_root(self.root_) != view)
             return choc::value::createBool(false);
-        transfer_input_focus(self.root_, nullptr);
+        transfer_input_focus(self.root_, nullptr, FocusCause::programmatic);
         return choc::value::createBool(
             focused_input_under_root(self.root_) != view);
     });
