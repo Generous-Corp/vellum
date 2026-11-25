@@ -202,10 +202,21 @@ std::unique_ptr<value::ParamModel> read_only_view(value::ParamModel& source,
 struct ScriptedUiSession::DiskFontCache {
     struct Entry {
         std::filesystem::file_time_type write_time;
+        std::uintmax_t size = 0;
+        std::uint64_t content_hash = 0;
         std::weak_ptr<const std::vector<unsigned char>> bytes;
     };
     std::unordered_map<std::string, Entry> by_path;
 };
+
+std::uint64_t disk_font_content_hash(const std::vector<unsigned char>& bytes) {
+    constexpr std::uint64_t kOffset = 1469598103934665603ULL;
+    constexpr std::uint64_t kPrime = 1099511628211ULL;
+    std::uint64_t hash = kOffset;
+    for (const auto byte : bytes)
+        hash = (hash ^ byte) * kPrime;
+    return hash;
+}
 
 std::vector<WidgetBridge::EmbeddedAsset>
 ScriptedUiSession::sealed_assets_for(const std::filesystem::path& script) {
@@ -264,20 +275,21 @@ ScriptedUiSession::sealed_assets_for(const std::filesystem::path& script) {
             continue;
         auto& entry = disk_fonts_->by_path[real.generic_string()];
         auto bytes = entry.bytes.lock();
-        if (!bytes || entry.write_time != write_time) {
-            std::ifstream in(real, std::ios::binary);
-            if (!in)
-                continue;
-            // Bound the read to the size already charged to the load budget,
-            // even if another process appends bytes after the size check.
-            auto loaded = std::make_shared<std::vector<unsigned char>>(size);
-            in.read(reinterpret_cast<char*>(loaded->data()),
-                    static_cast<std::streamsize>(loaded->size()));
-            if (!in)
-                continue;
+        std::ifstream in(real, std::ios::binary);
+        if (!in)
+            continue;
+        // Read and hash every reload so a file changed in place with a
+        // preserved timestamp cannot reuse stale sealed bytes.
+        auto loaded = std::make_shared<std::vector<unsigned char>>(size);
+        in.read(reinterpret_cast<char*>(loaded->data()),
+                static_cast<std::streamsize>(loaded->size()));
+        if (!in)
+            continue;
+        const auto content_hash = disk_font_content_hash(*loaded);
+        if (!bytes || entry.write_time != write_time || entry.size != size ||
+            entry.content_hash != content_hash)
             bytes = std::move(loaded);
-            entry = {write_time, bytes};
-        }
+        entry = {write_time, size, content_hash, bytes};
         // A file embedded at build time wins over one of the same name on disk.
         const bool embedded = std::any_of(assets.begin(), assets.end(),
                                           [&](const auto& a) { return a.name == name; });

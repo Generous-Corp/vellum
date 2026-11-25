@@ -417,6 +417,40 @@ FRAMEWORK_TEST(directory_switch_does_not_reuse_same_timestamp_font_bytes) {
     std::filesystem::remove_all(second);
 }
 
+FRAMEWORK_TEST(in_place_font_change_with_same_timestamp_is_reloaded) {
+    const auto dir = fresh_temp_dir("cache-content");
+    std::filesystem::copy_file(VELLUM_TEST_FONT_PATH, dir / "face.ttf");
+    const auto first = probe_family("cache-content-first");
+    const auto second = probe_family("cache-content-second");
+    write_file(dir / "ui.js", "if (!registerEmbeddedFont('" + first +
+        "', 'face.ttf')) throw new Error('positive control failed');");
+    view::ScriptedUiOptions options;
+    options.script_path = dir / "ui.js";
+    options.granted_capabilities = view::CapabilitySet{};
+    options.enable_hot_reload = options.enable_theme_reload = false;
+    view::View root;
+    vellum::state::StateStore store;
+    view::ScriptedUiSession session(root, store, options);
+    std::string error;
+    CHECK(session.load(&error));
+    CHECK(vellum::canvas::is_font_registered(first));
+
+    const auto stamp = std::filesystem::last_write_time(dir / "face.ttf");
+    auto replacement = read_test_font();
+    replacement[0] = 'x';
+    {
+        std::ofstream out(dir / "face.ttf", std::ios::binary | std::ios::trunc);
+        out.write(reinterpret_cast<const char*>(replacement.data()),
+                  static_cast<std::streamsize>(replacement.size()));
+    }
+    std::filesystem::last_write_time(dir / "face.ttf", stamp);
+    write_file(dir / "ui.js", "if (registerEmbeddedFont('" + second +
+        "', 'face.ttf')) throw new Error('stale bytes reused');");
+    CHECK(session.reload(&error));
+    CHECK(!vellum::canvas::is_font_registered(second));
+    std::filesystem::remove_all(dir);
+}
+
 FRAMEWORK_TEST(font_snapshots_release_obsolete_revisions_after_realm_retirement) {
     const auto dir = fresh_temp_dir("snapshot-lifetime");
     std::filesystem::copy_file(VELLUM_TEST_FONT_PATH, dir / "face.ttf");
