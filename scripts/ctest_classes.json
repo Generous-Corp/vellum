@@ -161,6 +161,7 @@
       "vellum.web.layout-contract",
       "vellum.web.no-engine",
       "vellum.web.no-engine-negative-control",
+      "vellum.web.perceptual-gate",
       "vellum.web.superconvolver-field",
       "vellum.web.superconvolver-view-layout",
       "vellum.web.vector-canvas-builder"
@@ -266,6 +267,11 @@
       "vellum.threejs-native-demo-cube-capture",
       "vellum.threejs-native-demo-gltf-box-capture",
       "vellum.threejs-native-demo-gltf-box-capture-negative",
+      "vellum.web.superconvolver-view-missing-chip-control",
+      "vellum.web.superconvolver-view-missing-field-control",
+      "vellum.web.superconvolver-view-missing-label-control",
+      "vellum.web.superconvolver-view-placeholder-control",
+      "vellum.web.superconvolver-view-solid-background-control",
       "vellum.web.vector-canvas-oracle"
     ],
     "slow": [
