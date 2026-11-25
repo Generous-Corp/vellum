@@ -39,7 +39,10 @@ from vellum_scenario import (
 from vellum_cdp import CdpAdmission
 from vellum_cdp_client import CAPTURE_STYLE_NAMES, CdpClient, CdpClientError
 from vellum_interaction import InteractionPlanError, validate_interaction_plan
-from vellum_browser import browser_version, configured_provenance
+from vellum_browser import (
+    BrowserProvenanceError, browser_version, configured_provenance, headless_mode_arguments,
+    prefer_headless_shell,
+)
 
 
 RESULT_SCHEMA = "vellum.backend.result.v1"
@@ -458,14 +461,23 @@ def chrome_path() -> str:
                 f"VELLUM_CHROME_PATH does not name an executable browser: {override}",
                 status="prerequisite_missing", exit_code=4,
             )
-        if os.environ.get("VELLUM_REQUIRE_CHROME_PROVENANCE") == "1":
+        strict = os.environ.get("VELLUM_REQUIRE_CHROME_PROVENANCE") == "1"
+        if strict:
             valid, detail = configured_provenance(candidate)
             if not valid:
                 raise BackendFailure(
                     f"Pinned Chrome lacks valid provenance: {detail}",
                     status="prerequisite_missing", exit_code=4,
                 )
-        return str(candidate)
+        # Every web scenario runs headless, so the shell from the pinned
+        # release is preferred when it is present.
+        try:
+            return str(prefer_headless_shell(candidate, strict=strict))
+        except BrowserProvenanceError as error:
+            raise BackendFailure(
+                f"Pinned headless shell refused: {error}",
+                status="prerequisite_missing", exit_code=4,
+            ) from None
     if os.environ.get("VELLUM_REQUIRE_CHROME_PROVENANCE") == "1":
         # A provenance receipt names one pinned executable, so strict mode
         # never discovers a browser on its own.
@@ -1203,12 +1215,14 @@ def run_chrome_scenario(
     profile_factory: Any = tempfile.TemporaryDirectory,
     process_factory: Any = subprocess.Popen,
 ) -> None:
+    browser_executable = chrome or chrome_path()
     with profile_factory(prefix="vellum-web-chrome-") as profile:
         if Path(profile).is_dir():
             os.chmod(profile, 0o700)
         with CdpAdmission(str(Path(profile) / "vellum-cdp.sock")) as cdp:
             process = process_factory([
-                chrome or chrome_path(), "--headless=new", "--disable-gpu-sandbox",
+                browser_executable, *headless_mode_arguments(browser_executable),
+                "--disable-gpu-sandbox",
                 "--no-first-run", "--disable-background-networking",
                 *cdp.chrome_arguments(),
                 f"--user-data-dir={profile}", url,
@@ -1266,7 +1280,8 @@ def run_chrome_interaction_capture(
             if Path(profile).is_dir():
                 os.chmod(profile, 0o700)
             process = process_factory([
-                browser_executable, "--headless=new", "--disable-gpu-sandbox",
+                browser_executable, *headless_mode_arguments(browser_executable),
+                "--disable-gpu-sandbox",
                 "--no-first-run", "--disable-background-networking",
                 *CdpAdmission.chrome_launch_arguments(),
                 "--window-size=1280,720",

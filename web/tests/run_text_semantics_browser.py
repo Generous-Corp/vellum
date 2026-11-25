@@ -18,7 +18,10 @@ import time
 from typing import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "cli"))
-from vellum_browser import configured_provenance  # noqa: E402
+from vellum_browser import (  # noqa: E402
+    BrowserProvenanceError, browser_kind, configured_provenance, headless_mode_arguments,
+    prefer_headless_shell,
+)
 
 INSTALLED_CHROME = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
 
@@ -39,7 +42,10 @@ def select_chrome() -> str:
             valid, detail = configured_provenance(Path(pinned))
             if not valid:
                 raise SystemExit(f"pinned Chrome lacks valid provenance: {detail}")
-        return pinned
+        try:
+            return str(prefer_headless_shell(Path(pinned), strict=strict))
+        except BrowserProvenanceError as error:
+            raise SystemExit(f"pinned headless shell refused: {error}") from None
     if strict:
         raise SystemExit(
             "VELLUM_REQUIRE_CHROME_PROVENANCE=1 requires a pinned browser in "
@@ -50,6 +56,12 @@ def select_chrome() -> str:
     if not chrome or not Path(chrome).is_file():
         raise SystemExit("Google Chrome is required for the browser proof")
     return chrome
+
+
+def select_browser() -> tuple[str, str]:
+    """``(kind, path)`` of the browser a proof runs; kind is ``chrome`` or ``headless-shell``."""
+    chrome = select_chrome()
+    return browser_kind(chrome), chrome
 
 
 def stop_browser(
@@ -268,7 +280,8 @@ def main() -> int:
             with tempfile.TemporaryDirectory(prefix="vellum-text-chrome-") as profile:
                 progress = ProofProgress()
                 process = subprocess.Popen([
-                    chrome, "--headless=new", "--disable-gpu-sandbox", "--no-first-run",
+                    chrome, *headless_mode_arguments(chrome), "--disable-gpu-sandbox",
+                    "--no-first-run",
                     "--disable-background-networking", f"--user-data-dir={profile}",
                     f"http://127.0.0.1:{server.server_port}/index.html"
                     "?vellum-scenario=/scenario.json",

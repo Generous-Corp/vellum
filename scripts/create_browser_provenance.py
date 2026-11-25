@@ -10,7 +10,9 @@ import re
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "cli"))
-from vellum_browser import ACTION_REF_RE, SCHEMA, browser_version, sha256  # noqa: E402
+from vellum_browser import (  # noqa: E402
+    ACTION_REF_RE, CHROME_PRODUCT, PRODUCTS, SCHEMA, browser_version, sha256,
+)
 
 
 def main() -> int:
@@ -19,6 +21,8 @@ def main() -> int:
     parser.add_argument("--requested-version", required=True)
     parser.add_argument("--source-action", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--product", choices=PRODUCTS, default=CHROME_PRODUCT,
+                        help="the executable's product; chrome-headless-shell for the shell")
     args = parser.parse_args()
     browser = args.browser.resolve()
     if not browser.is_file() or not browser.stat().st_mode & 0o111:
@@ -32,7 +36,7 @@ def main() -> int:
         parser.error(f"browser reported {version}, expected {args.requested_version}")
     record = {
         "schema": SCHEMA,
-        "product": "Google Chrome",
+        "product": args.product,
         "version": version,
         "requested_version": args.requested_version,
         "executable_sha256": sha256(browser),

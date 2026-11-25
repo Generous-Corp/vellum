@@ -29,6 +29,7 @@ sys.path.insert(0, str(REPO / "cli/tests"))
 from live_browser import live_browser_skip_reason  # noqa: E402
 from vellum_cdp import CdpAdmission  # noqa: E402
 from vellum_cdp_client import CdpClient  # noqa: E402
+from vellum_browser import headless_mode_arguments  # noqa: E402
 from vellum_web_backend import chrome_path  # noqa: E402
 sys.path.pop(0)
 sys.path.pop(0)
@@ -114,8 +115,9 @@ def chrome_boxes(html: str) -> dict[str, tuple[float, float, float, float]]:
         threading.Thread(target=server.serve_forever, daemon=True).start()
         with tempfile.TemporaryDirectory(prefix="vellum-chrome-") as profile:
             os.chmod(profile, 0o700)
+            browser = chrome_path()
             process = subprocess.Popen([
-                chrome_path(), "--headless=new", "--no-first-run",
+                browser, *headless_mode_arguments(browser), "--no-first-run",
                 "--disable-background-networking", *CdpAdmission.chrome_launch_arguments(),
                 "--window-size=800,600", f"--user-data-dir={profile}",
                 f"http://127.0.0.1:{server.server_port}/index.html"],

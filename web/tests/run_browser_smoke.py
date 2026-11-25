@@ -13,7 +13,8 @@ import tempfile
 import threading
 
 from run_text_semantics_browser import (
-    ProofProgress, ProofTimeout, select_chrome, stop_browser, wait_for_proof,
+    ProofProgress, ProofTimeout, headless_mode_arguments, select_chrome, stop_browser,
+    wait_for_proof,
 )
 
 
@@ -55,7 +56,8 @@ def main() -> int:
         with tempfile.TemporaryDirectory(prefix="vellum-chrome-") as profile:
             progress = ProofProgress()
             process = subprocess.Popen(
-                [chrome, "--headless=new", "--disable-gpu-sandbox", "--no-first-run",
+                [chrome, *headless_mode_arguments(chrome), "--disable-gpu-sandbox",
+                 "--no-first-run",
                  "--disable-background-networking", f"--user-data-dir={profile}",
                  f"http://127.0.0.1:{server.server_port}/index.html"],
                 text=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
