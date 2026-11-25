@@ -17,12 +17,15 @@
 //             `decimals` drawn in the `<id>/name` and `<id>/value` boxes.
 //   `toggle`  bound to `param`; a press flips it as one gesture.
 //   `label`   static `text`, or `format(state)` of the session's feeds.
-//   `button`  draws `text` and runs `view.actions[action](session)` on press.
+//   `button`  draws a chip, with `text` when it has one, and runs
+//             `view.actions[action](session)` on press.
+//   `shape`   a filled box in the palette `color`.
 //   `plot`    draws the `feed` named `spectrum` or `ir`.
 // `layout` returns {[key]: {x, y, width, height}} in CSS pixels, one entry
 // per node id plus any sub-boxes the view names. A view may also supply
 // `colors` to override the default palette, and `textStyle(key)` returning
-// {fontSize, align} for a text box, where `align` is left, right or center.
+// the style of a box: {fontSize, align, uppercase} for text, where `align`
+// is left, right or center, and {radius} for a chip or shape.
 
 import {createCanvas2DBackend} from './canvas2d_backend.js';
 import {GestureTracker, clampToParameter, trackValue} from './gesture_tracker.js';
@@ -32,7 +35,7 @@ const DEFAULT_COLORS = {
     knob: '#1e293b', knobFill: '#14b8a6', knobText: '#e2e8f0',
     label: '#f8fafc', labelDim: '#94a3b8', value: '#f8fafc', plot: '#111827', plotFill: '#38bdf8',
     track: '#1e293b', trackFill: '#14b8a6', thumb: '#f8fafc',
-    button: '#1e293b', buttonText: '#14b8a6',
+    button: '#1e293b', buttonBorder: null, buttonText: '#14b8a6', sliderName: '#94a3b8',
     toggleOff: '#1e293b', toggleOn: '#f59e0b', toggleText: '#f8fafc', toggleTextOn: '#0b1020',
 };
 const BOUND_KINDS = new Set(['knob', 'slider', 'toggle']);
@@ -162,6 +165,7 @@ export async function createEditorSession({container, adapter, view, createCore}
 
     function drawText(key, text, box, fontSize, color) {
         const style = view.textStyle?.(key) ?? {fontSize, align: 'left'};
+        if (style.uppercase) text = text.toUpperCase();
         const size = Math.max(1, style.fontSize);
         const slack = box.width - text.length * size * ADVANCE;
         let x = box.x;
@@ -187,17 +191,31 @@ export async function createEditorSession({container, adapter, view, createCore}
                 : node.text || '';
             drawText(node.id, text, box, node.fontSize || 16, COLORS[node.color] || COLORS.label);
         } else if (node.kind === 'button') {
+            const radius = view.textStyle?.(node.id)?.radius ?? box.height * 0.16;
+            if (COLORS.buttonBorder) {
+                // A one pixel border: the border color, then the fill inset.
+                core.rectangle(`${node.id}/border`, box.x, box.y, box.width, box.height,
+                    radius, ...rgba(COLORS.buttonBorder));
+                core.rectangle(node.id, box.x + 1, box.y + 1, Math.max(0, box.width - 2),
+                    Math.max(0, box.height - 2), Math.max(0, radius - 1), ...rgba(COLORS.button));
+            } else {
+                core.rectangle(node.id, box.x, box.y, box.width, box.height,
+                    radius, ...rgba(COLORS.button));
+            }
+            if (node.text) {
+                drawText(`${node.id}/text`, node.text, bounds[`${node.id}/text`] || box,
+                    13, COLORS.buttonText);
+            }
+        } else if (node.kind === 'shape') {
             core.rectangle(node.id, box.x, box.y, box.width, box.height,
-                box.height * 0.16, ...rgba(COLORS.button));
-            drawText(`${node.id}/text`, node.text || '', bounds[`${node.id}/text`] || box,
-                13, COLORS.buttonText);
+                view.textStyle?.(node.id)?.radius ?? 0, ...rgba(COLORS[node.color] || COLORS.label));
         } else if (node.kind === 'slider') {
             const track = bounds[`${node.id}/track`];
             const value = values.get(node.param);
             const unit = node.unit ? ` ${node.unit}` : '';
             if (bounds[`${node.id}/name`]) {
                 drawText(`${node.id}/name`, node.label || '', bounds[`${node.id}/name`], 10,
-                    COLORS.labelDim);
+                    COLORS.sliderName);
             }
             if (bounds[`${node.id}/value`]) {
                 drawText(`${node.id}/value`, `${value.toFixed(node.decimals ?? 2)}${unit}`,

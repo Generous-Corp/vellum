@@ -1,25 +1,34 @@
 // The Superconvolver editor as an editor-session view.
 //
-// The geometry is the native editor's (Pulp `examples/super-convolver/
-// super_convolver_ui.hpp`, `layout()` and `paint_controls()`), computed from
-// the canvas size alone:
+// The view draws what the native editor draws (Pulp `examples/super-convolver/
+// super_convolver_ui.hpp`, `paint()`), at the native editor's geometry
+// (`layout()` and `paint_controls()`), computed from the canvas size alone:
 //
 //   s = max(0.5, H / 560), m = 20s, narrow = W < 680s
 //   top = narrow ? 132s : 64s, avail = H - top - m
-//   IR panel   {m, top, W - 2m, 0.42 avail}
-//   spectrum   {m, IR bottom + 12s, W - 2m, 0.26 avail}
-//   controls   {m, spectrum bottom + 12s, W - 2m, the rest of avail}
+//   controls   {m, top + 0.68 avail + 24s, W - 2m, avail - 0.68 avail - 24s}
+//              (below the native IR and spectrum slots, 0.42 and 0.26 of
+//              avail with two 12s gaps; the native editor lays those slots
+//              out but does not paint them, and neither does this view)
 //   slider i   cell {controls.x + i cw, controls.y, cw, controls.h}, cw = controls.w / n
 //              track {cell.x + 14s, cell.y + 0.54 cell.h, cw - 28s, 4s}
+//   source     narrow ? {m, 92s, W - 2m, 36s} : {24s, 44s, 196s, 38s}
 //
 // where n is the number of sliders whose parameter the plug-in declared.
 // The web build of the plug-in declares Mix, Size, Gain and Bypass only;
 // Engine, Rooms and Flow are compiled out, so this view never names them and
 // never reads them.
 //
+// The Source chip shows the loaded impulse response's name, cleaned the way
+// the native `clean_source_name` cleans a path, or "Synthetic room" before
+// one is loaded. Pressing it asks the page for a file, as the native chip's
+// `open_ir_chooser` does in a browser build. The impulse-response and
+// spectrum feeds reach the session; only the name is drawn.
+//
 // Text boxes put the baseline where the native editor puts it: the session's
 // Canvas2D path draws a text box's baseline at `y + fontSize`, so a box for a
-// native baseline `b` starts at `b - fontSize`.
+// native baseline `b` starts at `b - fontSize`. Tracked capitals are drawn as
+// capitals without the native letter spacing.
 //
 // Some bounds have no native value. Each is marked DESIGN below. They are
 // choices made for the web host, not measurements of the native editor:
@@ -35,8 +44,8 @@
 //   - The split of a wide slider's label band into a left name half and a
 //     right value half.
 //
-// The native editor's acoustic field backdrop, mode tabs, info glyph and
-// engine readout are not part of this view.
+// The native editor's acoustic field backdrop, mode tabs, info glyph,
+// control-strip fade and engine readout are not part of this view.
 
 // Parameter ids, from Pulp `examples/super-convolver/super_convolver_ui_host.hpp`.
 export const PARAMETERS = Object.freeze({mix: 1, size: 2, gain: 3, bypass: 4});
@@ -50,26 +59,60 @@ export const SLIDERS = Object.freeze([
 
 export const BYPASS = Object.freeze({id: 'bypass', param: PARAMETERS.bypass, label: 'Bypass'});
 
-// Native palette: the field ground and the Ink & Signal fallbacks.
+export const SYNTHETIC_SOURCE = 'Synthetic room';
+
+// Native colors: the field ground, the concept tokens and the chip.
 const COLORS = Object.freeze({
     background: '#07090e',
-    plot: '#1e2030', plotFill: '#16dac2',
-    label: '#bcc2cc', labelDim: '#969ebc', value: '#edeff3',
-    track: '#262a33', trackFill: '#a4a8ad', thumb: '#edeff3',
-    button: '#2e3146', buttonText: '#16dac2',
+    label: '#bcc2cc', sliderName: '#787e88', value: '#edeff3', faint: '#474c55',
+    track: '#21242a', trackFill: '#959799', thumb: '#edeff3',
+    button: '#0e1015', buttonBorder: '#1b1e24', orb: '#e8f0f8',
     toggleOff: '#14161c', toggleOn: '#f6b847', toggleText: '#edeff3', toggleTextOn: '#07090e',
 });
 
 // Text allowance below the baseline. DESIGN.
 const DESCENT = 0.3;
 
-function text(x, baseline, width, fontSize, align = 'left') {
-    return {box: {x, y: baseline - fontSize, width, height: fontSize * (1 + DESCENT)},
-        style: {fontSize, align}};
+// Trailing file-name tokens that describe the recording, not the room: the
+// native `is_engineering_token`.
+const ENGINEERING_WORDS = new Set(['ir', 'stereo', 'mono', 'wav', 'aiff', 'aif', 'flac', 'ogg',
+    'mp3', 'wave']);
+const ENGINEERING_NUMBERS = new Set([8, 16, 24, 32, 8000, 11025, 16000, 22050, 32000, 44100,
+    48000, 88200, 96000, 176400, 192000]);
+
+function isEngineeringToken(token) {
+    const lower = token.toLowerCase();
+    if (ENGINEERING_WORDS.has(lower)) return true;
+    const match = /^([0-9]+)(.*)$/.exec(lower);
+    if (!match) return false;
+    if (['k', 'khz', 'bit', 'b', 'hz'].includes(match[2])) return true;
+    return match[2] === '' && ENGINEERING_NUMBERS.has(Number(match[1]));
 }
 
-// Every named bound and text style at a canvas of `width` by `height` CSS
-// pixels, with one slider per entry of `sliderIds`, in order.
+// The display name of an impulse response from its file name: the native
+// `clean_source_name`.
+export function cleanSourceName(path) {
+    let stem = String(path).split(/[/\\]/).pop();
+    const dot = stem.lastIndexOf('.');
+    if (dot > 0) stem = stem.slice(0, dot);
+    const tokens = stem.replace(/[_.-]/g, ' ').split(' ').filter(Boolean);
+    while (tokens.length && isEngineeringToken(tokens[tokens.length - 1])) tokens.pop();
+    const name = tokens.map(word => /^[a-z]+$/.test(word)
+        ? word[0].toUpperCase() + word.slice(1) : word).join(' ');
+    return name || stem;
+}
+
+export function sourceLabel(impulseResponseName) {
+    return impulseResponseName ? cleanSourceName(impulseResponseName) : SYNTHETIC_SOURCE;
+}
+
+function text(x, baseline, width, fontSize, align = 'left', extra = {}) {
+    return {box: {x, y: baseline - fontSize, width, height: fontSize * (1 + DESCENT)},
+        style: {fontSize, align, ...extra}};
+}
+
+// Every named bound and style at a canvas of `width` by `height` CSS pixels,
+// with one slider per entry of `sliderIds`, in order.
 export function superconvolverLayout(width, height, sliderIds, {bypass = true} = {}) {
     const W = width, H = height;
     const s = Math.max(0.5, H / 560);
@@ -88,28 +131,26 @@ export function superconvolverLayout(width, height, sliderIds, {bypass = true} =
     const irH = avail * 0.42;
     const specH = avail * 0.26;
     const ctlH = avail - irH - specH - 2 * (12 * s);
-    const ir = {x: m, y: top, width: W - 2 * m, height: irH};
-    const spectrum = {x: m, y: ir.y + ir.height + 12 * s, width: W - 2 * m, height: specH};
-    const controls = {x: m, y: spectrum.y + spectrum.height + 12 * s, width: W - 2 * m, height: ctlH};
-    bounds.ir = ir;
-    bounds.spectrum = spectrum;
+    const controls = {x: m, y: top + irH + 12 * s + specH + 12 * s, width: W - 2 * m, height: ctlH};
     bounds.controls = controls;
 
-    // Wordmark at (24s, baseline 30s), 11s type. Width is DESIGN.
-    put('wordmark', text(24 * s, 30 * s, 160 * s, 11 * s));
+    // Wordmark: tracked capitals at (24s, baseline 30s), 11s type. Width is DESIGN.
+    put('wordmark', text(24 * s, 30 * s, 160 * s, 11 * s, 'left', {uppercase: true}));
 
-    // The Source chip is the loader. Its text sits 14s in, baseline at 0.66
-    // of the chip, 12s type. Text width is the rest of the chip (DESIGN).
-    const load = narrow ? {x: m, y: 92 * s, width: W - 2 * m, height: 36 * s}
+    // Source chip: radius 10s; a 7s orb centered 18s in; the name at 34s in,
+    // baseline 0.46 of the chip, 12s type, within the native name_max of
+    // width - 46s; the caption at 34s in, baseline 0.82, 8.5s tracked capitals.
+    const source = narrow ? {x: m, y: 92 * s, width: W - 2 * m, height: 36 * s}
         : {x: 24 * s, y: 44 * s, width: 196 * s, height: 38 * s};
-    bounds.loadIr = load;
-    put('loadIr/text', text(load.x + 14 * s, load.y + load.height * 0.66,
-        load.width - 14 * s, 12 * s));
-
-    // IR panel header: title at 10s in, source on the right 55% (the native
-    // clip rect), both at baseline 16s, 11s type. Title width is DESIGN.
-    put('irTitle', text(ir.x + 10 * s, ir.y + 16 * s, ir.width * 0.45 - 10 * s, 11 * s));
-    put('irSource', text(ir.x + ir.width * 0.45, ir.y + 16 * s, ir.width * 0.55 - 10 * s, 11 * s));
+    bounds.source = source;
+    styles.source = {radius: 10 * s};
+    bounds['source/orb'] = {x: source.x + 11 * s, y: source.y + source.height / 2 - 7 * s,
+        width: 14 * s, height: 14 * s};
+    styles['source/orb'] = {radius: 7 * s};
+    put('source/name', text(source.x + 34 * s, source.y + source.height * 0.46,
+        source.width - 46 * s, 12 * s));
+    put('source/caption', text(source.x + 34 * s, source.y + source.height * 0.82,
+        source.width - 46 * s, 8.5 * s, 'left', {uppercase: true}));
 
     const cw = controls.width / sliderIds.length;
     sliderIds.forEach((id, index) => {
@@ -125,11 +166,12 @@ export function superconvolverLayout(width, height, sliderIds, {bypass = true} =
             put(`${id}/name`, text(track.x, track.y - 30 * s, track.width, 9.5 * s, 'center'));
             put(`${id}/value`, text(track.x, track.y - 13 * s, track.width, 13 * s, 'center'));
         } else {
-            // Name left at baseline track.y - 12s (9.5s type), value right at
-            // track.y - 11s (14s type), inside the native 26s label band.
+            // Name in tracked capitals left at baseline track.y - 12s (9.5s
+            // type), value right at track.y - 11s (14s type), inside the
+            // native 26s label band.
             bounds[`${id}/label`] = {x: track.x, y: track.y - 26 * s, width: track.width, height: 26 * s};
             const half = track.width / 2;
-            put(`${id}/name`, text(track.x, track.y - 12 * s, half, 9.5 * s));
+            put(`${id}/name`, text(track.x, track.y - 12 * s, half, 9.5 * s, 'left', {uppercase: true}));
             put(`${id}/value`, text(track.x + half, track.y - 11 * s, half, 14 * s, 'right'));
         }
     });
@@ -153,13 +195,12 @@ export function createSuperconvolverView(parameterInfos, {onLoadImpulseResponse 
     let current = {styles: {}};
 
     const nodes = [
-        {id: 'ir', kind: 'plot', feed: 'ir'},
-        {id: 'spectrum', kind: 'plot', feed: 'spectrum'},
-        {id: 'irTitle', kind: 'label', text: 'impulse response', color: 'labelDim'},
-        {id: 'irSource', kind: 'label', color: 'labelDim',
-            format: state => `source: ${state.impulseResponseName || 'built-in synthetic'}`},
         {id: 'wordmark', kind: 'label', text: 'SuperConvolver'},
-        {id: 'loadIr', kind: 'button', text: 'Load IR', action: 'load-ir'},
+        {id: 'source', kind: 'button', action: 'load-ir'},
+        {id: 'source/orb', kind: 'shape', color: 'orb'},
+        {id: 'source/name', kind: 'label', color: 'value',
+            format: state => sourceLabel(state.impulseResponseName)},
+        {id: 'source/caption', kind: 'label', text: 'Source', color: 'faint'},
         ...sliders.map(slider => ({...slider, kind: 'slider'})),
         ...(hasBypass ? [{...BYPASS, kind: 'toggle'}] : []),
     ];
