@@ -105,6 +105,7 @@ stable outer schema.
 | `dev --target macos|web` | yes (supervisor) | watches, builds, and drives a target reload adapter; see [Development loop](dev.md) |
 | `import` / `reimport` | no | implemented by the installed `@vellum/design-ir` backend |
 | `design check` / `design diff` | no | deterministically regenerate the active source and authored overlay without writing; `check` fails on generated drift and `diff` reports it |
+| `design md-lint` / `md-diff` / `compile` / `lint-adherence` / `record` / `gallery` / `handoff` / `variants` / `tweak` / `export-tokens` | no | run in the installed `vellum-design-tool` (or `$VELLUM_DESIGN_TOOL`) with their arguments unchanged, and print the tool's own output; `--json` is each verb's own flag. A missing tool reports `capability_unavailable` (exit 4). `gallery` inventories cards with `--no-render` or `--json`; card rendering is not available yet |
 | `build` / `run` | no | macOS builds/launches a real `.app`; web builds a static app and reports its local serve command; finite headless runs are available |
 | `test` | no | macOS executes bounded native scenarios; web executes the shared scenario contract in Chrome |
 | `capture` | no | macOS captures PNGs and composes bounded capture matrices/montages; web runs a bounded interaction plan in Chrome and writes the settled page as a PNG |

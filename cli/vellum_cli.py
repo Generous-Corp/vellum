@@ -1543,6 +1543,9 @@ def parser() -> argparse.ArgumentParser:
         )
         action.add_argument("--project")
         action.add_argument("--as", dest="source_key", default="main")
+    for name, summary in DESIGN_TOOL_VERBS.items():
+        action = design_actions.add_parser(name, help=summary, add_help=False)
+        action.add_argument("tool_arguments", nargs=argparse.REMAINDER)
 
     ui = commands.add_parser(
         "ui",
@@ -1622,6 +1625,48 @@ def parser() -> argparse.ArgumentParser:
 
 
 UI_ACTIONS = ("build", "check", "lint")
+DESIGN_TOOL_NAME = "vellum-design-tool.exe" if os.name == "nt" else "vellum-design-tool"
+DESIGN_TOOL_VERBS = {
+    "md-lint": "lint a DESIGN.md file",
+    "md-diff": "diff the tokens of two DESIGN.md files",
+    "compile": "compile the design manifest and binding prompt",
+    "lint-adherence": "lint UI JS against the design contract",
+    "record": "maintain the project design ledger",
+    "gallery": "inventory @dsCard-tagged sources",
+    "handoff": "read a design project's handoff contract",
+    "variants": "collapse variant names into a component contract",
+    "tweak": "read or update an artifact's EDITMODE parameters",
+    "export-tokens": "export a theme as design tokens",
+}
+
+
+def design_tool_path() -> Path | None:
+    """The native design tool: $VELLUM_DESIGN_TOOL, else the installed SDK's."""
+    explicit = os.environ.get("VELLUM_DESIGN_TOOL")
+    if explicit:
+        path = Path(explicit).expanduser()
+        return path if path.is_file() else None
+    sdk_root = os.environ.get("VELLUM_SDK_ROOT")
+    if not sdk_root:
+        return None
+    path = Path(sdk_root).expanduser() / "sdk" / "bin" / DESIGN_TOOL_NAME
+    return path if path.is_file() else None
+
+
+def design_tool_command(verb: str, arguments: list[str]) -> int:
+    """Run one offline design verb in the native tool and return its exit code.
+
+    Arguments pass through unchanged, including --json, which these verbs
+    define for themselves, so the verb's own output is the result.
+    """
+    tool = design_tool_path()
+    if tool is None:
+        emit(result(
+            "design", ok=False, status="capability_unavailable",
+            message=f"This SDK does not provide 'design {verb}'.",
+        ), json_output="--json" in arguments)
+        return EXIT_UNAVAILABLE
+    return subprocess.run([str(tool), verb, *arguments], check=False).returncode
 
 
 def ui_command(arguments: list[str], *, json_output: bool) -> int:
@@ -1691,6 +1736,10 @@ def forwarded_arguments(args: argparse.Namespace) -> list[str]:
 
 def main(argv: Iterable[str] | None = None) -> int:
     raw = list(argv if argv is not None else sys.argv[1:])
+    if len(raw) >= 2 and raw[0] == "design" and raw[1] in DESIGN_TOOL_VERBS:
+        return design_tool_command(raw[1], raw[2:])
+    if len(raw) >= 3 and raw[:2] == ["--json", "design"] and raw[2] in DESIGN_TOOL_VERBS:
+        return design_tool_command(raw[2], [*raw[3:], "--json"])
     json_output = "--json" in raw
     if json_output:
         raw.remove("--json")
