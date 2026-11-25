@@ -497,9 +497,10 @@ FRAMEWORK_TEST(render_patch_golden_a_knob_s_needle_visibly_rotates_with_value_p3
     const auto cmp = compare_screenshots(lo, hi);
     require(cmp.valid);
     // Independent control: two frames whose SVGs differ by construction (black vs
-    // white fill) must render differently. Only when the control cannot tell
-    // them apart is the raster backend unavailable; otherwise a similarity of
-    // >= 0.999 between lo and hi is a real failure, not a skip.
+    // white fill) must render differently. The backend is
+    // unavailable only when it returns no image (skipped above); once it renders,
+    // an indistinguishable control or a similarity >= 0.999 between lo and hi is
+    // a real failure, never a skip.
     auto render_control = [&](const char* fill) {
         const std::string csvg =
             std::string(R"(<svg width="100" height="100" xmlns="http://www.w3.org/2000/svg">)"
@@ -527,8 +528,10 @@ FRAMEWORK_TEST(render_patch_golden_a_knob_s_needle_visibly_rotates_with_value_p3
     const auto white = render_control("#ffffff");
     if (black.empty() || white.empty()) SKIP("Skia raster screenshot backend unavailable");
     const auto control = compare_screenshots(black, white);
-    if (!control.valid || control.similarity >= 0.999f)
-        SKIP("native raster cannot distinguish a black from a white fill in this build");
+    // Backend availability is established by non-empty renders above; a backend
+    // that returns images but cannot tell black from white is broken, not absent.
+    require(control.valid);
+    CHECK(control.similarity < 0.999f);
     CHECK(cmp.similarity < 0.999f);   // the needle visibly rotated between the two values
 }
 
