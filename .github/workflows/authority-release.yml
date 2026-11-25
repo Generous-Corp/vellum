@@ -19,6 +19,7 @@ concurrency:
 jobs:
   finalize-authority-release:
     name: finalize-authority-release
+    environment: app-key
     runs-on: ubuntu-latest
     steps:
       - name: Check out trusted finalizer controls

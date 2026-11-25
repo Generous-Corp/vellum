@@ -309,6 +309,9 @@
         "script": "scripts/test_ci_runner_policy.py"
       },
       {
+        "script": "scripts/test_app_key_environment.py"
+      },
+      {
         "script": "scripts/test_select_reusable_gpu_proof.py"
       },
       {
