@@ -66,8 +66,8 @@ class ImportGraph(unittest.TestCase):
             self.assertIn("bare specifier", problems[0])
 
     def test_commented_import_is_ignored(self) -> None:
-        static, dynamic = specifiers("// import a from './gone.js';\n/* import './gone2.js' */\n")
-        self.assertEqual((static, dynamic), ([], []))
+        static, dynamic, unsupported = specifiers("// import a from './gone.js';\n/* import './gone2.js' */\n")
+        self.assertEqual((static, dynamic, unsupported), ([], [], []))
 
     def test_whitespace_free_and_comment_separated_static_forms(self) -> None:
         for source in (
@@ -82,8 +82,8 @@ class ImportGraph(unittest.TestCase):
             'import {\n a, // from "./decoy.js"\n b } from "./missing.js"',
         ):
             with self.subTest(source=source):
-                static, dynamic = specifiers(source)
-                self.assertEqual((static, dynamic), (["./missing.js"], []))
+                static, dynamic, unsupported = specifiers(source)
+                self.assertEqual((static, dynamic, unsupported), (["./missing.js"], [], []))
 
     def test_whitespace_free_import_is_reported_as_missing(self) -> None:
         with payload({"index.html": PAGE, "demo.js": 'import{X}from"./missing.js";'}) as root:
@@ -97,7 +97,7 @@ class ImportGraph(unittest.TestCase):
             'await import ( "./missing.js" )',
         ):
             with self.subTest(source=source):
-                self.assertEqual(specifiers(source), ([], ["./missing.js"]))
+                self.assertEqual(specifiers(source), ([], ["./missing.js"], []))
 
     def test_comment_separated_dynamic_import_is_reported_as_missing(self) -> None:
         with payload({"index.html": PAGE, "demo.js": 'import /* c */("./missing.js");'}) as root:
@@ -111,7 +111,7 @@ class ImportGraph(unittest.TestCase):
             "// import z from './c.js'\n/* import('./d.js') */\n"
             "obj.import('./e.js'); const m = import.meta.url;\n"
         )
-        self.assertEqual(specifiers(source), ([], ["./u.js"]))
+        self.assertEqual(specifiers(source), ([], ["./u.js"], []))
 
     def test_dynamic_bare_specifier_is_reported(self) -> None:
         with payload({"index.html": PAGE, "demo.js": "await import('missing-package');\n"}) as root:
@@ -119,9 +119,40 @@ class ImportGraph(unittest.TestCase):
             self.assertEqual(len(problems), 1)
             self.assertIn("bare specifier", problems[0])
 
-    def test_node_builtin_dynamic_import_is_allowed(self) -> None:
+    def test_dynamic_bare_allowlist_is_exact(self) -> None:
+        with payload({"index.html": PAGE, "demo.js": "await import('node:evil');\n"}) as root:
+            problems = missing_modules(Path(root))
+            self.assertEqual(len(problems), 1)
+            self.assertIn("node:evil", problems[0])
+
+    def test_node_module_dynamic_import_is_allowed(self) -> None:
         with payload({"index.html": PAGE, "demo.js": "await import('node:module');\n"}) as root:
             self.assertEqual(missing_modules(Path(root)), [])
+
+    def test_dynamic_non_string_import_is_reported(self) -> None:
+        for source in (
+            "await import('./' + name);\n",
+            "await import(`./${name}.js`);\n",
+            "await import();\n",
+        ):
+            with self.subTest(source=source), payload({"index.html": PAGE, "demo.js": source}) as root:
+                problems = missing_modules(Path(root))
+                self.assertEqual(len(problems), 1)
+                self.assertIn("requires one string literal", problems[0])
+
+    def test_escaped_import_specifier_is_rejected(self) -> None:
+        for source in (
+            "import './\\u0066oo.js';\n",
+            "await import('./\\u0066oo.js');\n",
+        ):
+            with self.subTest(source=source), payload({
+                "index.html": PAGE,
+                "demo.js": source,
+                "foo.js": "export {};\n",
+            }) as root:
+                problems = missing_modules(Path(root))
+                self.assertEqual(len(problems), 1)
+                self.assertIn("escaped import specifier is unsupported", problems[0])
 
     def test_page_without_html_is_an_error_not_a_pass(self) -> None:
         with payload({"demo.js": "export {};\n"}) as root:

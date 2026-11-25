@@ -21,7 +21,7 @@ import sys
 # Dynamic bare specifiers the shipped modules may name. Emscripten's glue loads
 # `node:module` behind an ENVIRONMENT_IS_NODE guard, so it never runs in a page.
 # Anything else bare would need an import map the payload does not ship.
-HOST_MODULE_PREFIXES = ("node:",)
+ALLOWED_DYNAMIC_BARE_SPECIFIERS = frozenset(("node:module",))
 
 _ID_START = re.compile(r"[A-Za-z_$\u0080-\uffff]")
 _ID_PART = re.compile(r"[A-Za-z0-9_$\u0080-\uffff]*")
@@ -79,7 +79,10 @@ def _tokens(source: str) -> list[tuple[str, str]]:
             while j < n and source[j] != c and source[j] != "\n":
                 j += 2 if source[j] == "\\" else 1
             raw = source[i + 1:j]
-            out.append(("str", re.sub(r"\\(.)", r"\1", raw)))
+            # Import specifier escapes are rejected below. Treating them as a
+            # decoded path requires the full ECMAScript escape grammar; keeping
+            # a distinct token makes the checker fail closed instead.
+            out.append(("escaped-str" if "\\" in raw else "str", raw))
             i = j + 1
         elif c == "`":
             i = read_template(i + 1)
@@ -135,11 +138,12 @@ def _regex_allowed(previous: list[tuple[str, str]]) -> bool:
     return value not in ")]}"
 
 
-def specifiers(source: str) -> tuple[list[str], list[str]]:
-    """Return (static, dynamic) import specifiers named by a module's source."""
+def specifiers(source: str) -> tuple[list[str], list[str], list[str]]:
+    """Return static, dynamic, and unsupported import specifiers."""
     tokens = _tokens(source)
     static: list[str] = []
     dynamic: list[str] = []
+    unsupported: list[str] = []
     count = len(tokens)
     for index, (kind, value) in enumerate(tokens):
         if kind != "id" or value not in ("import", "export"):
@@ -149,13 +153,21 @@ def specifiers(source: str) -> tuple[list[str], list[str]]:
         following = tokens[index + 1] if index + 1 < count else ("", "")
         if value == "import" and following == ("p", "("):
             argument = tokens[index + 2] if index + 2 < count else ("", "")
-            if argument[0] == "str":
+            closing = tokens[index + 3] if index + 3 < count else ("", "")
+            if argument[0] == "str" and closing == ("p", ")"):
                 dynamic.append(argument[1])
+            elif argument[0] == "escaped-str" and closing == ("p", ")"):
+                unsupported.append("escaped import specifier is unsupported")
+            else:
+                unsupported.append("dynamic import requires one string literal")
             continue
         if value == "import" and following == ("p", "."):
             continue  # import.meta
-        if value == "import" and following[0] == "str":
-            static.append(following[1])
+        if value == "import" and following[0] in ("str", "escaped-str"):
+            if following[0] == "str":
+                static.append(following[1])
+            else:
+                unsupported.append("escaped import specifier is unsupported")
             continue
         # `import clause from "x"` and `export {..}`/`export * from "x"`: walk the
         # clause up to its `from`, giving up at anything a clause cannot contain.
@@ -167,13 +179,15 @@ def specifiers(source: str) -> tuple[list[str], list[str]]:
             if k == "id" and v == "from":
                 if j + 1 < count and tokens[j + 1][0] == "str":
                     static.append(tokens[j + 1][1])
+                elif j + 1 < count and tokens[j + 1][0] == "escaped-str":
+                    unsupported.append("escaped import specifier is unsupported")
                 break
             if k == "p" and v in ";=()":
                 break
             if k in ("num", "tpl", "re", "str"):
                 break
             j += 1
-    return static, dynamic
+    return static, dynamic, unsupported
 
 
 class ModuleScripts(HTMLParser):
@@ -220,7 +234,14 @@ def missing_modules(root: Path) -> list[str]:
     """Every import in the page graph that does not resolve inside `root`."""
     root = root.resolve()
     problems: list[str] = []
-    pending: list[tuple[Path, str]] = []
+    pending: list[tuple[Path, str, str, bool]] = []
+
+    def queue_imports(importer_dir: Path, label: str, source: str) -> None:
+        static, dynamic, unsupported = specifiers(source)
+        problems.extend(f"{label}: {reason}" for reason in unsupported)
+        pending.extend((importer_dir, f"{label} -> {spec}", spec, False) for spec in static)
+        pending.extend((importer_dir, f"{label} (dynamic) -> {spec}", spec, True) for spec in dynamic)
+
     pages = sorted(root.rglob("*.html"))
     if not pages:
         return [f"{root}: no HTML page to start from"]
@@ -229,24 +250,21 @@ def missing_modules(root: Path) -> list[str]:
         parser.feed(page.read_text(encoding="utf-8"))
         label = page.relative_to(root).as_posix()
         for src in parser.sources:
-            pending.append((page.parent, f"{label} -> {src}"))
+            pending.append((page.parent, f"{label} -> {src}", src, False))
         for body in parser.inline:
-            static, dynamic = specifiers(body)
-            for spec in static + dynamic:
-                pending.append((page.parent, f"{label} (inline) -> {spec}"))
+            queue_imports(page.parent, f"{label} (inline)", body)
     # Every shipped module is importable by a consumer of the payload, so the
     # graph starts at each of them too, not only at what the demo page reaches.
     for module in sorted(root.rglob("*.js")) + sorted(root.rglob("*.mjs")):
-        pending.append((module.parent, f"(payload) -> ./{module.name}"))
+        pending.append((module.parent, f"(payload) -> ./{module.name}", f"./{module.name}", False))
     seen: set[Path] = set()
     while pending:
-        importer_dir, edge = pending.pop()
-        specifier = edge.rsplit(" -> ", 1)[1]
+        importer_dir, edge, specifier, dynamic = pending.pop()
         target = resolve(root, importer_dir, specifier)
         if target is None:
             # A bare specifier only loads through an import map, which this
             # payload does not ship; only the listed host modules are exempt.
-            if "(dynamic)" in edge and specifier.startswith(HOST_MODULE_PREFIXES):
+            if dynamic and specifier in ALLOWED_DYNAMIC_BARE_SPECIFIERS:
                 continue
             problems.append(f"{edge}: bare specifier has no import map")
             continue
@@ -260,11 +278,7 @@ def missing_modules(root: Path) -> list[str]:
             continue
         seen.add(target)
         label = target.relative_to(root).as_posix()
-        static, dynamic = specifiers(target.read_text(encoding="utf-8", errors="replace"))
-        for spec in static:
-            pending.append((target.parent, f"{label} -> {spec}"))
-        for spec in dynamic:
-            pending.append((target.parent, f"{label} (dynamic) -> {spec}"))
+        queue_imports(target.parent, label, target.read_text(encoding="utf-8", errors="replace"))
     return sorted(problems)
 
 
