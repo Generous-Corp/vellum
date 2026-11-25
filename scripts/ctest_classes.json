@@ -161,6 +161,7 @@
       "vellum.web.layout-contract",
       "vellum.web.no-engine",
       "vellum.web.no-engine-negative-control",
+      "vellum.web.superconvolver-field",
       "vellum.web.superconvolver-view-layout",
       "vellum.web.vector-canvas-builder"
     ],

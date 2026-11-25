@@ -79,15 +79,19 @@ function report() {
     };
 }
 
-async function mount(width, height) {
+// `field` replaces the field's {density, flow, energy}, `values` the
+// parameter defaults, and `time` freezes the animation clock there.
+async function mount(width, height, {field = {}, values: preset = {}, time = null} = {}) {
     session?.destroy();
     calls.length = 0;
     reads.length = 0;
     fileRequests = [];
     resetValues();
+    for (const [id, value] of Object.entries(preset)) values.set(Number(id), value);
     container.style.width = `${width}px`;
     container.style.height = `${height}px`;
     view = createSuperconvolverView(await adapter.getParameterInfo(), {
+        field,
         // The page's own file selection stands in for the native picker.
         onLoadImpulseResponse(active) {
             const request = {accept: '.wav,.aif,.aiff,.flac', settled: false};
@@ -101,6 +105,7 @@ async function mount(width, height) {
     session = await createEditorSession({container, adapter, view, createCore: createVellumCore});
     session.feedImpulseResponse({name: '', samples: impulse});
     session.feedSpectrum(spectrum);
+    if (time !== null) session.freezeTime(time);
     await frames();
     return report();
 }
@@ -134,5 +139,24 @@ Object.assign(globalThis.__editorFixture, {
     settle: async () => { await frames(); return report(); },
     chooseFile,
     capture: async () => session.capture(),
+    // Headless Chrome's emulated device scale reaches devicePixelRatio but not
+    // a new element's device-pixel-content-box, so a canvas mounted under it
+    // is measured once more through the session's window resize path.
+    remeasure: async () => {
+        dispatchEvent(new Event('resize'));
+        await frames();
+        return report();
+    },
+    // The digest of the frame at `time`, drawn now with the clock frozen.
+    digestAt: async time => {
+        session.freezeTime(time);
+        return session.stats.lastFrame.digest;
+    },
+    // The current mode and the digest of the frame drawn now, clock frozen.
+    frozenFrame: async () => {
+        session.freezeTime(session.time);
+        return {mode: view.mode, commandCount: session.stats.lastFrame.commandCount,
+            digest: session.stats.lastFrame.digest};
+    },
     teardown,
 });

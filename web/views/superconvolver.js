@@ -13,6 +13,10 @@
 //   slider i   cell {controls.x + i cw, controls.y, cw, controls.h}, cw = controls.w / n
 //              track {cell.x + 14s, cell.y + 0.54 cell.h, cw - 28s, 4s}
 //   source     narrow ? {m, 92s, W - 2m, 36s} : {24s, 44s, 196s, 38s}
+//   tab i      {W/2 - 1.5 tw + i tw, ty, tw, 26s}, tw = narrow ? min(92s, (W - 2m) / 3) : 92s,
+//              ty = narrow ? 50s : 16s, in a pill 3s larger on every side
+//   info       a 9.5s circle centered 18s after the wordmark's tracked end, at 25.5s
+//   fade       {controls.x, controls.y - (narrow ? 44s : 26s), controls.w, to controls bottom}
 //
 // where n is the number of sliders whose parameter the plug-in declared.
 // The web build of the plug-in declares Mix, Size, Gain and Bypass only;
@@ -25,10 +29,21 @@
 // `open_ir_chooser` does in a browser build. The impulse-response and
 // spectrum feeds reach the session; only the name is drawn.
 //
+// Behind everything is the native acoustic field (`superconvolver_field.js`),
+// animated by the session's clock. The Tracers, Currents and Field tabs
+// switch how it is drawn. Its inputs are the native ones: density is the
+// Rooms count, motion is Flow and brightness is the live energy. The web
+// build declares neither Rooms nor Flow, so the field draws at density 1
+// with no motion, as the native editor does in that build; the spectrum feed
+// does not yet reach the energy, which stays 0, as native shows with no
+// signal. `options.field` replaces any of {density, flow, energy}, which a
+// calibration against a native capture uses to match that capture's state.
+//
 // Text boxes put the baseline where the native editor puts it: the session's
 // Canvas2D path draws a text box's baseline at `y + fontSize`, so a box for a
-// native baseline `b` starts at `b - fontSize`. Tracked capitals are drawn as
-// capitals without the native letter spacing.
+// native baseline `b` starts at `b - fontSize`. Tracked capitals are drawn one
+// glyph at a time with the native advances and letter spacing
+// (`tracked_text`).
 //
 // Some bounds have no native value. Each is marked DESIGN below. They are
 // choices made for the web host, not measurements of the native editor:
@@ -38,14 +53,16 @@
 //     native Engine chip occupies, {W - 200s, 12s, 176s, 44s}, centered in
 //     its height: {W - 120s, 18s, 96s, 32s}. The slot is empty on the web
 //     because Engine does not exist there; the pill is narrower than the
-//     slot so a narrow canvas keeps it clear of the wordmark.
+//     slot so a narrow canvas keeps it clear of the wordmark. It is painted
+//     as the native `paint_chip` paints a toggle chip.
+//   - The info glyph's text box, 3s wide, where native gives only an origin.
 //   - Text box widths where the native editor gives only an origin, and the
 //     0.3 fontSize allowance below the baseline in every text box height.
 //   - The split of a wide slider's label band into a left name half and a
 //     right value half.
 //
-// The native editor's acoustic field backdrop, mode tabs, info glyph,
-// control-strip fade and engine readout are not part of this view.
+// The native engine readout is not part of this view: Engine is compiled out
+// on the web. Pressing the info glyph does not yet open the native info card.
 
 // Parameter ids, from Pulp `examples/super-convolver/super_convolver_ui_host.hpp`.
 export const PARAMETERS = Object.freeze({mix: 1, size: 2, gain: 3, bypass: 4});
@@ -61,14 +78,68 @@ export const BYPASS = Object.freeze({id: 'bypass', param: PARAMETERS.bypass, lab
 
 export const SYNTHETIC_SOURCE = 'Synthetic room';
 
-// Native colors: the field ground, the concept tokens and the chip.
+import {fieldMarks} from './superconvolver_field.js';
+
+// Native colors: the field ground, the concept tokens, the translucent
+// chrome and the slider. `label` is the native bone, `sliderName` the label
+// token and `value` the text token.
 const COLORS = Object.freeze({
     background: '#07090e',
     label: '#bcc2cc', sliderName: '#787e88', value: '#edeff3', faint: '#474c55',
-    track: '#21242a', trackFill: '#959799', thumb: '#edeff3',
-    button: '#0e1015', buttonBorder: '#1b1e24', orb: '#e8f0f8',
-    toggleOff: '#14161c', toggleOn: '#f6b847', toggleText: '#edeff3', toggleTextOn: '#07090e',
+    track: '#dce4ee1f', trackFill: '#ecEff39e', thumb: '#edeff3', thumbRing: '#050607',
+    orb: '#e8f0f8', toggleText: '#787e88', toggleTextOn: '#edeff3',
 });
+// Chrome fills and strokes: rgba(220, 228, 238) at 8 and 26 of 255, and the
+// toggle chip's rgba(237, 239, 243) fills and strokes.
+const CHROME_FILL = '#dce4ee08';
+const CHROME_STROKE = '#dce4ee1a';
+const TAB_ON = '#dce4ee1a';
+const CHIP = Object.freeze({onFill: '#edeff31e', offFill: '#edeff30c', onStroke: '#edeff35a',
+    offStroke: '#edeff324'});
+// The fade under the control strip: rgba(5, 6, 9, 0) to rgba(4, 5, 8, 224).
+const FADE = Object.freeze(['#05060900', '#040508e0']);
+// The info glyph's ring, rgba(220, 228, 238, 56).
+const INFO_RING = '#dce4ee38';
+
+export const MODES = Object.freeze(['Tracers', 'Currents', 'Field']);
+
+// The native `tracked_text` per-glyph advance of an uppercase Inter glyph, in ems.
+function advance(glyph) {
+    if ('IJ'.includes(glyph)) return 0.30;
+    if (glyph === 'L') return 0.52;
+    if ('SEFPTZ'.includes(glyph)) return 0.60;
+    if ('RBKVAXY'.includes(glyph)) return 0.66;
+    if ('CDHNUOQG'.includes(glyph)) return 0.73;
+    if ('MW'.includes(glyph)) return 0.88;
+    if (glyph === ' ') return 0.40;
+    return 0.64;
+}
+
+// Where native `tracked_text` ends a string of `size` type with `em` spacing.
+function trackedEnd(text, x, size, em) {
+    for (const glyph of text.toUpperCase()) x += size * (advance(glyph) + em);
+    return x;
+}
+
+// A rounded rectangle's path in a box's own coordinates, offset by `inset`.
+function roundedRect(width, height, radius, inset = 0) {
+    const r = Math.max(0, Math.min(radius, width / 2, height / 2));
+    const x0 = inset;
+    const y0 = inset;
+    const x1 = inset + width;
+    const y1 = inset + height;
+    return `M${x0 + r} ${y0}H${x1 - r}A${r} ${r} 0 0 1 ${x1} ${y0 + r}V${y1 - r}` +
+        `A${r} ${r} 0 0 1 ${x1 - r} ${y1}H${x0 + r}A${r} ${r} 0 0 1 ${x0} ${y1 - r}` +
+        `V${y0 + r}A${r} ${r} 0 0 1 ${x0 + r} ${y0}Z`;
+}
+
+// A box filled and stroked with a 1 pixel line, as native
+// `fill_rounded_rect` then `stroke_rounded_rect` draw it.
+function chip(box, radius, fill, stroke) {
+    return {viewBox: [0, 0, box.width, box.height],
+        ops: [{op: 'path', d: roundedRect(box.width, box.height, radius), fill, stroke,
+            strokeWidth: 1}]};
+}
 
 // Text allowance below the baseline. DESIGN.
 const DESCENT = 0.3;
@@ -107,6 +178,7 @@ export function sourceLabel(impulseResponseName) {
 }
 
 function text(x, baseline, width, fontSize, align = 'left', extra = {}) {
+    if (extra.tracking !== undefined) extra = {...extra, advance};
     return {box: {x, y: baseline - fontSize, width, height: fontSize * (1 + DESCENT)},
         style: {fontSize, align, ...extra}};
 }
@@ -134,8 +206,39 @@ export function superconvolverLayout(width, height, sliderIds, {bypass = true} =
     const controls = {x: m, y: top + irH + 12 * s + specH + 12 * s, width: W - 2 * m, height: ctlH};
     bounds.controls = controls;
 
-    // Wordmark: tracked capitals at (24s, baseline 30s), 11s type. Width is DESIGN.
-    put('wordmark', text(24 * s, 30 * s, 160 * s, 11 * s, 'left', {uppercase: true}));
+    // Wordmark: tracked capitals at (24s, baseline 30s), 11s type, 0.24 em
+    // spacing. Width is DESIGN.
+    put('wordmark', text(24 * s, 30 * s, 160 * s, 11 * s, 'left', {uppercase: true, tracking: 0.24}));
+
+    // Info glyph: a 9.5s ring 18s after the wordmark's tracked end, and an
+    // "i" at 0.14 em left of its centre on baseline 4s below it. The box is
+    // the native hit rectangle, 4s larger than the ring.
+    {
+        const ix = trackedEnd('SuperConvolver', 24 * s, 11 * s, 0.24) + 18 * s;
+        const iy = 25.5 * s;
+        const ir = 9.5 * s;
+        bounds.info = {x: ix - ir - 4 * s, y: iy - ir - 4 * s, width: 2 * (ir + 4 * s),
+            height: 2 * (ir + 4 * s)};
+        styles.info = {ring: {x: ix, y: iy, radius: ir}};
+        put('info/glyph', text(ix - 11 * s * 0.14, iy + 4 * s, 3 * s, 11 * s));
+    }
+
+    // Mode tabs: three equal cells centered at the top, in a pill 3s larger.
+    {
+        const tw = narrow ? Math.min(92 * s, (W - 2 * m) / 3) : 92 * s;
+        const th = 26 * s;
+        const ty = narrow ? 50 * s : 16 * s;
+        const x0 = W * 0.5 - tw * 1.5;
+        const pad = 3 * s;
+        bounds.tabs = {x: x0 - pad, y: ty - pad, width: 3 * tw + 2 * pad, height: th + 2 * pad};
+        styles.tabs = {radius: 9 * s};
+        MODES.forEach((_, index) => {
+            const tab = {x: x0 + index * tw, y: ty, width: tw, height: th};
+            bounds[`tab/${index}`] = tab;
+            styles[`tab/${index}`] = {radius: 7 * s};
+            put(`tab/${index}/text`, text(tab.x, tab.y + th * 0.64, tw, 10.5 * s, 'center'));
+        });
+    }
 
     // Source chip: radius 10s; a 7s orb centered 18s in; the name at 34s in,
     // baseline 0.46 of the chip, 12s type, within the native name_max of
@@ -150,7 +253,12 @@ export function superconvolverLayout(width, height, sliderIds, {bypass = true} =
     put('source/name', text(source.x + 34 * s, source.y + source.height * 0.46,
         source.width - 46 * s, 12 * s));
     put('source/caption', text(source.x + 34 * s, source.y + source.height * 0.82,
-        source.width - 46 * s, 8.5 * s, 'left', {uppercase: true}));
+        source.width - 46 * s, 8.5 * s, 'left', {uppercase: true, tracking: 0.2}));
+
+    // The fade under the strip, from the label band's top to the strip's bottom.
+    const fadeTop = controls.y - (narrow ? 44 : 26) * s;
+    bounds.fade = {x: controls.x, y: fadeTop, width: controls.width,
+        height: controls.y + controls.height - fadeTop};
 
     const cw = controls.width / sliderIds.length;
     sliderIds.forEach((id, index) => {
@@ -171,44 +279,89 @@ export function superconvolverLayout(width, height, sliderIds, {bypass = true} =
             // native 26s label band.
             bounds[`${id}/label`] = {x: track.x, y: track.y - 26 * s, width: track.width, height: 26 * s};
             const half = track.width / 2;
-            put(`${id}/name`, text(track.x, track.y - 12 * s, half, 9.5 * s, 'left', {uppercase: true}));
+            put(`${id}/name`, text(track.x, track.y - 12 * s, half, 9.5 * s, 'left',
+                {uppercase: true, tracking: 0.26}));
             put(`${id}/value`, text(track.x + half, track.y - 11 * s, half, 14 * s, 'right'));
         }
     });
 
     if (bypass) {
         // DESIGN: inside the empty Engine slot. Label centered, baseline at
-        // 0.66 of the pill, 12s type.
-        const chip = {x: W - 120 * s, y: 18 * s, width: 96 * s, height: 32 * s};
-        bounds.bypass = chip;
-        put('bypass/text', text(chip.x, chip.y + chip.height * 0.66, chip.width, 12 * s, 'center'));
+        // 0.62 of the pill, 12s type, as native `paint_chip`.
+        const pill = {x: W - 120 * s, y: 18 * s, width: 96 * s, height: 32 * s};
+        bounds.bypass = pill;
+        put('bypass/text', text(pill.x, pill.y + pill.height * 0.62, pill.width, 12 * s, 'center'));
     }
     return {bounds, styles, scale: s, narrow};
 }
 
 // The view for the parameters the adapter reported. A slider appears only
 // when its parameter does, so the strip divides by the live count.
-export function createSuperconvolverView(parameterInfos, {onLoadImpulseResponse = null} = {}) {
+// `options.field` replaces the field's {density, flow, energy}; see above.
+export function createSuperconvolverView(parameterInfos,
+    {onLoadImpulseResponse = null, field = {}} = {}) {
     const present = new Set(parameterInfos.map(info => info.id));
     const sliders = SLIDERS.filter(slider => present.has(slider.param));
     const hasBypass = present.has(BYPASS.param);
     let current = {styles: {}};
+    let mode = 0;
+    const radius = key => current.styles[key]?.radius ?? 0;
 
     const nodes = [
         {id: 'wordmark', kind: 'label', text: 'SuperConvolver'},
-        {id: 'source', kind: 'button', action: 'load-ir'},
+        {id: 'info', kind: 'vector', vector: box => {
+            const ring = current.styles.info.ring;
+            const d = `M${ring.x - box.x - ring.radius} ${ring.y - box.y}` +
+                `a${ring.radius} ${ring.radius} 0 1 0 ${2 * ring.radius} 0` +
+                `a${ring.radius} ${ring.radius} 0 1 0 ${-2 * ring.radius} 0Z`;
+            return {viewBox: [0, 0, box.width, box.height],
+                ops: [{op: 'path', d, fill: 'none', stroke: INFO_RING, strokeWidth: 1}]};
+        }},
+        {id: 'info/glyph', kind: 'label', text: 'i', color: 'sliderName'},
+        {id: 'tabs', kind: 'vector',
+            vector: box => chip(box, radius('tabs'), CHROME_FILL, CHROME_STROKE)},
+        ...MODES.flatMap((name, index) => [
+            {id: `tab/${index}`, kind: 'vector', action: `mode-${index}`,
+                vector: box => ({viewBox: [0, 0, box.width, box.height], ops: mode === index
+                    ? [{op: 'path', d: roundedRect(box.width, box.height, radius(`tab/${index}`)),
+                        fill: TAB_ON, stroke: 'none'}] : []})},
+            {id: `tab/${index}/text`, kind: 'label', text: name,
+                colorFor: () => (mode === index ? 'value' : 'sliderName')},
+        ]),
+        ...(hasBypass ? [{...BYPASS, kind: 'toggle', vector: (box, state) => {
+            const on = state.value(BYPASS.param) >= 0.5;
+            return chip(box, box.height / 2, on ? CHIP.onFill : CHIP.offFill,
+                on ? CHIP.onStroke : CHIP.offStroke);
+        }}] : []),
+        {id: 'source', kind: 'button', action: 'load-ir',
+            vector: box => chip(box, radius('source'), CHROME_FILL, CHROME_STROKE)},
         {id: 'source/orb', kind: 'shape', color: 'orb'},
         {id: 'source/name', kind: 'label', color: 'value',
             format: state => sourceLabel(state.impulseResponseName)},
         {id: 'source/caption', kind: 'label', text: 'Source', color: 'faint'},
+        {id: 'fade', kind: 'vector', vector: box => ({viewBox: [0, 0, box.width, box.height],
+            ops: [{op: 'path', d: `M0 0H${box.width}V${box.height}H0Z`, stroke: 'none',
+                // A gradient is laid out on the unit square; the transform
+                // stretches it over the box.
+                fill: {transform: [box.width, 0, 0, box.height, 0, 0],
+                    gradient: {kind: 'linear', angle: 180, stops: [
+                        {position: 0, color: FADE[0]}, {position: 1, color: FADE[1]}]}}}]})},
         ...sliders.map(slider => ({...slider, kind: 'slider'})),
-        ...(hasBypass ? [{...BYPASS, kind: 'toggle'}] : []),
     ];
+
+    const actions = {
+        'load-ir': session => onLoadImpulseResponse?.(session),
+    };
+    MODES.forEach((_, index) => {
+        actions[`mode-${index}`] = () => { mode = index; };
+    });
 
     return {
         background: COLORS.background,
         colors: COLORS,
         nodes,
+        animated: true,
+        get mode() { return mode; },
         layout(width, height) {
             current = superconvolverLayout(width, height, sliders.map(slider => slider.id),
                 {bypass: hasBypass});
@@ -217,8 +370,15 @@ export function createSuperconvolverView(parameterInfos, {onLoadImpulseResponse 
         textStyle(key) {
             return current.styles[key] ?? null;
         },
-        actions: {
-            'load-ir': session => onLoadImpulseResponse?.(session),
+        // The native field's inputs are density from Rooms, motion from Flow
+        // and brightness from the live energy. Rooms and Flow are not web
+        // parameters, so density is native's floor of 1 and there is no motion.
+        backdrop(width, height, state) {
+            return fieldMarks({
+                w: width, h: height, t: state.time, mode,
+                density: field.density ?? 1, flow: field.flow ?? 0, energy: field.energy ?? 0,
+            });
         },
+        actions,
     };
 }

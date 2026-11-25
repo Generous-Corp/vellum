@@ -1,7 +1,8 @@
 // Draws backdrop marks through the session's Canvas2D backend into a
 // recording context and checks each mark reaches Canvas2D as the core's
 // `backdrop_marks.hpp` layout describes it, additively. Also checks the
-// core's exports.
+// session's binding of `vellum_web_set_backdrop` against its C definition and
+// the core's exports.
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {dirname, join} from 'node:path';
@@ -56,10 +57,17 @@ assert.deepEqual(calls.filter(call => call[0] === 'stroke'), [['stroke', 1.25, '
 assert.deepEqual(calls.find(call => call[0] === 'strokeStyle'), ['strokeStyle', 'rgba(0,0,255,1)']);
 assert.equal(calls.filter(call => call[0] === 'fill').length, 2, 'nothing after the unknown kind');
 
-// The core exports the entry point with the allocator and heap view a
-// caller stages marks through.
+// The session binds the entry point with the C definition's arity, and the
+// core exports it with the allocator and heap view the session uses.
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const session = await readFile(join(root, 'web', 'session', 'editor_session.js'), 'utf8');
+const runtime = await readFile(join(root, 'web', 'src', 'web_runtime.cpp'), 'utf8');
 const build = await readFile(join(root, 'web', 'CMakeLists.txt'), 'utf8');
+const binding = /cwrap\('vellum_web_set_backdrop', 'number', \[([^\]]*)\]\)/.exec(session);
+assert.ok(binding, 'the session binds vellum_web_set_backdrop');
+const definition = /EMSCRIPTEN_KEEPALIVE int vellum_web_set_backdrop\(([^)]*)\)/.exec(runtime);
+assert.ok(definition, 'the core defines vellum_web_set_backdrop');
+assert.equal(binding[1].split(',').length, definition[1].split(',').length);
 for (const symbol of ['_vellum_web_set_backdrop', '_malloc', '_free']) {
     assert.ok(build.includes(`'${symbol}'`), `the core exports ${symbol}`);
 }

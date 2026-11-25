@@ -38,6 +38,14 @@ const sliders = ['mix', 'size', 'gain'];
     near(bounds['gain/track'], {x: 554, y: 480.9728, width: 232, height: 4}, 'gain/track');
     near(bounds['size/label'], {x: 294, y: 454.9728, width: 232, height: 26}, 'size/label');
     near(bounds.bypass, {x: 700, y: 18, width: 96, height: 32}, 'bypass');
+    // The wordmark's tracked end: 24 + 11 (S .60 + U .73 + P .60 + E .60 + R .66
+    // + C .73 + O .73 + N .73 + V .66 + O .73 + L .52 + V .66 + E .60 + R .66
+    // + 14 x .24) = 24 + 11 x 12.57 = 162.27; the ring centre is 18 after it.
+    near(bounds.info, {x: 166.77, y: 12, width: 27, height: 27}, 'info');
+    near(bounds.tabs, {x: 269, y: 13, width: 282, height: 32}, 'tabs');
+    near(bounds['tab/1'], {x: 364, y: 16, width: 92, height: 26}, 'tab/1');
+    // The fade runs from the label band's top, 26 above the strip, to its bottom.
+    near(bounds.fade, {x: 20, y: 385.68, width: 780, height: 154.32}, 'fade');
 }
 
 // 390 by 700: s = 1.25, narrow because 390 < 850.
@@ -53,6 +61,9 @@ const sliders = ['mix', 'size', 'gain'];
         'size/track');
     near(bounds['mix/label'], {x: 42.5, y: 558.728, width: 340 / 3 - 35, height: 55}, 'mix/label');
     near(bounds.bypass, {x: 240, y: 22.5, width: 120, height: 40}, 'bypass');
+    // Narrow tabs drop to their own row at 50s, each min(92s, 340 / 3) wide.
+    near(bounds['tab/0'], {x: 195 - 170, y: 62.5, width: 340 / 3, height: 32.5}, 'narrow tab/0');
+    near(bounds.fade, {x: 25, y: 486.8, width: 340, height: 188.2}, 'narrow fade');
 }
 
 // A short canvas clamps s at 0.5.
@@ -76,7 +87,7 @@ const web = [1, 2, 3, 4].map(id => ({id}));
 const view = createSuperconvolverView(web);
 const bound = view.nodes.filter(node => 'param' in node);
 assert.deepEqual(bound.map(node => [node.id, node.kind, node.param]),
-    [['mix', 'slider', 1], ['size', 'slider', 2], ['gain', 'slider', 3], ['bypass', 'toggle', 4]]);
+    [['bypass', 'toggle', 4], ['mix', 'slider', 1], ['size', 'slider', 2], ['gain', 'slider', 3]]);
 assert.ok(view.nodes.every(node => !/engine|rooms|flow/i.test(node.id)));
 
 // An adapter without Size and Bypass gets neither control.
@@ -90,7 +101,12 @@ near(partialBounds.gain, {x: 410, y: 411.68, width: 390, height: 128.32}, 'parti
 // canvas, centered mixed case on a narrow one.
 view.layout(820, 560);
 assert.deepEqual(view.textStyle('mix/value'), {fontSize: 14, align: 'right'});
-assert.deepEqual(view.textStyle('mix/name'), {fontSize: 9.5, align: 'left', uppercase: true});
+{
+    const {advance, ...style} = view.textStyle('mix/name');
+    assert.deepEqual(style, {fontSize: 9.5, align: 'left', uppercase: true, tracking: 0.26});
+    assert.deepEqual(['I', 'L', 'S', 'R', 'C', 'M', ' ', '4'].map(advance),
+        [0.30, 0.52, 0.60, 0.66, 0.73, 0.88, 0.40, 0.64], 'native tracked_text advances');
+}
 assert.deepEqual(view.textStyle('source'), {radius: 10});
 view.layout(390, 700);
 assert.deepEqual(view.textStyle('mix/value'), {fontSize: 13 * 1.25, align: 'center'});
@@ -113,5 +129,25 @@ assert.equal(trackValue(gain, track, 100), -24);
 assert.equal(trackValue(gain, track, 200), 0);
 assert.equal(trackValue(gain, track, 350), 24);
 assert.equal(trackValue(gain, track, 0), -24);
+
+// The tabs switch the field's mode, and the backdrop is the native field at
+// the web build's inputs (density 1, no flow, no energy) unless the options
+// replace them.
+{
+    const state = {time: 1 / 60, value: () => 0, impulseResponseName: null};
+    const tabbed = createSuperconvolverView(web);
+    tabbed.layout(820, 560);
+    const tracers = tabbed.backdrop(820, 560, state);
+    // 220 + 10 tracers of 30 dots, a head and a highlight, after the vignette.
+    assert.equal(tracers.count, 1 + 230 * 32);
+    tabbed.actions['mode-1']();
+    assert.equal(tabbed.mode, 1);
+    assert.equal(tabbed.backdrop(820, 560, state).count, 1 + 230, 'one streamline per tracer');
+    tabbed.actions['mode-2']();
+    assert.equal(tabbed.backdrop(820, 560, state).count, 1 + 229, 'one glow per fog emitter');
+    const dense = createSuperconvolverView(web, {field: {density: 16}});
+    assert.equal(dense.backdrop(820, 560, state).count, 1 + 380 * 32);
+    assert.ok(tabbed.animated);
+}
 
 console.log('superconvolver view: ok');

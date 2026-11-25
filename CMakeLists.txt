@@ -196,6 +196,9 @@ if(VELLUM_BUILD_TESTS)
         add_test(NAME vellum.web.superconvolver-view-layout
             COMMAND "${VELLUM_NODE_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/web/tests/superconvolver_view_test.mjs")
+        add_test(NAME vellum.web.superconvolver-field
+            COMMAND "${VELLUM_NODE_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/web/tests/superconvolver_field_test.mjs")
         add_test(NAME vellum.web.backdrop-backend
             COMMAND "${VELLUM_NODE_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/web/tests/backdrop_backend_test.mjs")

@@ -15,6 +15,13 @@ The run checks, in this order:
            the chosen file's cleaned name reaches the chip;
   ink      the capture has ink in the chip, every track and every label box.
 
+Before those, the field check mounts the editor at the native screenshot's
+size and device scale 2 in the native capture's state (field inputs,
+parameter values and clock) with the clock frozen. The frame's digest
+repeats at the same time and changes at the next, and a press on each mode
+tab switches the field. The frame is saved next to the viewport captures
+for comparison with the native capture, at both viewports.
+
 The view must also tear down cleanly and no browser process may outlive the
 run.
 
@@ -74,7 +81,22 @@ SLIDERS = {
     "gain": ("Gain", -24.0, 24.0, 1, "dB", None, 0.0),
 }
 WEB_IDS = {1, 2, 3, 4}
+# Native tracked_text's advance of an uppercase glyph, in ems.
+ADVANCES = {**dict.fromkeys("IJ", 0.30), "L": 0.52, **dict.fromkeys("SEFPTZ", 0.60),
+            **dict.fromkeys("RBKVAXY", 0.66), **dict.fromkeys("CDHNUOQG", 0.73),
+            **dict.fromkeys("MW", 0.88), " ": 0.40}
 
+# The native capture's state (Pulp examples/super-convolver/screenshot.cpp at
+# 3a6f370295), measured from that build: one paint, so the clock is 1/60 s;
+# Rooms 16 and Flow 0, so density 16 and no motion; the energy its spectrum
+# smoothing reached; Tracers. The plug-in values are the ones screenshot.cpp
+# sets. The field check overrides the web field's inputs with these, which
+# the web build cannot otherwise reach (it declares neither Rooms nor Flow).
+CALIBRATION = {
+    "viewport": (820, 560), "scale": 2, "time": 1 / 60,
+    "field": {"density": 16, "flow": 0, "energy": 0.304196358},
+    "values": {"1": 45, "2": 1.5, "3": 0, "4": 0},
+}
 NEGATIVE_CONTROLS = {
     "move": ("const track = {x: cell.x + hpad,", "const track = {x: cell.x + hpad + 4,", "bounds"),
     "swap": ("PARAMETERS = Object.freeze({mix: 1, size: 2,",
@@ -154,7 +176,23 @@ def expected_bounds(width: float, height: float) -> dict[str, dict[str, float]]:
             out[f"{key}/value"] = text(track["x"] + half, track["y"] - 11 * s, half, 14 * s)
     out["bypass"] = box(width - 120 * s, 18 * s, 96 * s, 32 * s)
     chip = out["bypass"]
-    out["bypass/text"] = text(chip["x"], chip["y"] + chip["height"] * 0.66, chip["width"], 12 * s)
+    out["bypass/text"] = text(chip["x"], chip["y"] + chip["height"] * 0.62, chip["width"], 12 * s)
+    # Info glyph: native tracked_text's end of the wordmark, then 18s.
+    ix = 24 * s + sum(11 * s * (ADVANCES.get(ch, 0.64) + 0.24) for ch in "SUPERCONVOLVER") + 18 * s
+    iy, ir = 25.5 * s, 9.5 * s
+    out["info"] = box(ix - ir - 4 * s, iy - ir - 4 * s, 2 * (ir + 4 * s), 2 * (ir + 4 * s))
+    out["info/glyph"] = text(ix - 11 * s * 0.14, iy + 4 * s, 3 * s, 11 * s)
+    # Mode tabs.
+    tw = min(92 * s, (width - 2 * m) / 3) if narrow else 92 * s
+    ty = 50 * s if narrow else 16 * s
+    x0 = width / 2 - 1.5 * tw
+    out["tabs"] = box(x0 - 3 * s, ty - 3 * s, 3 * tw + 6 * s, 26 * s + 6 * s)
+    for index in range(3):
+        out[f"tab/{index}"] = box(x0 + index * tw, ty, tw, 26 * s)
+        out[f"tab/{index}/text"] = text(x0 + index * tw, ty + 26 * s * 0.64, tw, 10.5 * s)
+    fade_top = controls["y"] - (44 if narrow else 26) * s
+    out["fade"] = box(controls["x"], fade_top, controls["width"],
+                      controls["y"] + controls["height"] - fade_top)
     return out
 
 
@@ -170,6 +208,47 @@ def check_bounds(report: dict[str, Any], width: int, height: int) -> dict[str, f
         check(worst[key] <= BOX_TOLERANCE, "bounds",
               {"box": key, "viewport": [width, height], "actual": actual[key], "expected": want})
     return worst
+
+
+def check_field(cdp: "ViewCdp", width: int, height: int, capture_dir: Path) -> dict[str, Any]:
+    """Mounts the editor in the native capture's state at `width` by `height`
+    and device scale 2 with the clock frozen, proves the frozen clock and the
+    mode tabs, and saves the frame."""
+    cdp.command("Emulation.setDeviceMetricsOverride", {
+        "width": PAGE["width"], "height": PAGE["height"],
+        "deviceScaleFactor": CALIBRATION["scale"], "mobile": False})
+    options = json.dumps({"field": CALIBRATION["field"], "values": CALIBRATION["values"],
+                          "time": CALIBRATION["time"]})
+    cdp.fixture(f"mount({width}, {height}, {options})")
+    report = cdp.fixture("remeasure()")
+    check(report["size"]["scale"] == CALIBRATION["scale"]
+          and report["size"]["backingWidth"] == CALIBRATION["scale"] * width, "device-scale",
+          report["size"])
+    captured = cdp.fixture("capture()")
+    capture_dir.mkdir(parents=True, exist_ok=True)
+    png = capture_dir / f"superconvolver-calibration-{width}x{height}@2x.png"
+    png.write_bytes(base64.b64decode(captured["png"].split(",", 1)[1]))
+
+    time_now = CALIBRATION["time"]
+    first = cdp.fixture(f"digestAt({time_now})")
+    again = cdp.fixture(f"digestAt({time_now})")
+    later = cdp.fixture(f"digestAt({time_now + 1 / 60})")
+    check(first == again and later != first, "field-clock",
+          {"first": first, "again": again, "later": later})
+    # A press on each tab switches the field; the clock stays frozen.
+    left, top = report["canvas"]["left"], report["canvas"]["top"]
+    modes = []
+    for index in (1, 2, 0):
+        tab = report["bounds"][f"tab/{index}"]
+        x, y = round(left + tab["x"] + tab["width"] / 2), round(top + tab["y"] + tab["height"] / 2)
+        cdp.mouse("mousePressed", x, y)
+        cdp.mouse("mouseReleased", x, y)
+        modes.append(cdp.fixture("frozenFrame()"))
+    check([mode["mode"] for mode in modes] == [1, 2, 0]
+          and len({mode["digest"] for mode in modes}) == 3 and modes[2]["digest"] == later,
+          "field-modes", modes)
+    return {"capture": str(png), "commandCount": modes[2]["commandCount"],
+            "modeCommandCounts": [mode["commandCount"] for mode in modes]}
 
 
 def check_mapping(report: dict[str, Any]) -> None:
@@ -322,10 +401,12 @@ def verify(cdp: ViewCdp, capture_dir: Path) -> dict[str, Any]:
         check(boot == [] and time.monotonic() < deadline, "fixture-boot", boot)
         time.sleep(0.1)
     cdp.command("Page.setInterceptFileChooserDialog", {"enabled": True})
+    field = {name: check_field(cdp, width, height, capture_dir) for name, width, height in VIEWPORTS}
     cdp.command("Emulation.setDeviceMetricsOverride", {
         "width": PAGE["width"], "height": PAGE["height"], "deviceScaleFactor": 1, "mobile": False})
     evidence = {name: verify_viewport(cdp, name, width, height, capture_dir)
                 for name, width, height in VIEWPORTS}
+    evidence["field"] = field
     finished = cdp.fixture("teardown()")
     check(finished == {"canvasRemoved": True, "pendingFrame": False,
                        "paramsHandlerRestored": True, "callsAfterTeardown": 0}, "teardown", finished)
@@ -344,7 +425,8 @@ def stage(core_root: Path, control: str | None) -> dict[str, bytes]:
         files[f"session/{path.name}"] = path.read_bytes()
     # The session draws vector chrome through the shell's vector module.
     files["shell/vector-canvas.js"] = (ROOT / "web/shell/vector-canvas.js").read_bytes()
-    files["views/superconvolver.js"] = (ROOT / "web/views/superconvolver.js").read_bytes()
+    for path in sorted((ROOT / "web/views").glob("*.js")):
+        files[f"views/{path.name}"] = path.read_bytes()
     if control:
         old, new, _ = NEGATIVE_CONTROLS[control]
         text = files["views/superconvolver.js"].decode("utf-8")
