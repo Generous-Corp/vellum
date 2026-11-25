@@ -33,8 +33,8 @@ endfunction()
 run_case(Darwin arm64 TRUE macos-arm64)
 run_case(Linux x86_64 TRUE linux-x64)
 run_case(Windows AMD64 TRUE windows-x64)
-# An Intel Mac has no row of its own, so it is refused rather than compared
-# against another platform's digest.
-run_case(Darwin x86_64 FALSE "")
+# An Intel Mac links the universal macOS archive, so it uses that row.
+run_case(Darwin x86_64 TRUE macos-arm64)
+# A platform the lock does not cover is refused, never matched to another row.
 run_case(FreeBSD amd64 FALSE "")
 message(STATUS "graphite host platform selection ok")
