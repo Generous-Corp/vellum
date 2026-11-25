@@ -14,6 +14,7 @@ assert.equal(tracker.begin(2, 'mix', mix, 0.5, 100), false, 'a second pointer ca
 assert.equal(tracker.move(2, 50), null, 'a pointer without the gesture cannot move it');
 assert.equal(tracker.move(1, 100 - DRAG_TRAVEL / 4), 0.75);
 assert.equal(tracker.move(1, 100 - DRAG_TRAVEL / 4), null, 'an unchanged value sends nothing');
+assert.equal(tracker.end(2), false, 'another pointer cannot close the gesture');
 assert.equal(tracker.cancel(1), true);
 assert.equal(tracker.end(1), false, 'a release after a cancel emits nothing');
 assert.equal(tracker.cancel(1), false, 'a lost capture after a cancel emits nothing');
