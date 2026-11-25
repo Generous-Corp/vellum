@@ -30,6 +30,9 @@ _REGEX_PREFIX_WORDS = frozenset((
     "return", "typeof", "instanceof", "in", "of", "new", "delete", "void",
     "throw", "case", "do", "else", "yield", "await",
 ))
+# A `)` that closes the head of one of these statements is followed by the
+# statement body, where a `/` can only begin a regular expression.
+_CONTROL_HEAD_WORDS = frozenset(("if", "while", "for", "with"))
 
 
 class TokenizeError(ValueError):
@@ -39,8 +42,9 @@ class TokenizeError(ValueError):
 def _tokens(source: str) -> list[tuple[str, str]]:
     """Tokenize ECMAScript just far enough to find module specifiers.
 
-    Yields ("id", name), ("str", value), ("num", ""), ("tpl", ""), ("re", "")
-    and ("p", char). Comments are dropped; string, template and regular
+    Yields ("id", name), ("str", value), ("escaped-str", raw), ("num", ""),
+    ("tpl", ""), ("tpl", "${") for a substitution opening, ("re", "") and
+    ("p", char). Comments are dropped; string, template and regular
     expression bodies never produce identifier tokens, so text inside them is
     never mistaken for an import. Raises TokenizeError when the source ends
     inside an unterminated construct, so malformed input never reads as empty.
@@ -51,6 +55,10 @@ def _tokens(source: str) -> list[tuple[str, str]]:
     # Each open `${` records the brace depth to return to the template at.
     templates: list[int] = []
     depth = 0
+    # One entry per open `(`: whether it opens an if/while/for/with head.
+    parens: list[bool] = []
+    # Indices in `out` of each `)` that closed such a head.
+    control_closes: set[int] = set()
 
     def read_template(start: int) -> int:
         j = start
@@ -62,7 +70,7 @@ def _tokens(source: str) -> list[tuple[str, str]]:
                 out.append(("tpl", ""))
                 return j + 1
             elif c == "$" and source.startswith("${", j):
-                out.append(("tpl", ""))
+                out.append(("tpl", "${"))
                 templates.append(depth)
                 return j + 2
             else:
@@ -98,7 +106,7 @@ def _tokens(source: str) -> list[tuple[str, str]]:
         elif c == "}" and templates and templates[-1] == depth:
             templates.pop()
             i = read_template(i + 1)
-        elif c == "/" and _regex_allowed(out):
+        elif c == "/" and _regex_allowed(out, control_closes):
             j = i + 1
             in_class = False
             while j < n and source[j] != "\n":
@@ -132,6 +140,10 @@ def _tokens(source: str) -> list[tuple[str, str]]:
                 depth += 1
             elif c == "}":
                 depth -= 1
+            elif c == "(":
+                parens.append(_opens_control_head(out))
+            elif c == ")" and parens and parens.pop():
+                control_closes.add(len(out))
             out.append(("p", c))
             i += 1
     if templates:
@@ -139,16 +151,41 @@ def _tokens(source: str) -> list[tuple[str, str]]:
     return out
 
 
-def _regex_allowed(previous: list[tuple[str, str]]) -> bool:
-    """True when a `/` here begins a regular expression rather than a division."""
+def _after_dot(previous: list[tuple[str, str]]) -> bool:
+    """True when the last token is a property name (`a.if`, `a?.return`)."""
+    return len(previous) >= 2 and previous[-2] == ("p", ".")
+
+
+def _opens_control_head(previous: list[tuple[str, str]]) -> bool:
+    """True when a `(` here opens an if/while/for/with head (`for await (` too)."""
+    if not previous or previous[-1][0] != "id":
+        return False
+    word = previous[-1][1]
+    if word == "await" and len(previous) >= 2 and previous[-2] == ("id", "for"):
+        return not (len(previous) >= 3 and previous[-3] == ("p", "."))
+    return word in _CONTROL_HEAD_WORDS and not _after_dot(previous)
+
+
+def _regex_allowed(previous: list[tuple[str, str]], control_closes: set[int]) -> bool:
+    """True when a `/` here begins a regular expression rather than a division.
+
+    Where the grammar leaves the choice open (a `}` that may end a block or an
+    object literal), division is chosen: reading a regular expression as code
+    can only add spurious edges, while reading code as a regular expression
+    could hide a real one.
+    """
     if not previous:
         return True
     kind, value = previous[-1]
     if kind == "id":
-        return value in _REGEX_PREFIX_WORDS
-    if kind in ("str", "num", "tpl", "re"):
+        return value in _REGEX_PREFIX_WORDS and not _after_dot(previous)
+    if kind == "tpl":
+        return value == "${"
+    if kind in ("str", "escaped-str", "num", "re"):
         return False
-    return value not in ")]}"
+    if value == ")":
+        return len(previous) - 1 in control_closes
+    return value not in "]}"
 
 
 def specifiers(source: str) -> tuple[list[str], list[str], list[str]]:
@@ -184,20 +221,36 @@ def specifiers(source: str) -> tuple[list[str], list[str], list[str]]:
             continue
         # `import clause from "x"` and `export {..}`/`export * from "x"`: walk the
         # clause up to its `from`, giving up at anything a clause cannot contain.
+        # Binding names may be strings (`{ "a-b" as c }`, `* as "ns"`) and may
+        # be `from` itself (`{ from }`, `import from from "x"`).
         if value == "export" and following not in (("p", "{"), ("p", "*")):
             continue
+        in_braces = False
         j = index + 1
         while j < count:
             k, v = tokens[j]
-            if k == "id" and v == "from":
-                if j + 1 < count and tokens[j + 1][0] == "str":
+            following_kind = tokens[j + 1][0] if j + 1 < count else ""
+            if k == "id" and v == "from" and not in_braces and following_kind in ("str", "escaped-str"):
+                if following_kind == "str":
                     static.append(tokens[j + 1][1])
-                elif j + 1 < count and tokens[j + 1][0] == "escaped-str":
+                else:
                     unsupported.append("escaped import specifier is unsupported")
                 break
-            if k == "p" and v in ";=()":
+            if k in ("str", "escaped-str"):
+                # A string here can only be a binding name.
+                if not (in_braces or tokens[j - 1] == ("id", "as")):
+                    break
+            elif (k, v) == ("p", "{"):
+                if in_braces:
+                    break
+                in_braces = True
+            elif (k, v) == ("p", "}"):
+                if not in_braces or tokens[j + 1:j + 2] != [("id", "from")]:
+                    break
+                in_braces = False
+            elif k == "p" and v not in ",*":
                 break
-            if k in ("num", "tpl", "re", "str"):
+            elif k in ("num", "tpl", "re"):
                 break
             j += 1
     return static, dynamic, unsupported

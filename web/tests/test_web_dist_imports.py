@@ -188,6 +188,63 @@ class ImportGraph(unittest.TestCase):
         with payload({"index.html": PAGE, "demo.js": source}) as root:
             self.assertEqual(missing_modules(Path(root)), [])
 
+    def test_string_named_bindings_keep_the_module_edge(self) -> None:
+        for source in (
+            'import { "x" as y } from "./missing.js";',
+            'import { "a-b" as c, d } from "./missing.js";',
+            "import { '\\u0061' as b } from './missing.js';",
+            'import def, { "a-b" as c } from "./missing.js";',
+            'export { x as "y" } from "./missing.js";',
+            'export { "a" as "b" } from "./missing.js";',
+            'export * as "ns" from "./missing.js";',
+            'import { from } from "./missing.js";',
+            'import from from "./missing.js";',
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(specifiers(source), (["./missing.js"], [], []))
+
+    def test_string_named_binding_import_is_reported_as_missing(self) -> None:
+        with payload({"index.html": PAGE, "demo.js": 'import { "x" as y } from "./missing.js";\n'}) as root:
+            problems = missing_modules(Path(root))
+            self.assertEqual(len(problems), 1)
+            self.assertIn("missing missing.js", problems[0])
+
+    def test_local_export_with_string_name_has_no_edge(self) -> None:
+        source = 'const x = 1;\nexport { x as "y" };\nconst from = 2;\nf(from, "./not-a-module.js");\n'
+        self.assertEqual(specifiers(source), ([], [], []))
+
+    def test_division_after_escaped_string_is_not_a_regex(self) -> None:
+        for source in (
+            'const a = "a\\n" / 2;\n',
+            "const a = 'it\\'s' / 2 / 3;\n",
+        ):
+            with self.subTest(source=source), payload({"index.html": PAGE, "demo.js": source}) as root:
+                self.assertEqual(missing_modules(Path(root)), [])
+
+    def test_regex_after_control_head_is_not_code(self) -> None:
+        for source in (
+            'if (x) /import("y.js")/.test(s);\n',
+            'while (x) /import("y.js")/g.exec(s);\n',
+            'for (;;) /import("y.js")/.test(s);\n',
+            'for await (const s of xs) /import("y.js")/.test(s);\n',
+            'if ((a)) /import("y.js")/.test(s);\n',
+            'const t = `${/import("y.js")/.source}`;\n',
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(specifiers(source), ([], [], []))
+                with payload({"index.html": PAGE, "demo.js": source}) as root:
+                    self.assertEqual(missing_modules(Path(root)), [])
+
+    def test_division_after_call_grouping_and_property_keyword(self) -> None:
+        for source in (
+            'const a = f(x) / 2; import("./missing.js") / 3;\n',
+            'const a = (x) / 2; import("./missing.js") / 3;\n',
+            'const a = obj.if(x) / 2; import("./missing.js") / 3;\n',
+            'const a = obj.return / 2; import("./missing.js") / 3;\n',
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(specifiers(source), ([], ["./missing.js"], []))
+
     def test_page_without_html_is_an_error_not_a_pass(self) -> None:
         with payload({"demo.js": "export {};\n"}) as root:
             self.assertTrue(missing_modules(Path(root)))
