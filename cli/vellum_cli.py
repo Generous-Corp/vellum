@@ -1632,6 +1632,10 @@ DESIGN_TOOL_VERBS = {
     "compile": "compile the design manifest and binding prompt",
     "lint-adherence": "lint UI JS against the design contract",
     "record": "maintain the project design ledger",
+    "gallery": "inventory @dsCard-tagged sources",
+    "handoff": "read a design project's handoff contract",
+    "variants": "collapse variant names into a component contract",
+    "tweak": "read or update an artifact's EDITMODE parameters",
     "export-tokens": "export a theme as design tokens",
 }
 

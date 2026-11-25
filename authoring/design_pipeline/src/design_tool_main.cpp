@@ -23,6 +23,10 @@ constexpr Verb kVerbs[] = {
     {"lint-adherence", vellum::design_tool::run_lint_adherence,
      "lint UI JS against the design contract"},
     {"record", vellum::design_tool::run_record, "maintain the project design ledger"},
+    {"gallery", vellum::design_tool::run_gallery, "inventory @dsCard-tagged sources"},
+    {"handoff", vellum::design_tool::run_handoff, "read a design project's handoff contract"},
+    {"variants", vellum::design_tool::run_variants, "collapse variant names into a component contract"},
+    {"tweak", vellum::design_tool::run_tweak, "read or update an artifact's EDITMODE parameters"},
     {"export-tokens", vellum::design_tool::run_export_tokens, "export a theme as design tokens"},
 };
 

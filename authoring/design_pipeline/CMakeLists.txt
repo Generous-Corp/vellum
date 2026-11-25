@@ -29,8 +29,10 @@ set_target_properties(vellum-source-adapter PROPERTIES
 install(TARGETS vellum-source-adapter RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 # The offline `vellum design` verbs (DESIGN.md lint and diff, manifest compile,
-# adherence lint, ledger, token export). The CLI runs the installed binary with the verb's arguments.
-add_executable(vellum-design-tool src/design_tool_main.cpp src/design_tool_verbs.cpp)
+# adherence lint, ledger, gallery inventory, handoff, variants, tweak, token
+# export). The CLI runs the installed binary with the verb's arguments.
+add_executable(vellum-design-tool src/design_tool_main.cpp src/design_tool_verbs.cpp
+    src/design_tool_project_verbs.cpp)
 target_compile_features(vellum-design-tool PRIVATE cxx_std_20)
 target_include_directories(vellum-design-tool PRIVATE
     ${_vellum_mirror_public_includes}
