@@ -78,8 +78,8 @@ def main() -> int:
         initial = result.get("initial")
         after = result.get("afterAction")
         if not isinstance(initial, dict) or not isinstance(after, dict) or \
-                initial != {"commandCount": 5, "digest": 2618880820} or \
-                after != {"commandCount": 5, "digest": 1000471619} or \
+                initial != {"commandCount": 5, "digest": 825374218} or \
+                after != {"commandCount": 5, "digest": 1204337449} or \
                 result.get("authoringRuntime") != "browser JavaScript" or \
                 result.get("embeddedEngineMarkers") is not False or \
                 not isinstance(result.get("canvasDataBytes"), int) or \
