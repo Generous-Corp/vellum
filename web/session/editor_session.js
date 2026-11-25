@@ -28,7 +28,9 @@
 // is left, right or center, and {radius} for a chip or shape.
 
 import {createCanvas2DBackend} from './canvas2d_backend.js';
-import {GestureTracker, clampToParameter, trackValue} from './gesture_tracker.js';
+import {
+    GestureTracker, clampToParameter, toggleFlipped, toggleIsOn, trackValue,
+} from './gesture_tracker.js';
 
 const INK_DISTANCE = 8;
 const DEFAULT_COLORS = {
@@ -233,7 +235,7 @@ export async function createEditorSession({container, adapter, view, createCore}
                     2 * thumb, 2 * thumb, thumb, ...rgba(COLORS.thumb));
             }
         } else if (node.kind === 'toggle') {
-            const on = values.get(node.param) >= 0.5;
+            const on = toggleIsOn(infos.get(node.param), values.get(node.param));
             core.rectangle(node.id, box.x, box.y, box.width, box.height, box.height / 2,
                 ...rgba(on ? COLORS.toggleOn : COLORS.toggleOff));
             drawText(`${node.id}/text`, node.label || '', bounds[`${node.id}/text`] || box, 13,
@@ -325,7 +327,7 @@ export async function createEditorSession({container, adapter, view, createCore}
             const info = infos.get(node.param);
             if (node.kind === 'toggle') {
                 // A press flips the toggle as one complete gesture.
-                const flipped = values.get(node.param) >= 0.5 ? 0 : 1;
+                const flipped = toggleFlipped(info, values.get(node.param));
                 if (!tracker.begin(event.pointerId, node.id, info, values.get(node.param), 0,
                     () => flipped)) {
                     return;

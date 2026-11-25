@@ -3,7 +3,7 @@
 // mapping, without a browser.
 import assert from 'node:assert/strict';
 
-import {trackValue} from '../session/gesture_tracker.js';
+import {clampToParameter, toggleFlipped, toggleIsOn, trackValue} from '../session/gesture_tracker.js';
 import {
     BYPASS, PARAMETERS, SLIDERS, cleanSourceName, createSuperconvolverView, sourceLabel,
     superconvolverLayout,
@@ -113,5 +113,20 @@ assert.equal(trackValue(gain, track, 100), -24);
 assert.equal(trackValue(gain, track, 200), 0);
 assert.equal(trackValue(gain, track, 350), 24);
 assert.equal(trackValue(gain, track, 0), -24);
+
+// A toggle reads and flips between its declared endpoints, not 0 and 1.
+for (const range of [{minValue: 0, maxValue: 1}, {minValue: 10, maxValue: 20},
+                     {minValue: -1, maxValue: 1}, {}]) {
+    const info = {type: 'boolean', ...range};
+    const low = Number.isFinite(range.minValue) ? range.minValue : 0;
+    const high = Number.isFinite(range.maxValue) ? range.maxValue : 1;
+    assert.equal(toggleIsOn(info, low), false, `off at ${low}`);
+    assert.equal(toggleIsOn(info, high), true, `on at ${high}`);
+    assert.equal(toggleFlipped(info, low), high, `flip from ${low}`);
+    assert.equal(toggleFlipped(info, high), low, `flip from ${high}`);
+    // The flipped value survives the gesture's clamp unchanged.
+    assert.equal(clampToParameter(info, toggleFlipped(info, low)), high);
+    assert.equal(clampToParameter(info, toggleFlipped(info, high)), low);
+}
 
 console.log('superconvolver view: ok');
