@@ -153,6 +153,7 @@
       "vellum.value.param-metadata",
       "vellum.value.param-model",
       "vellum.vector-asset",
+      "vellum.web.backdrop-backend",
       "vellum.web.browser-process-cleanup",
       "vellum.web.browser-proof-wait",
       "vellum.web.canvas-shell-lowering",

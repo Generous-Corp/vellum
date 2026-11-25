@@ -342,6 +342,8 @@ def stage(core_root: Path, control: str | None) -> dict[str, bytes]:
         files[name] = (fixture / name).read_bytes()
     for path in sorted((ROOT / "web/session").glob("*.js")):
         files[f"session/{path.name}"] = path.read_bytes()
+    # The session draws vector chrome through the shell's vector module.
+    files["shell/vector-canvas.js"] = (ROOT / "web/shell/vector-canvas.js").read_bytes()
     files["views/superconvolver.js"] = (ROOT / "web/views/superconvolver.js").read_bytes()
     if control:
         old, new, _ = NEGATIVE_CONTROLS[control]
