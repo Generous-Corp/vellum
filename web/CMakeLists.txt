@@ -26,7 +26,8 @@ foreach(_vellum_web_asset index.html style.css demo.js vector-canvas.js)
         COPYONLY)
 endforeach()
 set(_vellum_ui_runtime_modules
-    design.js effects.js index.js jsx-runtime.js runtime.js services.js)
+    design.js effects.js feature-versions.generated.js index.js jsx-runtime.js
+    limits.generated.js runtime.js services.js utf8.js)
 foreach(_vellum_ui_module IN LISTS _vellum_ui_runtime_modules)
     configure_file(
         "${PROJECT_SOURCE_DIR}/packages/vellum-ui/src/${_vellum_ui_module}"
@@ -60,6 +61,13 @@ if(VELLUM_BUILD_TESTS)
     add_test(NAME vellum.web.browser-proof-wait
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_browser_proof_wait.py")
+    add_test(NAME vellum.web.dist-imports
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_web_dist_imports.py"
+            --root "$<TARGET_FILE_DIR:vellum-web-core>")
+    add_test(NAME vellum.web.dist-imports-unit
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_web_dist_imports.py")
     add_test(NAME vellum.web.no-engine
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_wasm_no_engine.py"
