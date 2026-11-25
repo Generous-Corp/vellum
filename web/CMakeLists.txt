@@ -72,6 +72,19 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_browser_smoke.py"
             --root "$<TARGET_FILE_DIR:vellum-web-core>")
+    add_test(NAME vellum.web.editor-session
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_editor_session_browser.py"
+            --core-root "$<TARGET_FILE_DIR:vellum-web-core>"
+            --capture-dir "${CMAKE_BINARY_DIR}/web-captures/editor-session")
+    add_test(NAME vellum.web.editor-session-negative-control
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_editor_session_browser.py"
+            --core-root "$<TARGET_FILE_DIR:vellum-web-core>"
+            --capture-dir "${CMAKE_BINARY_DIR}/web-captures/editor-session-negative-control"
+            --negative-control)
+    set_tests_properties(vellum.web.editor-session vellum.web.editor-session-negative-control
+        PROPERTIES SKIP_RETURN_CODE 77)
     add_test(NAME vellum.web.text-ime-accessibility
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_text_semantics_browser.py"

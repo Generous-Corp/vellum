@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <link rel="icon" href="data:,">
+    <title>Vellum editor session fixture</title>
+    <style>
+      body { margin: 0; background: #020617; }
+      #editor { position: absolute; left: 20px; top: 20px; width: 360px; height: 240px; }
+      #scratch { position: absolute; left: 0; top: 400px; width: 100px; height: 100px; }
+    </style>
+  </head>
+  <body>
+    <div id="editor"></div>
+    <div id="scratch"></div>
+    <script>
+      globalThis.__editorFixture = {booted: false, errors: []};
+      addEventListener('error', event =>
+        __editorFixture.errors.push(String(event.error?.stack || event.message)));
+      addEventListener('unhandledrejection', event =>
+        __editorFixture.errors.push(String(event.reason?.stack || event.reason)));
+    </script>
+    <script type="module" src="./fixture.js"></script>
+  </body>
+</html>
