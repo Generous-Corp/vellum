@@ -88,6 +88,10 @@ vellum_add_framework_test(react-materialization
     SOURCES react_materialization_test.cpp
     UNITS Vellum::MirrorView_script)
 
+vellum_add_framework_test(web-compat-react-shims
+    SOURCES web_compat_react_shims_test.cpp
+    UNITS Vellum::MirrorView_script)
+
 vellum_add_framework_test(param-model-binding
     SOURCES param_model_binding_test.cpp
     UNITS Vellum::MirrorView_core Vellum::Value)
