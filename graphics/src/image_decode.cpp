@@ -86,10 +86,7 @@ std::shared_ptr<const ImageAsset> SkiaDawnSurface::decode_image_asset(
     }
     // Texels are taken as stored: no colour management, as for every other
     // colour in a scene.
-    // PNG stores straight RGBA. Keep that representation at the decoder
-    // boundary and let make_image_asset perform the single premultiplication
-    // shared by every image producer.
-    const auto info = SkImageInfo::Make(size, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
+    const auto info = SkImageInfo::Make(size, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
     std::vector<std::uint8_t> texels(info.computeMinByteSize());
     result = codec->getPixels(info, texels.data(), info.minRowBytes());
     if (result != SkCodec::kSuccess) {
@@ -98,7 +95,7 @@ std::shared_ptr<const ImageAsset> SkiaDawnSurface::decode_image_asset(
     }
     return make_image_asset(hash, static_cast<std::uint32_t>(size.width()),
                             static_cast<std::uint32_t>(size.height()), texels,
-                            ImageAlpha::straight, error);
+                            ImageAlpha::premultiplied, error);
 }
 
 }  // namespace vellum::graphics

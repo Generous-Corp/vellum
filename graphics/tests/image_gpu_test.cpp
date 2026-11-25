@@ -276,21 +276,6 @@ void placeholder_and_refusals() {
                diagnostics[0].node_id == "missing",
            "the missing asset is reported");
 
-    auto captured_missing = scene;
-    captured_missing.root.children[0].fill = Color::rgba(0.0F, 0.0F, 0.0F, 0.0F);
-    captured_missing.root.children[0].image->sampling = ImageSampling::transparent_missing;
-    captured_missing.root.children.insert(captured_missing.root.children.begin(),
-        {.id = "panel", .kind = SceneNode::Kind::rectangle, .bounds = {4, 4, 24, 24},
-         .fill = Color::hex(0x304050)});
-    expect(surface->render(captured_missing, &error),
-           "a missing captured canvas still renders", error);
-    Capture captured_frame;
-    expect(surface->capture_rgba(captured_frame.rgba, captured_frame.width,
-                                 captured_frame.height, &error),
-           "the captured canvas frame captures", error);
-    probe(captured_frame, 16, 16, {0x30, 0x40, 0x50, 255},
-          "a missing captured canvas leaves its panel visible");
-
     const auto refused = [&](const Scene& candidate, const std::string& expected) {
         std::string why;
         Capture after;
@@ -429,39 +414,6 @@ void cache_identity() {
            "with the texture cache off nothing is kept");
 }
 
-void transparent_overlay() {
-    const std::string hash = "sha256:" + std::string(64, 'e');
-    const std::vector<std::uint8_t> straight{
-        0, 0, 0, 0, 0, 0, 0, 32,
-        0, 0, 0, 32, 0, 0, 0, 32,
-    };
-    std::string error;
-    const auto overlay = make_image_asset(hash, 2, 2, straight, ImageAlpha::straight, &error);
-    expect(overlay != nullptr, "a transparent overlay asset is built", error);
-    if (!overlay) return;
-
-    Scene scene;
-    scene.width = 16.0F;
-    scene.height = 16.0F;
-    scene.background = Color::hex(0x000000);
-    scene.root.children = {
-        {.id = "panel", .kind = SceneNode::Kind::rectangle, .bounds = {0, 0, 16, 16},
-         .fill = Color::hex(0x304050)},
-        {.id = "overlay", .kind = SceneNode::Kind::image, .bounds = {0, 0, 16, 16},
-         .image = ImageReference{.content_hash = hash}},
-    };
-    scene.images = {overlay};
-    const auto capture = render(scene);
-    // A low-alpha black canvas must darken the panel, while transparent
-    // pixels leave the panel visible through the image node.
-    const auto transparent = capture.at(2, 2);
-    const auto darkened = capture.at(12, 12);
-    expect(transparent == std::array<int, 4>{0x30, 0x40, 0x50, 255},
-           "transparent canvas pixels preserve the panel", describe(transparent));
-    expect(darkened[0] < 0x30 && darkened[1] < 0x40 && darkened[2] < 0x50 && darkened[3] == 255,
-           "low-alpha canvas pixels darken the panel", describe(darkened));
-}
-
 std::vector<std::uint8_t> quadrant_png_bytes() {
     const auto path = std::string(VELLUM_CAPTURE_IMAGE_DIR) + "/quadrants.png";
     std::FILE* file = std::fopen(path.c_str(), "rb");
@@ -569,7 +521,6 @@ int main() {
         opacity();
         placeholder_and_refusals();
         cache_identity();
-        transparent_overlay();
         off_thread_decode();
     } catch (const std::exception& exception) {
         std::cerr << "FAIL: " << exception.what() << '\n';

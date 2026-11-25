@@ -1251,9 +1251,7 @@ bool draw_image(SkCanvas& canvas, const PaintCommand& command, float opacity,
     };
     fill_box(command.fill);
     if (!command.image_asset) {
-        if (command.image->sampling != ImageSampling::transparent_missing) {
-            fill_box(kMissingImagePlaceholder);
-        }
+        fill_box(kMissingImagePlaceholder);
         return true;
     }
     const auto& asset = *command.image_asset;

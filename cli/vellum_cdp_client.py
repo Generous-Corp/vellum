@@ -311,19 +311,6 @@ class CdpClient:
             "format": "png", "fromSurface": True, "captureBeyondViewport": False,
         }))
 
-    def capture_screenshot_clip(self, x: float, y: float, width: float, height: float) -> dict[str, Any]:
-        """Capture one bounded CSS-pixel box from the current browser surface."""
-        values = (x, y, width, height)
-        if not all(isinstance(value, (int, float)) and not isinstance(value, bool)
-                   and value == value and abs(value) < 16384 for value in values):
-            raise CdpClientError("CDP screenshot clip is malformed or unbounded")
-        if width <= 0 or height <= 0:
-            raise CdpClientError("CDP screenshot clip must have positive dimensions")
-        return self._decode_screenshot(self.command("Page.captureScreenshot", {
-            "format": "png", "fromSurface": True, "captureBeyondViewport": False,
-            "clip": {"x": x, "y": y, "width": width, "height": height, "scale": 1},
-        }))
-
     def capture_canvas_data_urls(self) -> list[dict[str, Any]]:
         """Capture each canvas's own RGBA pixels without the page behind it."""
         result = self.command("Runtime.evaluate", {

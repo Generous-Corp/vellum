@@ -9,7 +9,6 @@
       "gpu-runtime.renderer-lock-reader",
       "vellum-notices-manifest",
       "vellum.animation",
-      "vellum.app-host-canvas-package",
       "vellum.authoring",
       "vellum.authoring-illustrator-to-svg",
       "vellum.authoring-phase3-contracts",

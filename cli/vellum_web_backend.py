@@ -675,9 +675,9 @@ def _localize_snapshot_data_urls(snapshot: dict[str, Any]) -> tuple[dict[str, di
 def _localize_canvas_screenshots(
     captures: dict[int, dict[str, Any]] | None,
     records: dict[str, dict[str, Any]],
-) -> dict[int, str]:
-    """Turn clipped canvas PNGs into the same bounded asset records as data URLs."""
-    localized: dict[int, str] = {}
+) -> dict[int, dict[str, Any]]:
+    """Turn captured canvas PNGs into the same bounded asset records as data URLs."""
+    localized: dict[int, dict[str, Any]] = {}
     if captures is None:
         return localized
     if len(captures) > MAX_CAPTURE_ASSETS:
@@ -707,7 +707,7 @@ def _localize_canvas_screenshots(
                 "bytes": encoded, "raw": None,
             }
             records[content_hash] = record
-        localized[node_index] = record["asset"]["uri"]
+        localized[node_index] = record["asset"]
     return localized
 
 
@@ -1169,8 +1169,10 @@ def lower_dom_snapshot(
             else:
                 raw["sourceId"] = f"dom-{index}"
             if canvas_asset:
-                properties["assetRefs"] = [canvas_asset]
-                properties["image"] = {"source": canvas_asset, "fit": "fill"}
+                # Native image nodes name their pixels by content hash, the
+                # key the bundler and app host use for packaged PNGs.
+                properties["assetRefs"] = [canvas_asset["uri"]]
+                properties["image"] = {"source": canvas_asset["contentHash"], "fit": "fill"}
         source_nodes[index] = raw
         included.add(index)
     if isinstance(layout, dict):
@@ -1207,6 +1209,9 @@ def lower_dom_snapshot(
         raise BackendFailure("DOMSnapshot contained no lowerable nodes", status="test_failed")
     root_index = next((index for index in sorted(included) if node_types[index] == 9), min(included))
     tree_children: dict[int, list[int]] = {}
+    # A captured canvas paints its own pixels. Its fallback content is never
+    # rendered by the browser, and an image node takes no children.
+    inside_image: set[int] = set()
     for index in sorted(included):
         if index == root_index:
             continue
@@ -1215,6 +1220,9 @@ def lower_dom_snapshot(
             parent = parents[parent] if parent < len(parents) else -1
         if not isinstance(parent, int) or parent < 0 or parent == index:
             parent = root_index
+        if parent in inside_image or source_nodes[parent]["kind"] == "image":  # type: ignore[index]
+            inside_image.add(index)
+            continue
         source_nodes[parent]["children"].append(source_nodes[index])  # type: ignore[index]
         tree_children.setdefault(parent, []).append(index)
     _lower_layout_boxes(source_nodes, tree_children, root_index, boxes)

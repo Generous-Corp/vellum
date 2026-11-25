@@ -18,7 +18,6 @@ decides how many different pixels a render may carry.
 
 from __future__ import annotations
 
-import argparse
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -26,7 +25,7 @@ import sys
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "cli"))
-from vellum_png import PngError, RgbaImage, decode_png_bytes, read_png, write_png  # noqa: E402
+from vellum_png import PngError, RgbaImage, decode_png_bytes  # noqa: E402
 
 # Matches the threshold import validation uses for "close enough to the source
 # design". Goldens use their own, stricter fixture values (see runner.py).
@@ -361,49 +360,3 @@ def content_stats(png: bytes | RgbaImage) -> ContentStats:
         luminance_stddev=variance ** 0.5, alpha_mean=alpha_sum / total,
         opaque_coverage=opaque / total, non_background_coverage=1.0 - dominant / total,
     )
-
-
-def _crop(image: RgbaImage, x: int, y: int, width: int, height: int) -> RgbaImage:
-    if x < 0 or y < 0 or width <= 0 or height <= 0 or (
-        x + width > image.width or y + height > image.height
-    ):
-        raise ValueError("region must be a nonempty rectangle inside the image")
-    rows = []
-    for row in range(y, y + height):
-        start = (row * image.width + x) * 4
-        rows.append(image.pixels[start:start + width * 4])
-    return RgbaImage(width, height, b"".join(rows))
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Compare Chromium and native PNG captures.")
-    parser.add_argument("reference", type=Path)
-    parser.add_argument("rendered", type=Path)
-    parser.add_argument("--diff", type=Path, required=True, help="Write the any-channel diff PNG.")
-    parser.add_argument("--region", action="append", default=[], metavar="NAME:X,Y,W,H")
-    args = parser.parse_args()
-    try:
-        reference = read_png(args.reference)
-        rendered = read_png(args.rendered)
-        if (reference.width, reference.height) != (rendered.width, rendered.height):
-            raise ValueError("captures must have identical pixel dimensions")
-        regions = [("Full frame", reference, rendered)]
-        for region in args.region:
-            name, bounds = region.split(":", 1)
-            x, y, width, height = map(int, bounds.split(","))
-            regions.append((name, _crop(reference, x, y, width, height),
-                            _crop(rendered, x, y, width, height)))
-        write_png(args.diff, diff_image(reference, rendered, 0))
-    except (ValueError, OSError) as error:
-        parser.error(str(error))
-    print("| Region | Any pixel difference | Difference >16/255 |")
-    print("| --- | ---: | ---: |")
-    for name, reference_region, rendered_region in regions:
-        any_delta = compare_pixels(reference_region, rendered_region, 0)
-        large_delta = compare_pixels(reference_region, rendered_region, 16)
-        print(f"| {name} | {any_delta.diff_pixels / any_delta.total_pixels:.2%} | "
-              f"{large_delta.diff_pixels / large_delta.total_pixels:.2%} |")
-
-
-if __name__ == "__main__":
-    main()

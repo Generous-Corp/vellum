@@ -1870,12 +1870,6 @@ bool materialize_image(
         return reject("children", "does not accept children");
     }
     vellum::graphics::ImageReference reference{.content_hash = std::move(content_hash)};
-    if (const auto raw_source = source[@"source"];
-        [raw_source isKindOfClass:NSString.class]) {
-        const auto value = cpp_string(raw_source);
-        if (value.rfind("assets/", 0) == 0)
-            reference.sampling = vellum::graphics::ImageSampling::transparent_missing;
-    }
     if (source[@"fit"] != nil) {
         const auto fit = keyword(source[@"fit"],
             std::array<std::string_view, 4>{"fill", "contain", "cover", "none"});
@@ -1908,33 +1902,6 @@ bool materialize_image(
     output.box_shadows.clear();
     output.image = std::move(reference);
     return true;
-}
-
-std::optional<std::string> image_content_hash(id raw_source) {
-    if (![raw_source isKindOfClass:NSString.class]) return std::nullopt;
-    const std::string source = cpp_string(raw_source);
-    if (auto hash = vellum::graphics::normalize_content_hash(source)) return hash;
-
-    // Browser-captured images are packaged beside the materialized bundle as
-    // assets/<sha256>.<extension>. The scene image contract is content-hash
-    // keyed, so recover that identity without making the renderer depend on a
-    // working directory or a particular image extension.
-    constexpr std::string_view prefix = "assets/";
-    const auto slash = source.rfind('/');
-    const auto leaf = slash == std::string::npos ? std::string_view(source)
-                                                  : std::string_view(source).substr(slash + 1);
-    if (source.rfind(prefix, 0) != 0 || leaf.size() < 65) return std::nullopt;
-    const auto dot = leaf.find('.');
-    const auto stem = leaf.substr(0, dot == std::string_view::npos ? leaf.size() : dot);
-    if (stem.size() != 64 || !std::all_of(stem.begin(), stem.end(), [](char c) {
-            return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
-                   (c >= 'A' && c <= 'F');
-        })) return std::nullopt;
-    std::string canonical = "sha256:";
-    canonical.reserve(71);
-    for (char c : stem)
-        canonical.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-    return canonical;
 }
 
 // Clip, mask and isolation follow CSS: `overflow: hidden` (or `clip`, or
@@ -2699,7 +2666,9 @@ bool materialize_node(
     const bool hit_testable =
         node_transform.a * node_transform.d - node_transform.b * node_transform.c != 0.0F;
     std::optional<std::string> image_hash;
-    if (type_name == "image") image_hash = image_content_hash(source[@"source"]);
+    if (type_name == "image" && [source[@"source"] isKindOfClass:NSString.class]) {
+        image_hash = vellum::graphics::normalize_content_hash(cpp_string(source[@"source"]));
+    }
     StyleUse style_use{
         .root = depth == 0U,
         .paints_text_background =

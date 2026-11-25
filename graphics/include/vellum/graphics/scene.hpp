@@ -291,9 +291,6 @@ enum class ImageFit : std::uint8_t {
 enum class ImageSampling : std::uint8_t {
     nearest,
     linear,
-    /// Browser-captured pixels remain transparent while a packaged asset is
-    /// unresolved. Rendering still uses linear sampling.
-    transparent_missing,
 };
 
 /// Decoded image pixels, named by the content hash of the asset they were

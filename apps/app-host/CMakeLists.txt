@@ -54,11 +54,8 @@ if(VELLUM_BUILD_TESTS)
                 "$<TARGET_FILE:vellum-app-host>"
                 "${VELLUM_NODE_EXECUTABLE}" --canvas-only)
         set_tests_properties(vellum.app-host-canvas-asset PROPERTIES
-            ENVIRONMENT "MTL_DEBUG_LAYER=0")
-        add_test(NAME vellum.app-host-canvas-package
-            COMMAND "${Python3_EXECUTABLE}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/test_html_import_geometry.py"
-                --canvas-package-only "${VELLUM_NODE_EXECUTABLE}")
+            ENVIRONMENT "MTL_DEBUG_LAYER=0"
+            SKIP_RETURN_CODE 77)
         add_test(NAME vellum.app-host-design-anchor-dump
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/test_design_anchor_dump.py"
