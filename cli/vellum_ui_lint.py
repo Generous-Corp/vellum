@@ -318,6 +318,23 @@ def _mask_non_markup_regions(text: str, *, strings: bool = True) -> str:
     return "".join(masked)
 
 
+def _is_style_value_string(code_text: str, bare_text: str, offset: int) -> bool:
+    """True when ``offset`` sits in a short quoted CSS value such as ``'#fff'``
+    or ``'1px solid #fff'``, as opposed to documentation prose or markup."""
+    start = offset
+    while start > 0 and bare_text[start - 1] == " " and code_text[start - 1] != "\n":
+        start -= 1
+    end = offset
+    while end < len(bare_text) and bare_text[end] == " " and code_text[end] != "\n":
+        end += 1
+    # Widen to the quote characters, which are blanked along with the content.
+    content = code_text[start:end].strip("'\"` \t")
+    if any(ch in content for ch in "{}<>=;"):
+        return False
+    outside_parens = re.sub(r"\([^)]*\)", "()", content)
+    return len(outside_parens.split()) <= 5 and not re.search(r"[.,:]\s", outside_parens)
+
+
 def _duplicate_subtree_findings(text: str) -> list[tuple[int, int, str]]:
     """Return duplicate complete JSX subtrees as (line, count, signature).
 
@@ -417,6 +434,8 @@ def lint_source(root: Path, *, enforce_size: bool = False, max_component_lines: 
         bare_text = _mask_non_markup_regions(text)
         # Static inline styles are importer output; dynamic values are allowed.
         for match in STATIC_STYLE.finditer(code_text):
+            if bare_text[match.start()] != "s":
+                continue  # ``style={{...}}`` quoted as prose, not a JSX attribute
             body = match.group("body")
             if not re.search(r"\b(?:var|value|state|props|theme|tokens?)\b", body):
                 findings.append(Finding("inline-static-style", rel, _line_for(text, match.start()),
@@ -424,6 +443,9 @@ def lint_source(root: Path, *, enforce_size: bool = False, max_component_lines: 
         # Raw colours are allowed only when explicitly marked as an unmatched
         # token (the marker is counted by a later corpus budget).
         for match in COLOR_LITERAL.finditer(code_text):
+            if bare_text[match.start()] == " " and \
+                    not _is_style_value_string(code_text, bare_text, match.start()):
+                continue  # colour-looking text inside quoted prose
             line_start = text.rfind("\n", 0, match.start()) + 1
             line_end = text.find("\n", match.start())
             if line_end < 0:

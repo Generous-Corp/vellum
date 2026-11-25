@@ -139,6 +139,28 @@ export function Docs() {
         self.assertFalse(report["ok"])
         self.assertEqual([f["code"] for f in report["findings"]], ["invalid-utf8"])
 
+    def test_style_and_colour_syntax_quoted_as_prose_is_ignored(self):
+        report = self._report(
+            """export function Help() {
+  const help = "style={{color: '#fff'}} sets a literal like rgb(1, 2, 3) or #abc";
+  return <p data-pulp-action="help">{help}</p>;
+}
+"""
+        )
+        self.assertTrue(report["ok"], report)
+
+    def test_colour_values_in_short_strings_still_fire(self):
+        report = self._report(
+            """export function Box() {
+  const edge = "1px solid #fff";
+  const fill = 'rgba(0, 0, 0, 0.5)';
+  return <p data-pulp-action="b">{edge}{fill}</p>;
+}
+"""
+        )
+        self.assertEqual([f["line"] for f in report["findings"]
+                          if f["code"] == "literal-color"], [2, 3], report)
+
     def test_real_violations_still_fire_beside_masked_text(self):
         report = self._report(
             """// Math.random() in a comment is fine
