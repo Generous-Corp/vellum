@@ -32,13 +32,18 @@ _REGEX_PREFIX_WORDS = frozenset((
 ))
 
 
+class TokenizeError(ValueError):
+    """The source ends inside a comment, string, template or regular expression."""
+
+
 def _tokens(source: str) -> list[tuple[str, str]]:
     """Tokenize ECMAScript just far enough to find module specifiers.
 
     Yields ("id", name), ("str", value), ("num", ""), ("tpl", ""), ("re", "")
     and ("p", char). Comments are dropped; string, template and regular
     expression bodies never produce identifier tokens, so text inside them is
-    never mistaken for an import.
+    never mistaken for an import. Raises TokenizeError when the source ends
+    inside an unterminated construct, so malformed input never reads as empty.
     """
     out: list[tuple[str, str]] = []
     n = len(source)
@@ -62,7 +67,7 @@ def _tokens(source: str) -> list[tuple[str, str]]:
                 return j + 2
             else:
                 j += 1
-        return n
+        raise TokenizeError("unterminated template literal")
 
     while i < n:
         c = source[i]
@@ -73,11 +78,15 @@ def _tokens(source: str) -> list[tuple[str, str]]:
             i = n if end < 0 else end
         elif source.startswith("/*", i):
             end = source.find("*/", i + 2)
-            i = n if end < 0 else end + 2
+            if end < 0:
+                raise TokenizeError("unterminated block comment")
+            i = end + 2
         elif c in "'\"":
             j = i + 1
             while j < n and source[j] != c and source[j] != "\n":
                 j += 2 if source[j] == "\\" else 1
+            if j >= n or source[j] != c:
+                raise TokenizeError("unterminated string literal")
             raw = source[i + 1:j]
             # Import specifier escapes are rejected below. Treating them as a
             # decoded path requires the full ECMAScript escape grammar; keeping
@@ -103,6 +112,8 @@ def _tokens(source: str) -> list[tuple[str, str]]:
                 elif d == "/" and not in_class:
                     break
                 j += 1
+            if j >= n or source[j] != "/":
+                raise TokenizeError("unterminated regular expression literal")
             j += 1
             while j < n and _ID_PART.match(source, j).end() > j:
                 j = _ID_PART.match(source, j).end()
@@ -123,6 +134,8 @@ def _tokens(source: str) -> list[tuple[str, str]]:
                 depth -= 1
             out.append(("p", c))
             i += 1
+    if templates:
+        raise TokenizeError("unterminated template literal")
     return out
 
 
@@ -237,7 +250,11 @@ def missing_modules(root: Path) -> list[str]:
     pending: list[tuple[Path, str, str, bool]] = []
 
     def queue_imports(importer_dir: Path, label: str, source: str) -> None:
-        static, dynamic, unsupported = specifiers(source)
+        try:
+            static, dynamic, unsupported = specifiers(source)
+        except TokenizeError as error:
+            problems.append(f"{label}: {error}")
+            return
         problems.extend(f"{label}: {reason}" for reason in unsupported)
         pending.extend((importer_dir, f"{label} -> {spec}", spec, False) for spec in static)
         pending.extend((importer_dir, f"{label} (dynamic) -> {spec}", spec, True) for spec in dynamic)
@@ -247,8 +264,12 @@ def missing_modules(root: Path) -> list[str]:
         return [f"{root}: no HTML page to start from"]
     for page in pages:
         parser = ModuleScripts()
-        parser.feed(page.read_text(encoding="utf-8"))
         label = page.relative_to(root).as_posix()
+        try:
+            parser.feed(page.read_text(encoding="utf-8"))
+        except UnicodeDecodeError as error:
+            problems.append(f"{label}: not valid UTF-8 ({error.reason} at byte {error.start})")
+            continue
         for src in parser.sources:
             pending.append((page.parent, f"{label} -> {src}", src, False))
         for body in parser.inline:
@@ -278,7 +299,12 @@ def missing_modules(root: Path) -> list[str]:
             continue
         seen.add(target)
         label = target.relative_to(root).as_posix()
-        queue_imports(target.parent, label, target.read_text(encoding="utf-8", errors="replace"))
+        try:
+            text = target.read_text(encoding="utf-8")
+        except UnicodeDecodeError as error:
+            problems.append(f"{label}: not valid UTF-8 ({error.reason} at byte {error.start})")
+            continue
+        queue_imports(target.parent, label, text)
     return sorted(problems)
 
 

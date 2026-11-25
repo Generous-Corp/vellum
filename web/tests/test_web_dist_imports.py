@@ -154,6 +154,40 @@ class ImportGraph(unittest.TestCase):
                 self.assertEqual(len(problems), 1)
                 self.assertIn("escaped import specifier is unsupported", problems[0])
 
+    def test_malformed_source_fails_closed(self) -> None:
+        for name, source, message in (
+            ("block comment", "/* never closed\nexport {};\n", "unterminated block comment"),
+            ("string", "const a = 'oops;\n", "unterminated string literal"),
+            ("string at end of file", "const a = 'oops", "unterminated string literal"),
+            ("template", "const a = `oops ${1}\n", "unterminated template literal"),
+            ("template substitution", "const a = `x${1 + ", "unterminated template literal"),
+            ("regex", "const a = /oops\n", "unterminated regular expression literal"),
+        ):
+            with self.subTest(shape=name), payload({"index.html": PAGE, "demo.js": source}) as root:
+                problems = missing_modules(Path(root))
+                self.assertEqual(len(problems), 1)
+                self.assertIn(message, problems[0])
+
+    def test_invalid_utf8_fails_closed(self) -> None:
+        with payload({"index.html": PAGE, "demo.js": "export {};\n"}) as root:
+            (Path(root) / "demo.js").write_bytes(b"export const a = '\xff';\n")
+            problems = missing_modules(Path(root))
+            self.assertEqual(len(problems), 1)
+            self.assertIn("demo.js: not valid UTF-8", problems[0])
+        with payload({"index.html": PAGE, "demo.js": "export {};\n"}) as root:
+            (Path(root) / "index.html").write_bytes(b'<script type="module" src="./demo.js"></script>\xff')
+            self.assertIn("index.html: not valid UTF-8", missing_modules(Path(root))[0])
+
+    def test_well_formed_literals_still_pass(self) -> None:
+        source = (
+            "/* ok */ const a = 'it\\'s';\n"
+            "const b = `x${ {k: 1}.k }y`;\n"
+            "const c = /[/]\\//g.test(a) ? 1 : 2 / 1;\n"
+            "const d = 'line \\\ncontinued';\n"
+        )
+        with payload({"index.html": PAGE, "demo.js": source}) as root:
+            self.assertEqual(missing_modules(Path(root)), [])
+
     def test_page_without_html_is_an_error_not_a_pass(self) -> None:
         with payload({"demo.js": "export {};\n"}) as root:
             self.assertTrue(missing_modules(Path(root)))
