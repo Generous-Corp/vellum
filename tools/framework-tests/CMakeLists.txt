@@ -88,6 +88,10 @@ vellum_add_framework_test(react-materialization
     SOURCES react_materialization_test.cpp
     UNITS Vellum::MirrorView_script)
 
+vellum_add_framework_test(native-materializer-part1
+    SOURCES native_materializer_part1_test.cpp
+    UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import Vellum::MirrorCanvas)
+
 vellum_add_framework_test(param-model-binding
     SOURCES param_model_binding_test.cpp
     UNITS Vellum::MirrorView_core Vellum::Value)
