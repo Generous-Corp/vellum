@@ -184,8 +184,10 @@ accepts exactly one of two closed shapes:
 - **Mirror promotion** (`vellum-mirror-promotion-attestation`). Only `v0.1.10`, the Phase 4 promotion release
   (owner decision 2026-10-31, third sitting; `v0.1.9` was retired unpublished, owner decision 2026-11-02), and
   `v0.1.11`, the release carrying everything since 2026-10-25 under the same parity waiver (owner decision
-  2026-11-01), may carry it. The owner also waived `v0.2.0`, which carries the same parity state as `v0.1.11`.
-  The list is exact tag names. It binds:
+  2026-11-01), may carry it. The owner also waived `v0.2.0`, which carries the same parity state as `v0.1.11`,
+  and `v0.2.1` (2026-11-18), `v0.2.2` (2026-11-21) and `v0.2.3` (2026-11-25), which ship the same way while the
+  parity re-freeze remains open. The list is exact tag names; every later release needs `parity-completion-1.json`.
+  It binds:
   - the promoted commit and tree;
   - the exact-boundary acknowledgement;
   - the newest export receipt in `provenance/mirror/receipts/index.json` at the release commit, by SHA-256.
