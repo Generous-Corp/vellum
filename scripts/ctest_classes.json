@@ -36,6 +36,7 @@
       "vellum.frame-pump",
       "vellum.framework.canvas-raster-parity",
       "vellum.framework.design-codegen-web-grid",
+      "vellum.framework.font-container-route",
       "vellum.framework.gpu-capabilities",
       "vellum.framework.gpu-surface-lease",
       "vellum.framework.host-param-surface-model",
