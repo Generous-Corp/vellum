@@ -42,7 +42,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "cli"))
 sys.path.insert(0, str(REPO / "cli/tests"))
 from live_browser import live_browser_skip_reason  # noqa: E402
-from vellum_cli import default_html_interaction_plan  # noqa: E402
+from vellum_cli import default_html_interaction_plan, write_localized_capture_assets  # noqa: E402
 from vellum_html_source import stage_html_source  # noqa: E402
 from vellum_png import RgbaImage, read_png  # noqa: E402
 from vellum_web_backend import BackendFailure, chrome_path  # noqa: E402
@@ -87,6 +87,8 @@ def capture_and_import(source: Path, work: Path, node: str) -> tuple[dict, Path]
         "preflightSchema": receipt["schema"], "dependencies": receipt["dependencies"],
         "entry": receipt["entry"],
     })
+    # As `vellum import` does, stage the captured assets beside the source.
+    write_localized_capture_assets(staging, envelope)
     envelope_path = work / "capture-envelope.json"
     envelope_path.write_text(json.dumps(envelope, sort_keys=True), encoding="utf-8")
     project = work / "project"
@@ -297,7 +299,11 @@ CANVAS_PAGE = """<!doctype html>
 <html><head><style>
 html, body { margin: 0; width: 800px; height: 600px; background: #2040c0; }
 canvas { position: absolute; left: 40px; top: 40px; width: 64px; height: 64px; }
+.column { position: absolute; top: 0; width: 200px; height: 600px; }
 </style></head><body>
+<div class="column" style="left: 200px; background: #ffffff"></div>
+<div class="column" style="left: 400px; background: #888888"></div>
+<div class="column" style="left: 600px; background: #444444"></div>
 <canvas id="plot" width="64" height="64">canvas fallback text</canvas>
 <script>
 const context = document.getElementById('plot').getContext('2d');
@@ -355,7 +361,7 @@ def check_canvas(host: str, node: str, work: Path) -> None:
     painted, bundle = paint(design, "canvas")
     sidecar = json.loads(Path(f"{bundle}.images.json").read_text(encoding="utf-8"))
     assert canvas["properties"]["image"]["source"] in sidecar, sorted(sidecar)
-    red, through, page = pixel(painted, 56, 72), pixel(painted, 88, 72), pixel(painted, 200, 300)
+    red, through, page = pixel(painted, 56, 72), pixel(painted, 88, 72), pixel(painted, 20, 300)
     assert red == (255, 0, 0, 255), red
     assert through == page, (through, page)
     print(f"canvas: red={red} transparent-half={through} page={page}")
@@ -369,7 +375,7 @@ def check_canvas(host: str, node: str, work: Path) -> None:
     design.with_name("plain.bindings.json").write_text(
         design.with_name("main.bindings.json").read_text(encoding="utf-8"), encoding="utf-8")
     control, _ = paint(plain, "plain")
-    assert pixel(control, 56, 72) == pixel(control, 200, 300), pixel(control, 56, 72)
+    assert pixel(control, 56, 72) == pixel(control, 20, 300), pixel(control, 56, 72)
     print(f"canvas: control without the captured image paints the page at the canvas "
           f"({pixel(control, 56, 72)})")
 
