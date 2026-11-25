@@ -14,8 +14,8 @@
 #         extern const std::size_t   runtime_js_vjsbc_size;
 #     }
 #
-# Hand each blob to vellum::view::register_embedded_script_bytecode() before
-# the editor opens. A blob is used only for the exact source it was compiled
+# Hand each blob to register_embedded_script_bytecode() (declared by the view
+# unit's js_engine.hpp) before the editor opens. A blob is used only for the exact source it was compiled
 # from and only by the engine build that compiled it; otherwise the script
 # compiles from source as before.
 #
@@ -25,17 +25,23 @@
 # on the build machine: the library is still created but holds placeholder
 # blobs, which register_embedded_script_bytecode() rejects.
 #
-# An installed package finds the generator source and the encoder beside this
-# file. A build tree sets VELLUM_JS_BYTECODE_GENERATOR_SOURCE and
+# An installed package finds the generator source and the encoder under its
+# mirror/share/js-bytecode directory. A build tree sets VELLUM_JS_BYTECODE_GENERATOR_SOURCE and
 # VELLUM_JS_BYTECODE_ENCODER, and may add include directories and link
 # libraries the generator needs through VELLUM_JS_BYTECODE_EXTRA_INCLUDES and
 # VELLUM_JS_BYTECODE_EXTRA_LINK_LIBRARIES.
 
 include_guard(GLOBAL)
 
-set(_vellum_js_bytecode_dir "${CMAKE_CURRENT_LIST_DIR}")
+# Captured when the package config includes this file, where PACKAGE_PREFIX_DIR
+# is the configured install prefix even for a nested library directory.
+if(DEFINED PACKAGE_PREFIX_DIR)
+    set_property(GLOBAL PROPERTY VELLUM_JS_BYTECODE_SHARE_DIR
+        "${PACKAGE_PREFIX_DIR}/mirror/share/js-bytecode")
+endif()
 
 function(_vellum_js_bytecode_generator out_var)
+    get_property(_vellum_js_bytecode_dir GLOBAL PROPERTY VELLUM_JS_BYTECODE_SHARE_DIR)
     if(TARGET vellum-js-bytecode)
         set(${out_var} vellum-js-bytecode PARENT_SCOPE)
         return()
@@ -47,7 +53,7 @@ function(_vellum_js_bytecode_generator out_var)
     if(NOT EXISTS "${_source}")
         message(FATAL_ERROR
             "vellum_add_js_bytecode: generator source not found at ${_source}. "
-            "Re-install the Vellum SDK: it ships the source beside VellumJsBytecode.cmake.")
+            "Re-install the Vellum SDK: it ships the source under mirror/share/js-bytecode.")
     endif()
     if(NOT TARGET Vellum::MirrorView_script)
         message(FATAL_ERROR
@@ -65,6 +71,7 @@ function(_vellum_js_bytecode_generator out_var)
 endfunction()
 
 function(vellum_add_js_bytecode target)
+    get_property(_vellum_js_bytecode_dir GLOBAL PROPERTY VELLUM_JS_BYTECODE_SHARE_DIR)
     cmake_parse_arguments(JSBC "WIDGET_BRIDGE_SCRIPT" "NAMESPACE" "SOURCES" ${ARGN})
     if(JSBC_UNPARSED_ARGUMENTS)
         message(FATAL_ERROR

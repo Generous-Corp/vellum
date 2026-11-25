@@ -871,14 +871,16 @@ install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/VellumConfigVersion.cmake"
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/Vellum")
 include(cmake/VellumWebCompat.cmake)
-# Consumer helper that embeds build-time QuickJS bytecode. The installed copy
-# sits beside its generator source and encoder; a build tree names them.
-set(_vellum_js_bytecode_install_root "${CMAKE_INSTALL_LIBDIR}/cmake/Vellum/js-bytecode")
+# Consumer helper that embeds build-time QuickJS bytecode. The generator source
+# includes mirrored headers, so it installs under the mirror scope with the
+# encoder; the helper finds both from the package prefix. A build tree names
+# them through VELLUM_JS_BYTECODE_GENERATOR_SOURCE and VELLUM_JS_BYTECODE_ENCODER.
+install(FILES cmake/VellumJsBytecode.cmake
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/Vellum/js-bytecode")
 install(FILES
-    cmake/VellumJsBytecode.cmake
     cmake/vellum_js_bytecode_main.cpp
     framework/tools/cmake/scripts/encode_binary_data.py
-    DESTINATION "${_vellum_js_bytecode_install_root}")
+    DESTINATION "mirror/share/js-bytecode")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     cmake/VellumJsBytecode.cmake
     cmake/vellum_js_bytecode_main.cpp)
