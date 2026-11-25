@@ -19,6 +19,8 @@
 #include <vellum/view/widget_bridge.hpp>
 
 #include <chrono>
+#include <fstream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -255,46 +257,57 @@ FRAMEWORK_TEST(dom_mutation_methods_are_tagged_with_the_pulp_dom_ops_marker) {
 }
 
 FRAMEWORK_TEST(re_evaluating_the_dom_ops_prelude_does_not_re_define_the_prototype_methods) {
-    // Capture identity, re-eval the prelude verbatim, and assert each
-    // method is the same function object. If the guard regresses, a
-    // second eval would replace each method with a freshly-defined
-    // closure and identity would break.
+    // Re-evaluate the shipped prelude source itself. With the guard intact every
+    // method keeps its identity; a planted-negative control (marker cleared on
+    // appendChild) must make the same re-eval replace all five, which proves the
+    // identity comparison can detect a regression in each method.
+    std::ifstream in(VELLUM_TEST_DOM_OPS_PRELUDE_PATH, std::ios::binary);
+    require(in.good());
+    std::ostringstream prelude;
+    prelude << in.rdbuf();
+    require(!prelude.str().empty());
+
     ScriptEngine engine;
     View root;
     root.set_bounds({0, 0, 400, 300});
     StateStore store;
     WidgetBridge bridge(engine, root, store);
     bridge.load_script(R"(
-        globalThis.__before__ = {
-            appendChild: Element.prototype.appendChild,
-            removeChild: Element.prototype.removeChild,
-            insertBefore: Element.prototype.insertBefore,
-            replaceChild: Element.prototype.replaceChild,
-            remove: Element.prototype.remove
+        globalThis.__names__ =
+            ['appendChild', 'removeChild', 'insertBefore', 'replaceChild', 'remove'];
+        globalThis.__snapshot__ = function () {
+            var out = {};
+            for (var i = 0; i < __names__.length; i++)
+                out[__names__[i]] = Element.prototype[__names__[i]];
+            return out;
         };
+        globalThis.__same_count__ = function (before) {
+            var n = 0;
+            for (var i = 0; i < __names__.length; i++)
+                if (Element.prototype[__names__[i]] === before[__names__[i]]) n++;
+            return n;
+        };
+        globalThis.__before__ = __snapshot__();
     )");
-    // Force a second eval of the same prelude logic by load_script-ing
-    // a snippet whose only side effect is that re-eval. The bridge no
-    // longer guards against this with a C++-side flag; the JS guard
-    // must do the right thing.
+
+    // Guard intact: the shipped prelude evaluated again changes nothing.
+    bridge.load_script(prelude.str());
+    bridge.load_script("globalThis.__guarded_same__ = __same_count__(__before__);");
+    auto guarded = engine.evaluate("String(globalThis.__guarded_same__)");
+    require(guarded.isString());
+    require(std::string(guarded.getString()) == "5");
+
+    // Planted-negative control: clear the marker so the guard lets the prelude
+    // run again; every one of the five methods must then be a new function.
     bridge.load_script(R"(
-        // Inline a copy of the guard + appendChild reassignment, then
-        // verify the original still wins.
-        if (!Element.prototype.appendChild ||
-            !Element.prototype.appendChild.__pulp_dom_ops__) {
-            Element.prototype.appendChild = function () { return null; };
-            Element.prototype.appendChild.__pulp_dom_ops__ = true;
-        }
-        globalThis.__after_match__ =
-            (Element.prototype.appendChild === globalThis.__before__.appendChild) &&
-            (Element.prototype.removeChild === globalThis.__before__.removeChild) &&
-            (Element.prototype.insertBefore === globalThis.__before__.insertBefore) &&
-            (Element.prototype.replaceChild === globalThis.__before__.replaceChild) &&
-            (Element.prototype.remove === globalThis.__before__.remove);
+        globalThis.__before__ = __snapshot__();
+        Element.prototype.appendChild.__pulp_dom_ops__ = false;
     )");
-    auto v = engine.evaluate("String(globalThis.__after_match__)");
-    require(v.isString());
-    require(std::string(v.getString()) == "true");
+    bridge.load_script(prelude.str());
+    bridge.load_script("globalThis.__control_same__ = __same_count__(__before__);");
+    auto control = engine.evaluate("String(globalThis.__control_same__)");
+    require(control.isString());
+    require(std::string(control.getString()) == "0");
 }
 
 // ── Observer constructors exist and are no-ops ──────────────────────────

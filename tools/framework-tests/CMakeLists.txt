@@ -91,6 +91,9 @@ vellum_add_framework_test(react-materialization
 vellum_add_framework_test(web-compat-react-shims
     SOURCES web_compat_react_shims_test.cpp
     UNITS Vellum::MirrorView_script)
+# The re-evaluation case reads the shipped prelude source itself.
+target_compile_definitions(vellum-framework-web-compat-react-shims-test PRIVATE
+    VELLUM_TEST_DOM_OPS_PRELUDE_PATH="${PROJECT_SOURCE_DIR}/framework/core/view/js/web-compat-dom-ops.js")
 
 vellum_add_framework_test(param-model-binding
     SOURCES param_model_binding_test.cpp
