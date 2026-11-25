@@ -466,6 +466,14 @@ def chrome_path() -> str:
                     status="prerequisite_missing", exit_code=4,
                 )
         return str(candidate)
+    if os.environ.get("VELLUM_REQUIRE_CHROME_PROVENANCE") == "1":
+        # A provenance receipt names one pinned executable, so strict mode
+        # never discovers a browser on its own.
+        raise BackendFailure(
+            "VELLUM_REQUIRE_CHROME_PROVENANCE=1 requires a pinned browser in VELLUM_CHROME_PATH; "
+            "an installed Chrome is not used",
+            status="prerequisite_missing", exit_code=4,
+        )
     chrome = shutil.which("google-chrome")
     application = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
     if not chrome and application.is_file():
@@ -481,13 +489,6 @@ def chrome_path() -> str:
         chrome = str(application)
     if not chrome:
         raise BackendFailure("Google Chrome is required for web scenarios", status="prerequisite_missing", exit_code=4)
-    if os.environ.get("VELLUM_REQUIRE_CHROME_PROVENANCE") == "1":
-        valid, detail = configured_provenance(Path(chrome))
-        if not valid:
-            raise BackendFailure(
-                f"Chrome lacks valid provenance: {detail}",
-                status="prerequisite_missing", exit_code=4,
-            )
     return chrome
 
 
