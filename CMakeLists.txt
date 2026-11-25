@@ -765,6 +765,11 @@ if(VELLUM_BUILD_TESTS)
                 "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
                 "-DTEST_CONFIG=$<CONFIG>"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunInstallConsumer.cmake")
+        add_test(NAME vellum.mirror-js-bytecode-collision
+            COMMAND "${CMAKE_COMMAND}"
+                "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunJsBytecodeCollision.cmake")
         # vellum_add_js_bytecode() end to end for the framework test that checks
         # its blobs: the generator is built from the build tree's unit include
         # roots, like the framework tests, and runs from the build tree.

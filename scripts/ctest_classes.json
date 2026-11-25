@@ -77,6 +77,7 @@
       "vellum.limits-production-drift",
       "vellum.mirror-export-targets",
       "vellum.mirror-export-unit",
+      "vellum.mirror-js-bytecode-collision",
       "vellum.mirror-js-bytecode-consumer",
       "vellum.mirror-package-unit",
       "vellum.mirror-platform-record-gate",
