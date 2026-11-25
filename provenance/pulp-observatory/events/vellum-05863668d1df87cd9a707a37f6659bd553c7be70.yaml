@@ -1,0 +1,62 @@
+{
+  "class": "importer",
+  "contract_keys": [
+    "canvas-kernel",
+    "capture-primitives",
+    "macos-shell",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-25T09:06:07Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-05863668d1df87cd9a707a37f6659bd553c7be70",
+  "include_dependency_deltas": [
+    "apps/app-host/CMakeLists.txt",
+    "graphics/include/vellum/graphics/scene.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "capture-primitives",
+    "macos-shell",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "apps/app-host/CMakeLists.txt",
+    "apps/app-host/test_html_import_geometry.py",
+    "authoring/src/rendered_tree_materializer.mm",
+    "authoring/tests/rendered_tree_materializer_test.cpp",
+    "graphics/include/vellum/graphics/scene.hpp",
+    "graphics/src/image_asset.cpp",
+    "graphics/src/image_decode.cpp",
+    "graphics/src/skia_dawn_surface.cpp",
+    "graphics/tests/image_gpu_test.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "3c479321103e717eb49c3c06bef22541daf4e997",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "fb627695123ba807107d0e2775d46d1303255057",
+    "to_commit": "9241c63cd08b47ee32e352a05dd27e027fe61a2a"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "05863668d1df87cd9a707a37f6659bd553c7be70",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}
