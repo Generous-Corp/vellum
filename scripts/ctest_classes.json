@@ -159,6 +159,8 @@
       "vellum.web.browser-process-cleanup",
       "vellum.web.browser-proof-wait",
       "vellum.web.canvas-shell-lowering",
+      "vellum.web.dist-imports",
+      "vellum.web.dist-imports-unit",
       "vellum.web.editor-gesture",
       "vellum.web.layout-contract",
       "vellum.web.no-engine",
