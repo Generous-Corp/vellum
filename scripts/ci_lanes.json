@@ -480,6 +480,7 @@
     "tools/tracing/test_check_tracing.py": "cmake:CMakeLists.txt",
     "web/tests/test_browser_process_cleanup.py": "cmake:web/CMakeLists.txt",
     "web/tests/test_browser_proof_wait.py": "cmake:web/CMakeLists.txt",
-    "web/tests/test_layout_contract.py": "cmake:web/CMakeLists.txt"
+    "web/tests/test_layout_contract.py": "cmake:web/CMakeLists.txt",
+    "web/tests/test_web_dist_imports.py": "cmake:web/CMakeLists.txt"
   }
 }
