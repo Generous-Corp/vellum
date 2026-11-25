@@ -587,8 +587,6 @@ static std::string guess_asset_mime_type(const std::string& uri,
         return "image/webp";
     if (bytes.size() >= 4 && bytes[0] == 'w' && bytes[1] == 'O' && bytes[2] == 'F' && bytes[3] == '2')
         return "font/woff2";
-    if (bytes.size() >= 4 && bytes[0] == 'w' && bytes[1] == 'O' && bytes[2] == 'F' && bytes[3] == 'F')
-        return "font/woff";
     if (bytes.size() >= 5) {
         std::string head(reinterpret_cast<const char*>(bytes.data()),
                          std::min<size_t>(bytes.size(), 128));
@@ -605,7 +603,6 @@ static std::string guess_asset_mime_type(const std::string& uri,
     if (ext == ".webp") return "image/webp";
     if (ext == ".svg") return "image/svg+xml";
     if (ext == ".woff2") return "font/woff2";
-    if (ext == ".woff") return "font/woff";
     if (ext == ".ttf") return "font/ttf";
     if (ext == ".otf") return "font/otf";
     if (ext == ".json") return "application/json";

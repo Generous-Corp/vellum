@@ -115,6 +115,56 @@ class WebCompatPackagingTests(unittest.TestCase):
                 document.activeElement !== null) process.exit(1);
         ''')
 
+    def _run_pass_only(self, bridge_result):
+        # A pass with a depth attachment and no draws ends as a pass-only
+        # command. The stand-in base encoder hands over the colour clear on
+        # end, as the canvas layer does for a native canvas.
+        self._run_node(r"""
+            const fs = require("fs");
+            const vm = require("vm");
+            const calls = [];
+            globalThis.__mockPreferredCanvasFormat = () => "bgra8unorm";
+            globalThis.__createMockGPURenderPassEncoder = function(init) {
+                const a = init.descriptor.colorAttachments[0];
+                return {end() {
+                    init.onEnd({type: "native-clear-current-texture",
+                                canvasId: a.view._nativeCanvasId,
+                                r: a.clearValue.r, g: a.clearValue.g,
+                                b: a.clearValue.b, a: a.clearValue.a});
+                }};
+            };
+            globalThis.__createMockGPUQueue = () => ({_submitCount: 0, _nativeBridge: true});
+            globalThis.__createMockGPUDevice = () => ({});
+            globalThis.__gpuQueueDrawBufferedImpl = p => {
+                calls.push("pass:" + p.drawType); return BRIDGE_RESULT; };
+            globalThis.__gpuQueueSubmitImpl = (id, r, g, b, a) => {
+                calls.push(["clear", id, r, g, b, a].join(":")); return true; };
+            vm.runInThisContext(fs.readFileSync(
+                "framework/core/view/js/web-compat-gpu-buffered.js", "utf8"));
+            __installNativeGpuBufferedDrawAugmentation();
+            const commands = [];
+            const pass = __createMockGPURenderPassEncoder({
+                onEnd: c => commands.push(c),
+                descriptor: {
+                    colorAttachments: [{view: {_nativeBridge: true, _nativeCanvasId: "c1"},
+                                        loadOp: "clear", clearValue: {r: 1, g: 0, b: 0, a: 1}}],
+                    depthStencilAttachment: {view: {}, depthLoadOp: "clear"}}});
+            pass.end();
+            __createMockGPUQueue().submit([{_commands: commands}]);
+            const expected = BRIDGE_RESULT ? "pass:pass-only"
+                                           : "pass:pass-only,clear:c1:1:0:0:1";
+            if (calls.join(",") !== expected) {
+                console.error("calls: " + calls.join(","));
+                process.exit(1);
+            }
+        """.replace("BRIDGE_RESULT", bridge_result))
+
+    def test_pass_only_keeps_its_clear_when_the_bridge_rejects_it(self):
+        self._run_pass_only("false")
+
+    def test_pass_only_taken_by_the_bridge_is_not_cleared_twice(self):
+        self._run_pass_only("true")
+
     def test_harness_bundles_are_not_native_preludes(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp)

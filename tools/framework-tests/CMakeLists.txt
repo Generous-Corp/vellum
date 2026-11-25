@@ -41,9 +41,22 @@ function(vellum_add_framework_test name)
     endforeach()
 endfunction()
 
+# The routing policy test supplies parser operations without linking a canvas library.
+add_executable(vellum-framework-font-container-route-test font_container_route_test.cpp)
+target_include_directories(vellum-framework-font-container-route-test PRIVATE
+    "${PROJECT_SOURCE_DIR}/framework/core/view/include"
+    "${PROJECT_SOURCE_DIR}/framework/core/canvas/include")
+add_test(NAME vellum.framework.font-container-route
+    COMMAND vellum-framework-font-container-route-test)
+set_tests_properties(vellum.framework.font-container-route PROPERTIES LABELS framework)
+set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES font_container_route_test.cpp)
+
 vellum_add_framework_test(widget-bridge
     SOURCES widget_bridge_test.cpp
     UNITS Vellum::MirrorView_script)
+# The sealed-font cases register a real face from the repository's fonts.
+target_compile_definitions(vellum-framework-widget-bridge-test PRIVATE
+    VELLUM_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/framework/external/fonts/Jost-Regular.ttf")
 
 vellum_add_framework_test(gpu-surface-lease
     SOURCES gpu_surface_lease_test.cpp

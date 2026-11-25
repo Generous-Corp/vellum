@@ -11,10 +11,45 @@ from pathlib import Path
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 from typing import Callable
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "cli"))
+from vellum_browser import configured_provenance  # noqa: E402
+
+INSTALLED_CHROME = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+
+
+def select_chrome() -> str:
+    """The browser a proof runs: the pinned VELLUM_CHROME_PATH, else an installed Chrome.
+
+    With VELLUM_REQUIRE_CHROME_PROVENANCE=1 only the pinned browser is used, and
+    it must match its receipt; installed browsers are refused before anything
+    is launched.
+    """
+    strict = os.environ.get("VELLUM_REQUIRE_CHROME_PROVENANCE") == "1"
+    pinned = os.environ.get("VELLUM_CHROME_PATH")
+    if pinned:
+        if not Path(pinned).is_file() or not os.access(pinned, os.X_OK):
+            raise SystemExit(f"VELLUM_CHROME_PATH does not name an executable browser: {pinned}")
+        if strict:
+            valid, detail = configured_provenance(Path(pinned))
+            if not valid:
+                raise SystemExit(f"pinned Chrome lacks valid provenance: {detail}")
+        return pinned
+    if strict:
+        raise SystemExit(
+            "VELLUM_REQUIRE_CHROME_PROVENANCE=1 requires a pinned browser in "
+            "VELLUM_CHROME_PATH; an installed Chrome is not used")
+    chrome = shutil.which("google-chrome")
+    if not chrome and INSTALLED_CHROME.is_file():
+        chrome = str(INSTALLED_CHROME)
+    if not chrome or not Path(chrome).is_file():
+        raise SystemExit("Google Chrome is required for the browser proof")
+    return chrome
 
 
 def stop_browser(
@@ -139,12 +174,7 @@ def main() -> int:
     parser.add_argument("--node", type=Path)
     parser.add_argument("--build-script", type=Path)
     args = parser.parse_args()
-    chrome = os.environ.get("VELLUM_CHROME_PATH") or shutil.which("google-chrome")
-    mac_chrome = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
-    if not chrome and mac_chrome.is_file():
-        chrome = str(mac_chrome)
-    if not chrome or not Path(chrome).is_file():
-        raise SystemExit("Google Chrome is required")
+    chrome = select_chrome()
     node = str(args.node.resolve()) if args.node else shutil.which("node")
     if not node:
         raise SystemExit("Node is required")
