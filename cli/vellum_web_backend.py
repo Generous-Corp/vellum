@@ -711,6 +711,20 @@ def _localize_canvas_screenshots(
     return localized
 
 
+def _pair_canvas_captures(
+    canvas_indices: list[int], pixels: list[dict[str, Any] | None],
+) -> dict[int, dict[str, Any]]:
+    """Pair DOMSnapshot canvas nodes with their pixels, in document order.
+
+    The page query sees only light-DOM canvases, while the snapshot also lists
+    canvases inside shadow roots. When the counts differ the pairing is
+    ambiguous, so no canvas is captured and each stays a plain view.
+    """
+    if len(pixels) != len(canvas_indices):
+        return {}
+    return {index: capture for index, capture in zip(canvas_indices, pixels) if capture is not None}
+
+
 def _replace_data_urls(value: str, records: dict[str, dict[str, Any]]) -> tuple[str, list[str]]:
     references: list[str] = []
 
@@ -1379,13 +1393,9 @@ def run_chrome_interaction_capture(
                             ).lower()
                             if node_name == "canvas":
                                 canvas_indices.append(node_index)
-                        canvas_pixels = client.capture_canvas_data_urls()
-                        if len(canvas_pixels) != len(canvas_indices):
-                            raise BackendFailure(
-                                "browser returned a different number of canvas captures",
-                                status="test_failed",
-                            )
-                        canvas_captures = dict(zip(canvas_indices, canvas_pixels))
+                        canvas_captures = _pair_canvas_captures(
+                            canvas_indices, client.capture_canvas_data_urls(),
+                        )
                     except CdpClientError as error:
                         raise BackendFailure(
                             f"Browser capture failed: {error}", status="test_failed",

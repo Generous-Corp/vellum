@@ -53,9 +53,12 @@ READINESS_EXPRESSION = (
     "document.readyState === 'complete' && "
     "(!document.fonts || document.fonts.status === 'loaded')"
 )
+# A canvas that cannot be read (tainted by cross-origin pixels, or empty)
+# yields null rather than failing the whole capture.
 CANVAS_DATA_URLS_EXPRESSION = (
-    "Array.from(document.querySelectorAll('canvas')).map(canvas => "
-    "canvas.toDataURL('image/png'))"
+    "Array.from(document.querySelectorAll('canvas')).map(canvas => { "
+    "try { return canvas.width > 0 && canvas.height > 0 ? "
+    "canvas.toDataURL('image/png') : null; } catch (error) { return null; } })"
 )
 FIXED_EXPRESSIONS = {READINESS_EXPRESSION, CANVAS_DATA_URLS_EXPRESSION}
 
@@ -311,16 +314,22 @@ class CdpClient:
             "format": "png", "fromSurface": True, "captureBeyondViewport": False,
         }))
 
-    def capture_canvas_data_urls(self) -> list[dict[str, Any]]:
-        """Capture each canvas's own RGBA pixels without the page behind it."""
+    def capture_canvas_data_urls(self) -> list[dict[str, Any] | None]:
+        """Capture each canvas's own RGBA pixels without the page behind it.
+
+        Entries follow document order; an unreadable canvas is None.
+        """
         result = self.command("Runtime.evaluate", {
             "expression": CANVAS_DATA_URLS_EXPRESSION, "returnByValue": True,
         }).get("result")
         values = result.get("value") if isinstance(result, dict) else None
         if not isinstance(values, list) or len(values) > 128:
             raise CdpClientError("CDP canvas capture response is malformed or unbounded")
-        captures: list[dict[str, Any]] = []
+        captures: list[dict[str, Any] | None] = []
         for value in values:
+            if value is None:
+                captures.append(None)
+                continue
             if not isinstance(value, str) or not value.startswith("data:image/png;base64,"):
                 raise CdpClientError("CDP canvas capture did not return a PNG data URL")
             encoded = value[len("data:image/png;base64,"):]

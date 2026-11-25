@@ -30,6 +30,7 @@ validate_component_source = BACKEND_MODULE["validate_component_source"]
 build_component_modules = BACKEND_MODULE["build_component_modules"]
 contains_sdk_install_path = BACKEND_MODULE["contains_sdk_install_path"]
 lower_dom_snapshot = BACKEND_MODULE["lower_dom_snapshot"]
+_pair_canvas_captures = BACKEND_MODULE["_pair_canvas_captures"]
 lower_computed_material = BACKEND_MODULE["_lower_computed_material"]
 computed_gradient = BACKEND_MODULE["_computed_gradient"]
 CAPTURE_STYLE_NAMES = BACKEND_MODULE["CAPTURE_STYLE_NAMES"]
@@ -284,6 +285,11 @@ class BrowserCaptureLoweringTests(unittest.TestCase):
         control = control_root["children"][0]["children"][0]
         self.assertEqual(control["kind"], "view")
         self.assertEqual([child["text"] for child in control["children"]], ["fallback"])
+
+    def test_canvas_pairing_skips_unreadable_canvases_and_ambiguous_counts(self) -> None:
+        capture = {"mimeType": "image/png", "data": self.CANVAS_PNG}
+        self.assertEqual(_pair_canvas_captures([4, 9], [None, capture]), {9: capture})
+        self.assertEqual(_pair_canvas_captures([4, 9], [capture]), {})
 
     def test_dom_snapshot_treats_absent_node_value_as_empty(self) -> None:
         snapshot = {

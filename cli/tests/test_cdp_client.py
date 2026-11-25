@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import shutil
+import subprocess
 from pathlib import Path
 import socket
 import socketserver
@@ -15,7 +17,7 @@ import unittest
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "cli"))
 from vellum_cdp import CdpAdmission
-from vellum_cdp_client import CdpClient, CdpClientError
+from vellum_cdp_client import CANVAS_DATA_URLS_EXPRESSION, CdpClient, CdpClientError
 sys.path.pop(0)
 
 
@@ -319,6 +321,37 @@ class CdpClientTests(unittest.TestCase):
         self.assertEqual(captures, [{"mimeType": "image/png", "data": encoded}])
         self.assertEqual(calls[0][0], "Runtime.evaluate")
         self.assertTrue(calls[0][1]["returnByValue"])
+
+    def test_canvas_capture_keeps_unreadable_canvases_as_none(self) -> None:
+        client = object.__new__(CdpClient)
+        encoded = base64.b64encode(b"\x89PNG\r\n\x1a\n").decode("ascii")
+        client.command = lambda method, params=None: {
+            "result": {"value": [None, f"data:image/png;base64,{encoded}"]},
+        }  # type: ignore[method-assign]
+        self.assertEqual(client.capture_canvas_data_urls(),
+                         [None, {"mimeType": "image/png", "data": encoded}])
+
+    @unittest.skipIf(shutil.which("node") is None, "node is not installed")
+    def test_canvas_expression_yields_null_for_tainted_and_empty_canvases(self) -> None:
+        # Run the page expression against canvases that behave like the
+        # browser's: a tainted canvas throws SecurityError from toDataURL, and
+        # a zero-area canvas returns "data:,".
+        script = """
+const canvas = (width, height, read) => ({ width, height, toDataURL: read });
+const canvases = [
+  canvas(4, 4, () => 'data:image/png;base64,AAAA'),
+  canvas(4, 4, () => { throw new Error('SecurityError'); }),
+  canvas(0, 4, () => 'data:,'),
+];
+globalThis.document = { querySelectorAll: () => canvases };
+process.stdout.write(JSON.stringify(eval(process.argv[1])));
+"""
+        result = subprocess.run(
+            ["node", "-e", script, CANVAS_DATA_URLS_EXPRESSION],
+            capture_output=True, text=True, timeout=30, check=True,
+        )
+        self.assertEqual(json.loads(result.stdout),
+                         ["data:image/png;base64,AAAA", None, None])
 
     def test_canvas_capture_rejects_non_png_data_urls(self) -> None:
         client = object.__new__(CdpClient)
