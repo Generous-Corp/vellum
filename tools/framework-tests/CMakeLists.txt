@@ -88,40 +88,15 @@ vellum_add_framework_test(react-materialization
     SOURCES react_materialization_test.cpp
     UNITS Vellum::MirrorView_script)
 
-# vellum_add_js_bytecode() end to end: the generator, the encoder and the
-# registration of the embedded blobs. The generator is built from the build
-# tree's unit include roots, like the tests, and run from the build tree.
-set(VELLUM_JS_BYTECODE_GENERATOR_SOURCE
-    "${PROJECT_SOURCE_DIR}/cmake/vellum_js_bytecode_main.cpp")
-set(VELLUM_JS_BYTECODE_ENCODER
-    "${PROJECT_SOURCE_DIR}/framework/tools/cmake/scripts/encode_binary_data.py")
-set(VELLUM_JS_BYTECODE_EXTRA_INCLUDES ${_vellum_framework_test_includes})
-if(TARGET vellum-tracing)
-    set(VELLUM_JS_BYTECODE_EXTRA_LINK_LIBRARIES vellum-tracing)
-endif()
-include("${PROJECT_SOURCE_DIR}/cmake/VellumJsBytecode.cmake")
-set(_vellum_js_bytecode_fixture
-    "${PROJECT_SOURCE_DIR}/fixtures/js-bytecode/bytecode_fixture.js")
-configure_file("${_vellum_js_bytecode_fixture}"
-    "${CMAKE_CURRENT_BINARY_DIR}/js-bytecode/bytecode_bridge_fixture.js" COPYONLY)
-vellum_add_js_bytecode(js_bytecode_embed_fixture
-    SOURCES "${_vellum_js_bytecode_fixture}")
-vellum_add_js_bytecode(js_bytecode_embed_bridge_fixture
-    SOURCES "${CMAKE_CURRENT_BINARY_DIR}/js-bytecode/bytecode_bridge_fixture.js"
-    NAMESPACE js_bytecode_embed_fixture
-    WIDGET_BRIDGE_SCRIPT)
-set_target_properties(vellum-js-bytecode PROPERTIES
-    CXX_STANDARD 20
-    OSX_ARCHITECTURES arm64
-    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
-    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-skia-dawn-provider>")
+# The generated blobs come from vellum_add_js_bytecode() in the top-level
+# project, which builds the generator and the two fixture libraries.
 vellum_add_framework_test(js-bytecode-embed
     SOURCES js_bytecode_embed_test.cpp
     UNITS Vellum::MirrorView_script)
 target_link_libraries(vellum-framework-js-bytecode-embed-test PRIVATE
     js_bytecode_embed_fixture js_bytecode_embed_bridge_fixture)
 target_compile_definitions(vellum-framework-js-bytecode-embed-test PRIVATE
-    VELLUM_TEST_JS_BYTECODE_FIXTURE="${_vellum_js_bytecode_fixture}")
+    VELLUM_TEST_JS_BYTECODE_FIXTURE="${PROJECT_SOURCE_DIR}/fixtures/js-bytecode/bytecode_fixture.js")
 
 vellum_add_framework_test(param-model-binding
     SOURCES param_model_binding_test.cpp

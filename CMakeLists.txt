@@ -765,6 +765,36 @@ if(VELLUM_BUILD_TESTS)
                 "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
                 "-DTEST_CONFIG=$<CONFIG>"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunInstallConsumer.cmake")
+        # vellum_add_js_bytecode() end to end for the framework test that checks
+        # its blobs: the generator is built from the build tree's unit include
+        # roots, like the framework tests, and runs from the build tree.
+        set(VELLUM_JS_BYTECODE_GENERATOR_SOURCE
+            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/vellum_js_bytecode_main.cpp")
+        set(VELLUM_JS_BYTECODE_ENCODER
+            "${CMAKE_CURRENT_SOURCE_DIR}/framework/tools/cmake/scripts/encode_binary_data.py")
+        set(VELLUM_JS_BYTECODE_EXTRA_INCLUDES
+            ${_vellum_mirror_public_includes}
+            "${VELLUM_MIRROR_BUILD_INFO_DIR}"
+            "${VELLUM_MIRROR_CHOC_ROOT}")
+        if(TARGET vellum-tracing)
+            set(VELLUM_JS_BYTECODE_EXTRA_LINK_LIBRARIES vellum-tracing)
+        endif()
+        include(cmake/VellumJsBytecode.cmake)
+        set(_vellum_js_bytecode_fixture
+            "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/js-bytecode/bytecode_fixture.js")
+        configure_file("${_vellum_js_bytecode_fixture}"
+            "${CMAKE_CURRENT_BINARY_DIR}/js-bytecode/bytecode_bridge_fixture.js" COPYONLY)
+        vellum_add_js_bytecode(js_bytecode_embed_fixture
+            SOURCES "${_vellum_js_bytecode_fixture}")
+        vellum_add_js_bytecode(js_bytecode_embed_bridge_fixture
+            SOURCES "${CMAKE_CURRENT_BINARY_DIR}/js-bytecode/bytecode_bridge_fixture.js"
+            NAMESPACE js_bytecode_embed_fixture
+            WIDGET_BRIDGE_SCRIPT)
+        set_target_properties(vellum-js-bytecode PROPERTIES
+            CXX_STANDARD 20
+            OSX_ARCHITECTURES arm64
+            MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+            BUILD_RPATH "$<TARGET_FILE_DIR:vellum-skia-dawn-provider>")
         # Behavior tests of the framework units (ctest label `framework`).
         add_subdirectory(tools/framework-tests)
         if(TARGET yogacore)
