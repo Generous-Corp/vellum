@@ -6,6 +6,8 @@
       "gpu-runtime.device-api-closure",
       "gpu-runtime.device-api-closure-unit",
       "gpu-runtime.device-api-consumer",
+      "gpu-runtime.graphite-host-checker-unit",
+      "gpu-runtime.graphite-host-platform",
       "gpu-runtime.renderer-lock-reader",
       "vellum-notices-manifest",
       "vellum.animation",
@@ -165,6 +167,7 @@
     ],
     "gpu": [
       "gpu-runtime.device",
+      "gpu-runtime.graphite-old-sdk-host",
       "vellum.app-host",
       "vellum.app-host-agent-workflow",
       "vellum.app-host-design-anchor-dump",
