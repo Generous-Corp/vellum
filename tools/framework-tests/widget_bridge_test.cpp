@@ -4,6 +4,7 @@
 
 #include "framework_test.hpp"
 
+#include "include/core/SkTypeface.h"
 #include <vellum/canvas/bundled_fonts.hpp>
 #include <vellum/state/store.hpp>
 #include <vellum/view/design_codegen.hpp>
