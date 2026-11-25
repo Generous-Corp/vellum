@@ -56,7 +56,15 @@ bool sealed_font_diagnostic_allowed() {
 struct SealedFamilyOwners {
     std::mutex mutex;
     std::unordered_map<std::string, std::string> owner_by_family;
+    std::size_t registration_count = 0;
+    std::size_t registered_bytes = 0;
 };
+
+// Font registrations retain native parser/typeface state for the process
+// lifetime. Keep an empty-capability script from exhausting that state by
+// registering an unbounded number of distinct family names.
+constexpr std::size_t kMaxSealedFontRegistrations = 256;
+constexpr std::size_t kMaxSealedFontBytes = 128u * 1024u * 1024u;
 
 SealedFamilyOwners& sealed_family_owners() {
     static SealedFamilyOwners owners;
@@ -95,9 +103,20 @@ bool register_sealed_font(WidgetBridge& self, const WidgetBridge::EmbeddedAsset&
                                           family);
             return false;
         }
+        if (owners.registration_count >= kMaxSealedFontRegistrations ||
+            embedded.size > kMaxSealedFontBytes -
+                                 std::min(owners.registered_bytes, kMaxSealedFontBytes)) {
+            if (sealed_font_diagnostic_allowed())
+                vellum::runtime::log_warn("WidgetBridge: registerEmbeddedFont refused '{}': "
+                                          "process sealed-font quota exceeded",
+                                          family);
+            return false;
+        }
         if (!vellum::view::register_font_container(embedded.data, embedded.size, family))
             return false;
         owners.owner_by_family.emplace(family_key, owner);
+        ++owners.registration_count;
+        owners.registered_bytes += embedded.size;
     }
     if (declared)
         vellum::canvas::declare_font_face_weight_range(family_key, declared->first, declared->second,

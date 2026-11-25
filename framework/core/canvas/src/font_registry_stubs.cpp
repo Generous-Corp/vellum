@@ -609,9 +609,10 @@ std::optional<bool> declared_face_synthesizes_bold(const std::string& family,
     std::vector<DeclaredWeightRange> ranges;
     {
         std::lock_guard<std::mutex> guard(declared_weights_mutex());
+        const auto family_key = canonical_family_name(family);
         for (const auto& [scope, families] : declared_weights()) {
             (void)scope;
-            const auto it = families.find(family);
+            const auto it = families.find(family_key);
             if (it != families.end())
                 ranges.insert(ranges.end(), it->second.begin(), it->second.end());
         }

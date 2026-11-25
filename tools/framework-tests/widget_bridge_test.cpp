@@ -283,6 +283,14 @@ FRAMEWORK_TEST(a_panel_cannot_rebind_a_family_another_owner_registered) {
     CHECK(!register_embedded(a, host_family, "assets/face.ttf"));
 }
 
+FRAMEWORK_TEST(declared_font_weights_match_family_case_insensitively) {
+    const auto scope = "widget-bridge-case-weight-" + std::to_string(::getpid());
+    vellum::canvas::declare_font_face_weight_range("MiXeD Family", 400, 400, scope);
+    CHECK(vellum::canvas::declared_face_synthesizes_bold("mixed family", 700).value_or(false));
+    CHECK(vellum::canvas::declared_face_synthesizes_bold("MIXED FAMILY", 700).value_or(false));
+    vellum::canvas::clear_declared_font_face_weight_ranges(scope);
+}
+
 FRAMEWORK_TEST(anonymous_bridges_cannot_share_sealed_font_ownership) {
     const auto bytes = read_test_font();
     Harness a(view::CapabilitySet{}), b(view::CapabilitySet{});
@@ -825,6 +833,21 @@ FRAMEWORK_TEST(failing_script_throws_and_keeps_the_built_tree) {
     CHECK(h.bridge.widget("kept") != nullptr);
     CHECK(h.bridge.widget("partial") != nullptr);
     CHECK(h.root.child_count() == 2);
+}
+
+FRAMEWORK_TEST(sealed_font_registration_has_a_process_quota) {
+    const auto bytes = read_test_font();
+    Harness h(view::CapabilitySet{});
+    h.bridge.set_embedded_assets({{"assets/face.ttf", bytes.data(), bytes.size()}});
+    bool refused = false;
+    for (int i = 0; i < 300; ++i) {
+        if (!register_embedded(h, probe_family("quota-" + std::to_string(i)),
+                               "assets/face.ttf")) {
+            refused = true;
+            break;
+        }
+    }
+    CHECK(refused);
 }
 
 } // namespace
