@@ -5,7 +5,8 @@ import assert from 'node:assert/strict';
 
 import {trackValue} from '../session/gesture_tracker.js';
 import {
-    BYPASS, PARAMETERS, SLIDERS, createSuperconvolverView, superconvolverLayout,
+    BYPASS, PARAMETERS, SLIDERS, cleanSourceName, createSuperconvolverView, sourceLabel,
+    superconvolverLayout,
 } from '../views/superconvolver.js';
 
 function near(actual, expected, name) {
@@ -22,11 +23,14 @@ const sliders = ['mix', 'size', 'gain'];
     const {bounds, scale, narrow} = superconvolverLayout(820, 560, sliders);
     assert.equal(scale, 1);
     assert.equal(narrow, false);
-    // avail = 560 - 64 - 20 = 476; IR 199.92, spectrum 123.76, controls 128.32.
-    near(bounds.ir, {x: 20, y: 64, width: 780, height: 199.92}, 'ir');
-    near(bounds.spectrum, {x: 20, y: 275.92, width: 780, height: 123.76}, 'spectrum');
+    // avail = 560 - 64 - 20 = 476; the unpainted IR (199.92) and spectrum
+    // (123.76) slots and two 12s gaps leave the controls 128.32.
     near(bounds.controls, {x: 20, y: 411.68, width: 780, height: 128.32}, 'controls');
-    near(bounds.loadIr, {x: 24, y: 44, width: 196, height: 38}, 'loadIr');
+    near(bounds.source, {x: 24, y: 44, width: 196, height: 38}, 'source');
+    near(bounds['source/orb'], {x: 35, y: 56, width: 14, height: 14}, 'source/orb');
+    near(bounds['source/name'], {x: 58, y: 49.48, width: 150, height: 15.6}, 'source/name');
+    assert.equal(bounds.ir, undefined, 'the native editor paints no IR panel');
+    assert.equal(bounds.spectrum, undefined, 'the native editor paints no spectrum panel');
     near(bounds.mix, {x: 20, y: 411.68, width: 260, height: 128.32}, 'mix');
     near(bounds.size, {x: 280, y: 411.68, width: 260, height: 128.32}, 'size');
     near(bounds.gain, {x: 540, y: 411.68, width: 260, height: 128.32}, 'gain');
@@ -41,11 +45,10 @@ const sliders = ['mix', 'size', 'gain'];
     const {bounds, scale, narrow} = superconvolverLayout(390, 700, sliders);
     assert.equal(scale, 1.25);
     assert.equal(narrow, true);
-    // top = 165, avail = 700 - 165 - 25 = 510; IR 214.2, spectrum 132.6, controls 133.2.
-    near(bounds.ir, {x: 25, y: 165, width: 340, height: 214.2}, 'ir');
-    near(bounds.spectrum, {x: 25, y: 394.2, width: 340, height: 132.6}, 'spectrum');
+    // top = 165, avail = 700 - 165 - 25 = 510; the unpainted slots (214.2
+    // and 132.6) and two 15 gaps leave the controls 133.2.
     near(bounds.controls, {x: 25, y: 541.8, width: 340, height: 133.2}, 'controls');
-    near(bounds.loadIr, {x: 25, y: 115, width: 340, height: 45}, 'loadIr');
+    near(bounds.source, {x: 25, y: 115, width: 340, height: 45}, 'source');
     near(bounds['size/track'], {x: 25 + 340 / 3 + 17.5, y: 613.728, width: 340 / 3 - 35, height: 5},
         'size/track');
     near(bounds['mix/label'], {x: 42.5, y: 558.728, width: 340 / 3 - 35, height: 55}, 'mix/label');
@@ -83,11 +86,25 @@ const partialBounds = partial.layout(820, 560);
 assert.equal(partialBounds.bypass, undefined);
 near(partialBounds.gain, {x: 410, y: 411.68, width: 390, height: 128.32}, 'partial gain');
 
-// The layout's text styles follow the mode.
+// The layout's text styles follow the mode: tracked capitals on a wide
+// canvas, centered mixed case on a narrow one.
 view.layout(820, 560);
 assert.deepEqual(view.textStyle('mix/value'), {fontSize: 14, align: 'right'});
+assert.deepEqual(view.textStyle('mix/name'), {fontSize: 9.5, align: 'left', uppercase: true});
+assert.deepEqual(view.textStyle('source'), {radius: 10});
 view.layout(390, 700);
 assert.deepEqual(view.textStyle('mix/value'), {fontSize: 13 * 1.25, align: 'center'});
+assert.deepEqual(view.textStyle('mix/name'), {fontSize: 9.5 * 1.25, align: 'center'});
+
+// The Source chip names the IR as the native clean_source_name does.
+assert.equal(sourceLabel(null), 'Synthetic room');
+assert.equal(sourceLabel(''), 'Synthetic room');
+assert.equal(cleanSourceName('Plate.wav'), 'Plate');
+assert.equal(cleanSourceName('/irs/chapel_st-vitus_48k_24bit_stereo.wav'), 'Chapel St Vitus');
+assert.equal(cleanSourceName('Lexicon 480.aif'), 'Lexicon 480', 'a model number stays');
+assert.equal(cleanSourceName('EMT140 plate 48000.flac'), 'EMT140 Plate');
+assert.equal(cleanSourceName('48000.wav'), '48000', 'an all-engineering name falls back to the stem');
+assert.equal(cleanSourceName('C:\\irs\\hall.ir.wav'), 'Hall');
 
 // The slider value is absolute along the track, clamped at both ends.
 const gain = {minValue: -24, maxValue: 24};

@@ -44,8 +44,9 @@ function resetValues() {
     for (const info of params) values.set(info.id, info.defaultValue);
 }
 
-// A deterministic decaying impulse response and a sloped spectrum, so both
-// panels carry content in a capture.
+// A deterministic decaying impulse response and a sloped spectrum. The view
+// draws neither, but both feeds reach the session the way the page will send
+// them.
 const impulse = Array.from({length: 256}, (_, index) =>
     Math.exp(-index / 60) * (index % 2 ? -1 : 1) * (0.6 + 0.4 * Math.sin(index * 0.7)));
 const spectrum = Array.from({length: 64}, (_, index) => 0.9 - index / 90 + 0.1 * Math.sin(index));

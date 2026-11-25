@@ -11,9 +11,9 @@ The run checks, in this order:
   labels   the text each box shows;
   pointer  a CDP mouse drag along each slider track and a click on Bypass,
            with the adapter's begin, set and end calls and their values;
-  load-ir  a click on Load IR opens the page's file selection, and the
-           chosen name reaches the IR panel;
-  ink      the capture has ink in every panel, track and label box.
+  source   a click on the Source chip opens the page's file selection, and
+           the chosen file's cleaned name reaches the chip;
+  ink      the capture has ink in the chip, every track and every label box.
 
 The view must also tear down cleanly and no browser process may outlive the
 run.
@@ -106,8 +106,10 @@ class ViewCdp(FixtureCdp):
 
 
 def expected_bounds(width: float, height: float) -> dict[str, dict[str, float]]:
-    """The native layout (super_convolver_ui.hpp layout() and paint_controls()),
-    plus the view's DESIGN boxes, worked from the canvas size alone."""
+    """The native layout (super_convolver_ui.hpp layout(), paint_controls() and
+    the Source chip in paint()), plus the view's DESIGN boxes, worked from the
+    canvas size alone. The native IR and spectrum slots are laid out but not
+    painted, so they appear only through the controls' position."""
     s = max(0.5, height / 560)
     m = 20 * s
     narrow = width < 680 * s
@@ -123,19 +125,17 @@ def expected_bounds(width: float, height: float) -> dict[str, dict[str, float]]:
         return box(x, baseline - size, w, size * 1.3)
 
     out = {
-        "ir": box(m, top, width - 2 * m, ir_h),
-        "spectrum": box(m, top + ir_h + 12 * s, width - 2 * m, spec_h),
         "controls": box(m, top + ir_h + spec_h + 24 * s, width - 2 * m, ctl_h),
         "wordmark": text(24 * s, 30 * s, 160 * s, 11 * s),
-        "loadIr": box(m, 92 * s, width - 2 * m, 36 * s) if narrow else box(24 * s, 44 * s, 196 * s, 38 * s),
+        "source": box(m, 92 * s, width - 2 * m, 36 * s) if narrow else box(24 * s, 44 * s, 196 * s, 38 * s),
     }
-    load = out["loadIr"]
-    out["loadIr/text"] = text(load["x"] + 14 * s, load["y"] + load["height"] * 0.66,
-                              load["width"] - 14 * s, 12 * s)
-    ir = out["ir"]
-    out["irTitle"] = text(ir["x"] + 10 * s, ir["y"] + 16 * s, ir["width"] * 0.45 - 10 * s, 11 * s)
-    out["irSource"] = text(ir["x"] + ir["width"] * 0.45, ir["y"] + 16 * s,
-                           ir["width"] * 0.55 - 10 * s, 11 * s)
+    chip = out["source"]
+    middle = chip["y"] + chip["height"] / 2
+    out["source/orb"] = box(chip["x"] + 18 * s - 7 * s, middle - 7 * s, 14 * s, 14 * s)
+    out["source/name"] = text(chip["x"] + 34 * s, chip["y"] + chip["height"] * 0.46,
+                              chip["width"] - 46 * s, 12 * s)
+    out["source/caption"] = text(chip["x"] + 34 * s, chip["y"] + chip["height"] * 0.82,
+                                 chip["width"] - 46 * s, 8.5 * s)
     controls = out["controls"]
     cw = controls["width"] / len(SLIDERS)
     for index, key in enumerate(SLIDERS):
@@ -187,14 +187,16 @@ def value_text(key: str, value: float) -> str:
     return f"{value:.{decimals}f} {unit}"
 
 
-def check_labels(report: dict[str, Any], source: str) -> None:
+def check_labels(report: dict[str, Any], source: str, narrow: bool) -> None:
     text = report["text"]
     want = {
-        "wordmark": "SuperConvolver", "loadIr/text": "Load IR", "irTitle": "impulse response",
-        "irSource": f"source: {source}", "bypass/text": "Bypass",
+        "wordmark": "SUPERCONVOLVER", "source/name": source, "source/caption": "SOURCE",
+        "bypass/text": "Bypass",
     }
     for key, (label, *_rest) in SLIDERS.items():
-        want[f"{key}/name"] = label
+        # Native draws a wide slider's name in tracked capitals and a narrow
+        # one centered as written.
+        want[f"{key}/name"] = label if narrow else label.upper()
         want[f"{key}/value"] = value_text(key, report["values"][str(EXPECTED_MAPPING[key])])
     check({key: text.get(key) for key in want} == want, "labels", {"drawn": text, "expected": want})
 
@@ -263,14 +265,15 @@ def verify_viewport(cdp: ViewCdp, name: str, width: int, height: int,
     report = cdp.fixture(f"mount({width}, {height})")
     check(report["size"]["cssWidth"] == width and report["size"]["cssHeight"] == height,
           "viewport", report["size"])
+    narrow = width < 680 * max(0.5, height / 560)
     worst = check_bounds(report, width, height)
     check_mapping(report)
-    check_labels(report, "built-in synthetic")
+    check_labels(report, "Synthetic room", narrow)
     calls = check_pointer(cdp, report)
     pointed = cdp.fixture("settle()")
-    check_labels(pointed, "built-in synthetic")
+    check_labels(pointed, "Synthetic room", narrow)
 
-    load = report["bounds"]["loadIr"]
+    load = report["bounds"]["source"]
     cdp.mouse("mousePressed", round(report["canvas"]["left"] + load["x"] + load["width"] / 2),
               round(report["canvas"]["top"] + load["y"] + load["height"] / 2))
     cdp.mouse("mouseReleased", round(report["canvas"]["left"] + load["x"] + load["width"] / 2),
@@ -279,11 +282,11 @@ def verify_viewport(cdp: ViewCdp, name: str, width: int, height: int,
     choosers = len(cdp.choosers)
     cdp.choosers.clear()
     check(requested["fileRequests"] == [{"accept": ".wav,.aif,.aiff,.flac", "settled": False}]
-          and choosers == 1 and len(requested["calls"]) == len(pointed["calls"]), "load-ir",
+          and choosers == 1 and len(requested["calls"]) == len(pointed["calls"]), "source",
           {"requests": requested["fileRequests"], "choosersOpened": choosers})
-    chosen = cdp.fixture("chooseFile('Plate.wav')")
+    chosen = cdp.fixture("chooseFile('chapel_st-vitus_48k_stereo.wav')")
     check(chosen is not None and chosen["fileRequests"][0]["settled"]
-          and chosen["text"].get("irSource") == "source: Plate.wav", "load-ir",
+          and chosen["text"].get("source/name") == "Chapel St Vitus", "source",
           None if chosen is None else {"requests": chosen["fileRequests"], "text": chosen["text"]})
 
     captured = cdp.fixture("capture()")
@@ -292,7 +295,7 @@ def verify_viewport(cdp: ViewCdp, name: str, width: int, height: int,
     capture_dir.mkdir(parents=True, exist_ok=True)
     png = capture_dir / f"superconvolver-{name}-{width}x{height}.png"
     png.write_bytes(base64.b64decode(encoded))
-    inked = ["ir", "spectrum", "loadIr", "bypass", "wordmark", "irTitle", "irSource"]
+    inked = ["source", "source/orb", "source/name", "source/caption", "bypass", "wordmark"]
     for key in SLIDERS:
         inked += [f"{key}/track", f"{key}/name", f"{key}/value"]
     for key in inked:
