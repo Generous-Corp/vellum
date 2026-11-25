@@ -1326,6 +1326,11 @@ class RunAllowlist(unittest.TestCase):
     def assert_unsupported(self, problems: list[str]) -> None:
         self.assertTrue(any(UNSUPPORTED in problem for problem in problems), problems)
 
+    def test_snapshot_handoff_actions_are_commit_pinned(self) -> None:
+        workflow = self.workflows[policy.SIGNING_WORKFLOW]
+        self.assertIn("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", workflow)
+        self.assertIn("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", workflow)
+
     def test_the_real_release_workflows_are_allowlisted(self) -> None:
         for name, text in self.workflows.items():
             with self.subTest(workflow=name):

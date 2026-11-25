@@ -189,13 +189,16 @@ def git(*args: str, cwd: Path) -> str:
 
 
 class Runner:
-    def __init__(self, root: Path, tag: str, commit: str, temp: Path, check_runs_commit: str | None = None) -> None:
+    def __init__(self, root: Path, tag: str, commit: str, temp: Path, check_runs_commit: str | None = None,
+                 snapshot_output: Path | None = None, bump_evidence_output: Path | None = None) -> None:
         if not TAG.fullmatch(tag) or not SHA.fullmatch(commit):
             raise PretagError("the tag must be vMAJOR.MINOR.PATCH and the commit a full SHA")
         self.root, self.tag, self.commit, self.temp = root, tag, commit, temp
         # A commit that exists only locally has no check runs on GitHub; a caller that
         # rehearses one reads the runs of a real commit instead (release_canary.py).
         self.check_runs_commit = check_runs_commit
+        self.snapshot_output = snapshot_output
+        self.bump_evidence_output = bump_evidence_output
         self.outputs: dict[str, str] = {}
         token = os.environ.get("GH_TOKEN", "")
         self.expressions = {
@@ -209,6 +212,7 @@ class Runner:
             **os.environ, "GITHUB_REF": f"refs/tags/{tag}", "GITHUB_REF_NAME": tag, "GITHUB_REF_TYPE": "tag",
             "GITHUB_SHA": commit, "GITHUB_REPOSITORY": REPOSITORY, "GITHUB_EVENT_NAME": "push",
             "GITHUB_WORKSPACE": str(root), "RUNNER_TEMP": str(temp),
+            "VELLUM_PRETAG_REPLAY": "1",
             # Job-level env of the jobs these steps belong to, as a tag push sets it.
             "VELLUM_TARGET_SHA": commit, "VELLUM_GIT_BASE": ZERO,
             "RELEASE_TAG": tag, "SOURCE_COMMIT": commit,
@@ -264,6 +268,9 @@ class Runner:
     def main(self) -> int:
         if git("rev-parse", "HEAD", cwd=self.root) != self.commit:
             raise PretagError(f"the checkout is not at {self.commit}")
+        # Start the age clock before any live evidence is read. Exporting or
+        # downloading the result must never refresh its capture time.
+        captured_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         workflows = {name: (self.root / ".github/workflows" / name).read_text(encoding="utf-8")
                      for name in {check.workflow for check in CHECKS}}
         self.sign_local_tag()
@@ -281,6 +288,26 @@ class Runner:
                     return 1
         finally:
             git("tag", "-d", self.tag, cwd=self.root)
+        # The release tag's run judges exactly what this replay judged: the
+        # open-PR snapshot and the release-bump content evidence read with it.
+        for output, name, what in (
+            (self.snapshot_output, "open-pr-snapshot.json", "an open-PR snapshot"),
+            (self.bump_evidence_output, "release-bump-evidence.json", "release-bump evidence"),
+        ):
+            if output is None:
+                continue
+            recorded = self.temp / name
+            if not recorded.is_file():
+                raise PretagError(f"the pre-tag authority replay did not record {what}")
+            output.parent.mkdir(parents=True, exist_ok=True)
+            if name == "open-pr-snapshot.json":
+                snapshot = json.loads(recorded.read_text(encoding="utf-8"))
+                if not isinstance(snapshot, dict):
+                    raise PretagError("the pre-tag open-PR snapshot must be an object")
+                snapshot["captured_at"] = captured_at
+                output.write_text(json.dumps(snapshot, sort_keys=True) + "\n", encoding="utf-8")
+            else:
+                output.write_bytes(recorded.read_bytes())
         print(f"every content check the {self.tag} pipeline runs on {self.commit} passes")
         return 0
 
@@ -292,10 +319,26 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--check-runs-commit", help="read this commit's check runs, not the tagged commit's "
                         "(for a rehearsal on a commit that exists only locally)")
+    parser.add_argument("--snapshot-output", type=Path,
+                        help="copy the pre-tag authority open-PR snapshot to this path")
+    parser.add_argument("--release-bump-output", "--bump-evidence-output", dest="bump_evidence_output", type=Path,
+                        help="copy the release-bump evidence judged with that snapshot to this path")
+    parser.add_argument("--pretag-replay", action="store_true",
+                        help="require both audited inputs for the selection-to-signing handoff")
     args = parser.parse_args(argv)
+    # Every Runner invocation rehearses a temporary tag, including canary
+    # callers without this flag. The selector additionally promises both
+    # audited inputs to the signing job; refuse an incomplete handoff here.
+    if args.pretag_replay and (args.snapshot_output is None or args.bump_evidence_output is None):
+        parser.error("--pretag-replay requires --snapshot-output and --release-bump-output")
+    if (args.snapshot_output is not None and args.bump_evidence_output is not None
+            and args.snapshot_output.resolve() == args.bump_evidence_output.resolve()):
+        parser.error("the snapshot and release-bump output paths must differ")
     try:
         with tempfile.TemporaryDirectory(prefix="pretag-") as temporary:
-            return Runner(args.root.resolve(), args.tag, args.commit, Path(temporary), args.check_runs_commit).main()
+            return Runner(args.root.resolve(), args.tag, args.commit, Path(temporary), args.check_runs_commit,
+                          args.snapshot_output.resolve() if args.snapshot_output else None,
+                          args.bump_evidence_output.resolve() if args.bump_evidence_output else None).main()
     except (OSError, subprocess.CalledProcessError, PretagError) as error:
         print(f"pretag checks refused: {error}", file=sys.stderr)
         return 1

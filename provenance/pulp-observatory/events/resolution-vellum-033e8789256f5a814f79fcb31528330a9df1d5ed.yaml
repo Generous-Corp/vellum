@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-033e8789256f5a814f79fcb31528330a9df1d5ed",
+  "kind": "resolution",
+  "created_at": "2026-11-24T13:43:25Z",
+  "resolves": "vellum-033e8789256f5a814f79fcb31528330a9df1d5ed",
+  "disposition": "port-required",
+  "rationale": "The conformance test's StagedAssets now refuses an asset path that escapes the staging directory (root name, root directory or .. after normalisation) and adds a traversal case. Pulp's copy in test/test_design_emitter_conformance.cpp still checks only empty or absolute paths. Debt to port: the containment check and its test case. Evidence, Pulp main b0ee92d21944d5c956603afd1108b575e50c1302 (full clone): [present] `git -C <pulp> grep -c -F -e 'if (path.empty() || path.is_absolute())' b0ee92d21944 -- test/test_design_emitter_conformance.cpp` = 1; [absent] `git -C <pulp> grep -c -F -e 'lexically_normal' b0ee92d21944 -- test/test_design_emitter_conformance.cpp` = 0; [control] `git -C <pulp> grep -c -F -e 'class StagedAssets' b0ee92d21944 -- test/test_design_emitter_conformance.cpp` = 1. [control] searches show the instrument finds the nearest Pulp counterpart. Classified by the Vellum lead under the owner's one-time delegation of 2026-11-24 (pulp-planning vellum-move/DECISIONS.md); any later resolution overrides it.",
+  "owner": "@vellum-lead",
+  "linked_commits": [
+    "033e8789256f5a814f79fcb31528330a9df1d5ed"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}
