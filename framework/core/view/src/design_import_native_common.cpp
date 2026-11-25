@@ -2428,6 +2428,12 @@ std::unique_ptr<View> make_widget(const IRNode& node,
                 fader->set_thumb_size(semantics.fader_thumb_width.value_or(0.0f),
                                       semantics.fader_thumb_height.value_or(0.0f));
             }
+            // The captured cap is recorded in device pixels; its layout size
+            // comes from the shared helper every lane uses.
+            if (fader_cap_over_static_capture(node) &&
+                !semantics.fader_thumb_width && !semantics.fader_thumb_height)
+                if (const auto cap = captured_fader_cap_size(node))
+                    fader->set_thumb_size(cap->width, cap->height);
             if (semantics.fader_thumb_corner_radius)
                 fader->set_thumb_corner_radius(*semantics.fader_thumb_corner_radius);
             if (options.preview_mode) fader->set_render_style(WidgetRenderStyle::minimal);
@@ -2451,7 +2457,14 @@ std::unique_ptr<View> make_widget(const IRNode& node,
                     if (const auto color = parse_indicator_css_color(*hex))
                         fader->set_skin_thumb_fallback_color(*color);
             } else {
-                apply_designed_body_skin(*fader, node);
+                if (fader_cap_over_static_capture(node)) {
+                    fader->set_designed_overlay(true);
+                    if (const auto hex = attr(node, "design_accent"))
+                        if (const auto color = parse_any_css_color(*hex))
+                            fader->set_skin_thumb_color(*color);
+                } else {
+                    apply_designed_body_skin(*fader, node);
+                }
             }
             apply_durable_fader_indicator(*fader, node);
             return fader;

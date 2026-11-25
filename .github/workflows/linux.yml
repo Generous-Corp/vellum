@@ -3,10 +3,11 @@ name: Linux build
 # Builds and tests the parts of Vellum that do not depend on the landed
 # mirror: foundation, runtime, components and the GPU device layer's
 # non-device targets, with the GPU backend, graphics, authoring and the mirror
-# off. It does NOT compile framework/ yet: the mirror build refuses anything
-# but the Darwin arm64 Skia/Dawn configuration (tools/mirror/VellumMirror.cmake)
-# and no Linux closure or Skia/Dawn pin exists. This lane is the base the Linux
-# host ports grow on.
+# off. It does NOT compile framework/ yet: the mirror accepts a Linux target from
+# its platform closure record (provenance/framework/platforms/linux-x64), but the
+# renderer lock still names macOS only, so there is no Linux Skia/Dawn pin to
+# link and tools/mirror/VellumMirror.cmake stops at that requirement. This lane
+# is the base the Linux host ports grow on.
 #
 # Advisory: not a required check. It runs on pull requests and pushes that
 # touch the build, never on merge groups.

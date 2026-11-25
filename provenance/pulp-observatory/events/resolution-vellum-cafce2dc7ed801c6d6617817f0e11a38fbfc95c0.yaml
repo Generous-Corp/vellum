@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-cafce2dc7ed801c6d6617817f0e11a38fbfc95c0",
+  "kind": "resolution",
+  "created_at": "2026-11-24T07:21:00Z",
+  "resolves": "vellum-cafce2dc7ed801c6d6617817f0e11a38fbfc95c0",
+  "disposition": "framework-only",
+  "rationale": "Fixes a defect introduced only in Vellum's adaptation of the test: the copy staged assets in temp_directory_path()/vellum-emitter-conformance-<rand>; this restores an exclusively created directory. Pulp's original already stages through pulp::test::make_unique_temp_dir (test/support/unique_temp_dir.hpp, which creates the directory exclusively with create_directory and retries; make_unique_temp_dir: 124 in 72 files). Pulp search at origin/main 25e27ae8ce96 (git grep -w -F over the whole tree, integrations/ included) for make_unique_dir and vellum-emitter-conformance- returns 0; control SkiaSurface on the same search returns 389 in 112 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-09, 'Classify the pending Vellum observatory events instead of raising the budget'); no schema or API delta recorded on the event. Any later resolution overrides this.",
+  "owner": "@danielraffel",
+  "linked_commits": [
+    "cafce2dc7ed801c6d6617817f0e11a38fbfc95c0"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}

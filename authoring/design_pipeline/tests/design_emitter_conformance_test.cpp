@@ -33,6 +33,8 @@
 #include <vellum/view/design_sources.hpp>
 #include <vellum/view/gap_widgets.hpp>
 #include <vellum/view/script_engine.hpp>
+#include <vellum/view/scripted_ui.hpp>
+#include <vellum/view/screenshot.hpp>
 #include <vellum/view/text_editor.hpp>
 #include <vellum/view/ui_components.hpp>
 #include <vellum/view/view.hpp>
@@ -43,6 +45,8 @@
 #include <choc/text/choc_JSON.h>
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -67,6 +71,9 @@
 #include <cxxabi.h>
 #endif
 
+#ifndef VELLUM_CONFORMANCE_STEMS
+#define VELLUM_CONFORMANCE_STEMS ""
+#endif
 #ifndef VELLUM_REPO_ROOT
 #define VELLUM_REPO_ROOT ""
 #endif
@@ -82,11 +89,64 @@ namespace fs = std::filesystem;
     void conformance_bind(vellum::view::View& root, vellum::view::NativeImportBindingContext& ctx);    \
     }
 VELLUM_CONFORMANCE_FIXTURE(form_controls_08)
+VELLUM_CONFORMANCE_FIXTURE(spectr)
+VELLUM_CONFORMANCE_FIXTURE(kelvin)
 VELLUM_CONFORMANCE_FIXTURE(keyed_list_18)
 VELLUM_CONFORMANCE_FIXTURE(fidelity_scene)
 #undef VELLUM_CONFORMANCE_FIXTURE
 
 namespace {
+
+// The conformance executable supplies Vellum-owned display widgets so audio
+// fixture emitters can be checked without linking Pulp's audio provider.
+class ConformanceLevelDisplay final : public View, public LevelDisplay {
+  public:
+    void set_levels(float, float) override {}
+    void set_level_orientation(Orientation) override {}
+    void set_level_fill(std::optional<vellum::canvas::Color>,
+                        std::vector<vellum::canvas::Color>) override {}
+    void clear_level_fill() override {}
+    void set_level_bar_ratio(float) override {}
+    void set_level_render_style(WidgetRenderStyle) override {}
+};
+
+class ConformanceSeriesDisplay final : public View, public SeriesDisplay {
+  public:
+    void set_series(const float*, std::size_t) override {}
+    void set_series_preview(std::string_view) override {}
+};
+
+class ConformanceBinDisplay final : public View, public BinDisplay {
+  public:
+    void set_bins(const float*, std::size_t) override {}
+};
+
+/// How many times each stand-in was requested by id. A lane that asked for an
+/// id the registry does not hold gets a placeholder instead, so a stand-in
+/// that no fixture ever instantiates means the id and the emitters disagree.
+std::map<std::string, int>& display_requests() {
+    static std::map<std::string, int> requests;
+    return requests;
+}
+
+std::unique_ptr<View> make_conformance_level_display() {
+    ++display_requests()["pulp.level"];
+    return std::make_unique<ConformanceLevelDisplay>();
+}
+std::unique_ptr<View> make_conformance_series_display() {
+    ++display_requests()["pulp.series"];
+    return std::make_unique<ConformanceSeriesDisplay>();
+}
+std::unique_ptr<View> make_conformance_bin_display() {
+    ++display_requests()["pulp.bins"];
+    return std::make_unique<ConformanceBinDisplay>();
+}
+
+void register_conformance_displays() {
+    register_data_display({"pulp.level", make_conformance_level_display, {}});
+    register_data_display({"pulp.series", make_conformance_series_display, {}});
+    register_data_display({"pulp.bins", make_conformance_bin_display, {}});
+}
 
 // ── projection ──────────────────────────────────────────────────────────────
 
@@ -307,6 +367,10 @@ std::vector<Fixture> fixtures() {
          c::form_controls_08::conformance_build, c::form_controls_08::conformance_bind},
         {"keyed-list-18", dir / "keyed-list-18.ir.json", false, c::keyed_list_18::conformance_build,
          c::keyed_list_18::conformance_bind},
+        {"spectr", dir / "spectr.ir.json", false, c::spectr::conformance_build,
+         c::spectr::conformance_bind},
+        {"kelvin", dir / "kelvin.ir.json", false, c::kelvin::conformance_build,
+         c::kelvin::conformance_bind},
         {"fidelity-scene", root / "fixtures/emitter-conformance/fidelity-scene-no-display.pulp.json", true,
          c::fidelity_scene::conformance_build, c::fidelity_scene::conformance_bind},
     };
@@ -390,7 +454,7 @@ class StagedAssets {
     fs::path dir_;
 };
 
-Rect root_rect(const DesignIR& ir) {
+vellum::view::Rect root_rect(const DesignIR& ir) {
     return {0.0f, 0.0f, ir.root.style.width.value_or(800.0f),
             ir.root.style.height.value_or(600.0f)};
 }
@@ -452,6 +516,9 @@ struct JsRun {
     Projection projection;
     std::vector<std::string> rejected;
     std::set<std::string> attempted_params;
+    /// Every parameter a binding named, parameter or meter: a meter reads a
+    /// parameter, so the bridge accepts it exactly when that parameter exists.
+    std::set<std::string> attempted_sources;
 };
 
 /// Runs the generated ui.js on the bridge. Every parameter in `declared` is
@@ -492,6 +559,7 @@ JsRun run_js_lane(const DesignIR& ir, const fs::path& assets,
                         std::string(list[0] == 'p' ? "param:" : "meter:") + target);
             if (list[0] == 'p')
                 run.attempted_params.insert(target);
+            run.attempted_sources.insert(target);
         }
     }
     const auto rejected = recorded["rejected"];
@@ -501,6 +569,7 @@ JsRun run_js_lane(const DesignIR& ir, const fs::path& assets,
         run.rejected.push_back(list + ":" + std::string(rejected[i][0].toString()) + ":" + target);
         if (list == "params")
             run.attempted_params.insert(target);
+        run.attempted_sources.insert(target);
     }
     return run;
 }
@@ -510,7 +579,7 @@ JsRun run_js_lane(const DesignIR& ir, const fs::path& assets,
 JsRun js_run(const DesignIR& ir, const fs::path& assets,
              const std::set<std::string>& skip = {}) {
     const auto discovery = run_js_lane(ir, assets, {}, {});
-    return run_js_lane(ir, assets, discovery.attempted_params, skip);
+    return run_js_lane(ir, assets, discovery.attempted_sources, skip);
 }
 
 /// The projection of a run in which the bridge accepted every binding.
@@ -662,30 +731,24 @@ std::string describe(const Divergence& d) {
            "', " + d.lane + " '" + d.actual + "'";
 }
 
-/// Audio display widgets need Pulp's view-audio provider, which this audio-free
-/// gate never links, so no fixture it loads may carry one.
-bool has_display_widget(const IRNode& node) {
-    if (node.audio_widget == AudioWidgetType::meter ||
-        node.audio_widget == AudioWidgetType::waveform ||
-        node.audio_widget == AudioWidgetType::spectrum)
-        return true;
-    for (const auto& child : node.children)
-        if (has_display_widget(child))
-            return true;
-    return false;
-}
-
-std::vector<Divergence> all_divergences() {
+/// `compared`, when given, receives "<lane>/<fixture>" for every comparison made,
+/// so a test can prove no emitter or fixture silently dropped out.
+std::vector<Divergence> all_divergences(std::set<std::string>* compared = nullptr) {
     std::vector<Divergence> out;
+    const auto note = [&](const char* lane, const Fixture& fixture) {
+        if (compared)
+            compared->insert(std::string(lane) + "/" + fixture.name);
+    };
     for (const auto& fixture : fixtures()) {
         INFO("fixture " << fixture.name);
         const auto ir = load(fixture);
-        REQUIRE_FALSE(has_display_widget(ir.root));
         const StagedAssets assets(ir);
         const auto native = native_lane(ir, assets.dir());
         REQUIRE_FALSE(native.empty());
+        note("js", fixture);
         for (auto&& d : compare("js", fixture.name, native, js_lane(ir, assets.dir())))
             out.push_back(std::move(d));
+        note("cpp", fixture);
         for (auto&& d : compare("cpp", fixture.name, native, cpp_lane(fixture, ir, assets.dir())))
             out.push_back(std::move(d));
         // SwiftUI compares only the anchors that bind on at least one side.
@@ -693,6 +756,7 @@ std::vector<Divergence> all_divergences() {
         for (const auto& [anchor, fields] : native)
             if (fields.count("binding"))
                 native_bindings[anchor]["binding"] = fields.at("binding");
+        note("swiftui", fixture);
         for (auto&& d :
              compare("swiftui", fixture.name, native_bindings, swift_lane(ir), {"binding"}))
             out.push_back(std::move(d));
@@ -884,6 +948,287 @@ TEST_CASE("ui.js leaves a theme-painted control it has no case for as a plain fr
     }
 }
 
+// A browser-captured fader whose author declared the track static: the panel
+// capture beneath it holds the track, so every lane paints only the cap.
+DesignIR authored_fader_ir(bool static_track, bool captured_cap) {
+    DesignIR ir;
+    ir.root.type = "frame";
+    ir.root.stable_anchor_id = "root";
+    ir.root.style.width = 48.0f;
+    ir.root.style.height = 120.0f;
+    ir.root.style.background_color = "#ffffff";
+    IRNode fader;
+    fader.type = "fader";
+    fader.audio_widget = AudioWidgetType::fader;
+    fader.stable_anchor_id = "fader";
+    fader.style.position = "absolute";
+    fader.style.left = 12.0f;
+    fader.style.top = 16.0f;
+    fader.style.width = 24.0f;
+    fader.style.height = 88.0f;
+    fader.audio_default = 0.5f;
+    fader.attributes["pulpRouteId"] = "route:fader";
+    fader.attributes["designed_body"] = "capture";
+    if (static_track)
+        fader.attributes["fader_body_includes_static_track"] = "1";
+    fader.attributes["design_track"] = "#111111";
+    fader.attributes["design_accent"] = "#222222";
+    fader.attributes["fader_ind_color"] = "#a93d10ff";
+    fader.attributes["captured_raster_dpr"] = "2.000000";
+    fader.attributes["fader_control_natural_w"] = "48";
+    fader.attributes["fader_control_natural_h"] = "176";
+    if (captured_cap) {
+        fader.attributes["fader_indicator_natural_w"] = "40";
+        fader.attributes["fader_indicator_natural_h"] = "24";
+    }
+    ir.root.children.push_back(fader);
+    return ir;
+}
+
+std::vector<std::string> fader_skin_calls(const std::string& js) {
+    std::vector<std::string> calls;
+    std::istringstream lines(js);
+    for (std::string line; std::getline(lines, line);) {
+        const auto at = line.find("setFaderSkin(");
+        if (at != std::string::npos)
+            calls.push_back(line.substr(at));
+    }
+    return calls;
+}
+
+TEST_CASE("authored faders use the designed overlay in every generated lane",
+          "[view][import][emitter-conformance][fader]") {
+  // Both ui.js lanes: the bridge-native emitter and the web-compat DOM
+  // emitter that generated panels use.
+  for (const auto mode : {CodeGenMode::bridge_native_js, CodeGenMode::web_compat}) {
+    INFO((mode == CodeGenMode::web_compat ? "web-compat" : "bridge-native"));
+    CodeGenOptions opts;
+    opts.mode = mode;
+    const auto ir = authored_fader_ir(true, false);
+    const auto js = generate_pulp_js(ir, opts);
+    CHECK(js.find("setDesignedOverlay(") != std::string::npos);
+    // Exactly one skin call: the cap in the isolated thumb colour, with no
+    // track or fill colour, because the capture beneath holds the track.
+    const auto calls = fader_skin_calls(js);
+    REQUIRE(calls.size() == 1);
+    CHECK(std::regex_match(
+        calls[0], std::regex(R"(setFaderSkin\([^,]+, '', '', '#a93d10ff', '', 0, 0, 0, true\);)")));
+    CHECK(js.find("'#111111'") == std::string::npos);
+
+    // Without the static-track declaration a value fill may exist, so every
+    // lane keeps the live track and fill.
+    const auto live = authored_fader_ir(false, false);
+    const auto live_js = generate_pulp_js(live, opts);
+    CHECK(live_js.find("setDesignedOverlay(") == std::string::npos);
+    const auto live_calls = fader_skin_calls(live_js);
+    REQUIRE(!live_calls.empty());
+    CHECK(live_calls[0].find("'#111111', '#222222'") != std::string::npos);
+  }
+
+    const auto ir = authored_fader_ir(true, false);
+    const auto cpp = generate_pulp_cpp(ir, {});
+    CHECK(cpp.source.find("set_designed_overlay(true)") != std::string::npos);
+    CHECK(cpp.source.find("set_skin_thumb_color(vellum::view::Color::rgba8(169, 61, 16, 255))") !=
+          std::string::npos);
+
+    CHECK(generate_pulp_cpp(authored_fader_ir(false, false), {}).source.find("set_designed_overlay(true)") ==
+          std::string::npos);
+}
+
+TEST_CASE("a captured fader cap is sized in layout units in every lane",
+          "[view][import][emitter-conformance][fader]") {
+    // 40x24 device pixels over a 48x176 control drawn in a 24x88 box.
+    auto ir = authored_fader_ir(true, true);
+    CodeGenOptions web;
+    web.mode = CodeGenMode::web_compat;
+    for (const auto& opts : {CodeGenOptions{}, web}) {
+        const auto calls = fader_skin_calls(generate_pulp_js(ir, opts));
+        REQUIRE(calls.size() == 1);
+        CHECK(calls[0].find(", 20, 12, 0, true);") != std::string::npos);
+    }
+    CHECK(generate_pulp_cpp(ir, {}).source.find("set_thumb_size(20.0f, 12.0f)") != std::string::npos);
+    auto root = build_native_view_tree(ir, ir.asset_manifest, {});
+    REQUIRE(root != nullptr);
+    Fader* fader = nullptr;
+    std::function<void(View&)> find = [&](View& v) {
+        if (auto* f = dynamic_cast<Fader*>(&v)) fader = f;
+        for (std::size_t i = 0; i < v.child_count(); ++i) find(*v.child_at(i));
+    };
+    find(*root);
+    REQUIRE(fader != nullptr);
+    CHECK(std::abs(fader->thumb_width() - 20.0f) < 0.01f);
+    CHECK(std::abs(fader->thumb_height() - 12.0f) < 0.01f);
+
+    // Without the control's natural size the capture DPR scales instead.
+    ir.root.children[0].attributes.erase("fader_control_natural_w");
+    ir.root.children[0].attributes.erase("fader_control_natural_h");
+    for (const auto& opts : {CodeGenOptions{}, web}) {
+        const auto dpr_calls = fader_skin_calls(generate_pulp_js(ir, opts));
+        REQUIRE(dpr_calls.size() == 1);
+        CHECK(dpr_calls[0].find(", 20, 12, 0, true);") != std::string::npos);
+    }
+}
+
+/// The bounding box of the pixels within `tolerance` (sum of channel deltas)
+/// of `rgb`, as {x0, y0, x1, y1}, or all -1 when none match.
+std::array<int, 4> colour_bbox(const std::vector<std::uint8_t>& rgba, std::uint32_t width,
+                               std::uint32_t height, std::array<int, 3> rgb, int tolerance) {
+    std::array<int, 4> box{-1, -1, -1, -1};
+    for (std::uint32_t y = 0; y < height; ++y)
+        for (std::uint32_t x = 0; x < width; ++x) {
+            const auto* p = &rgba[(static_cast<std::size_t>(y) * width + x) * 4];
+            if (std::abs(p[0] - rgb[0]) + std::abs(p[1] - rgb[1]) + std::abs(p[2] - rgb[2]) >
+                tolerance)
+                continue;
+            if (box[0] < 0) box = {static_cast<int>(x), static_cast<int>(y), static_cast<int>(x),
+                                   static_cast<int>(y)};
+            box[0] = std::min(box[0], static_cast<int>(x));
+            box[1] = std::min(box[1], static_cast<int>(y));
+            box[2] = std::max(box[2], static_cast<int>(x));
+            box[3] = std::max(box[3], static_cast<int>(y));
+        }
+    return box;
+}
+
+TEST_CASE("a generated script paints the same authored fader cap as the native lane",
+          "[view][import][emitter-conformance][fader][render]") {
+    if (!raw_rgba_render_available())
+        return;
+    for (const auto mode : {CodeGenMode::bridge_native_js, CodeGenMode::web_compat})
+    for (const bool captured_cap : {false, true}) {
+        INFO((mode == CodeGenMode::web_compat ? "web-compat" : "bridge-native"));
+        INFO((captured_cap ? "captured cap geometry" : "no captured cap geometry"));
+        CodeGenOptions codegen;
+        codegen.mode = mode;
+        const auto ir = authored_fader_ir(true, captured_cap);
+        auto native = build_native_view_tree(ir, ir.asset_manifest, {});
+        REQUIRE(native != nullptr);
+        std::uint32_t w = 0, h = 0;
+        const auto native_rgba = render_to_rgba(*native, 48, 120, 1.0f, &w, &h);
+        REQUIRE((w == 48 && h == 120));
+
+        View root;
+        root.set_bounds({0.0f, 0.0f, 48.0f, 120.0f});
+        vellum::state::StateStore store;
+        ScriptedUiOptions options;
+        options.script_source = generate_pulp_js(ir, codegen);
+        options.script_name = "fader.ui.js";
+        options.enable_hot_reload = false;
+        options.enable_theme_reload = false;
+        ScriptedUiSession session(root, store, options);
+        std::string error;
+        REQUIRE(session.load(&error));
+        INFO(error);
+        root.layout_children();
+        const auto script_rgba = render_to_rgba(root, 48, 120, 1.0f, &w, &h);
+        REQUIRE((w == 48 && h == 120));
+
+        // The cap is the only pixels in the isolated thumb colour (#a93d10).
+        const auto native_cap = colour_bbox(native_rgba, 48, 120, {169, 61, 16}, 24);
+        const auto script_cap = colour_bbox(script_rgba, 48, 120, {169, 61, 16}, 24);
+        INFO("native cap " << native_cap[0] << "," << native_cap[1] << " - " << native_cap[2]
+                           << "," << native_cap[3]);
+        INFO("script cap " << script_cap[0] << "," << script_cap[1] << " - " << script_cap[2]
+                           << "," << script_cap[3]);
+        REQUIRE(native_cap[0] >= 0);
+        REQUIRE(script_cap[0] >= 0);
+        for (int i = 0; i < 4; ++i)
+            CHECK(std::abs(native_cap[i] - script_cap[i]) <= 1);
+        // A flat slab, not the stock 0.62 pill: about 0.85 of the 24px slot
+        // without captured geometry, the captured 20x12 with it.
+        const int cap_w = native_cap[2] - native_cap[0] + 1;
+        const int cap_h = native_cap[3] - native_cap[1] + 1;
+        CHECK(cap_w >= 19);
+        CHECK(cap_w <= 22);
+        CHECK(cap_h >= 11);
+        CHECK(cap_h <= 14);
+        // No track or fill in either lane: the centre column above and below
+        // the cap stays the panel colour.
+        for (const auto* rgba : {&native_rgba, &script_rgba}) {
+            for (int y = 20; y < 100; ++y) {
+                if (y >= native_cap[1] - 1 && y <= native_cap[3] + 1)
+                    continue;
+                const auto* p = &(*rgba)[(static_cast<std::size_t>(y) * 48 + 24) * 4];
+                CHECK((p[0] > 240 && p[1] > 240 && p[2] > 240));
+            }
+        }
+    }
+}
+
+/// Fraction of pixels whose largest channel difference exceeds `threshold`.
+double mismatch_fraction(const std::vector<std::uint8_t>& a, const std::vector<std::uint8_t>& b,
+                         int threshold) {
+    REQUIRE(a.size() == b.size());
+    std::size_t differ = 0;
+    for (std::size_t i = 0; i + 3 < a.size(); i += 4) {
+        int worst = 0;
+        for (std::size_t c = 0; c < 3; ++c)
+            worst = std::max(worst, std::abs(int(a[i + c]) - int(b[i + c])));
+        if (worst > threshold) ++differ;
+    }
+    return a.empty() ? 1.0 : double(differ) / double(a.size() / 4);
+}
+
+std::vector<std::uint8_t> render_ir(const DesignIR& ir, float width, float height, float scale) {
+    auto root = build_native_view_tree(ir, ir.asset_manifest, {});
+    REQUIRE(root != nullptr);
+    std::uint32_t w = 0, h = 0;
+    auto rgba = render_to_rgba(*root, static_cast<std::uint32_t>(width),
+                               static_cast<std::uint32_t>(height), scale, &w, &h);
+    REQUIRE(w == static_cast<std::uint32_t>(std::lround(width * scale)));
+    REQUIRE(h == static_cast<std::uint32_t>(std::lround(height * scale)));
+    return rgba;
+}
+
+// Per-fader crops of real browser-capture panels: the static capture beneath
+// the control plus its persisted fader node, against Chromium's own rendering
+// of the same box. The native cap may differ from the authored cap only in
+// detail a flat slab cannot carry (an inner rule, a gradient); a stock track,
+// fill or pill cap differs far more. The negative control renders the same
+// crop with the static-track declaration removed, which restores the live
+// stock track and fill, and must exceed the tolerance, so a pass is not the
+// metric failing to see the defect.
+TEST_CASE("authored faders render close to their browser capture",
+          "[view][import][emitter-conformance][fader][render]") {
+    if (!raw_rgba_render_available())
+        return;
+    const auto doc = choc::json::parse(
+        read_file(fs::path(VELLUM_REPO_ROOT) / "fixtures/emitter-conformance/authored-faders.json"));
+    const int threshold = doc["channel_threshold"].getWithDefault<int>(8);
+    const double tolerance = doc["max_mismatch_fraction"].getWithDefault<double>(0.0);
+    REQUIRE(tolerance > 0.0);
+    const auto cases = doc["cases"];
+    REQUIRE(cases.size() >= 4);
+    for (uint32_t i = 0; i < cases.size(); ++i) {
+        const auto entry = cases[i];
+        const std::string name(entry["name"].toString());
+        INFO(name);
+        const float width = entry["width"].getWithDefault<float>(0.0f);
+        const float height = entry["height"].getWithDefault<float>(0.0f);
+        const float scale = entry["scale"].getWithDefault<float>(2.0f);
+        const double limit = entry["max_mismatch_fraction"].getWithDefault<double>(tolerance);
+        const auto panel = parse_design_ir_json(choc::json::toString(entry["panel"]));
+        const auto browser = parse_design_ir_json(choc::json::toString(entry["browser"]));
+        const auto truth = render_ir(browser, width, height, scale);
+        const auto native = render_ir(panel, width, height, scale);
+        // Instrument control: the browser crop and the bare static crop are
+        // different images, so a renderer that dropped either reads as a gap.
+        auto bare = panel;
+        bare.root.children.clear();
+        CHECK(mismatch_fraction(truth, render_ir(bare, width, height, scale), threshold) > 0.01);
+
+        const double residual = mismatch_fraction(truth, native, threshold);
+        auto live = panel;
+        REQUIRE(live.root.children.size() == 1);
+        live.root.children[0].attributes.erase("fader_body_includes_static_track");
+        const double defect = mismatch_fraction(truth, render_ir(live, width, height, scale), threshold);
+        std::printf("    %s: cap-only residual %.2f%%, live-track control %.2f%%, tolerance %.2f%%\n",
+                    name.c_str(), residual * 100.0, defect * 100.0, limit * 100.0);
+        CHECK(residual <= limit);
+        CHECK(defect > limit);
+    }
+}
+
 TEST_CASE("staged assets never write outside the staging directory",
           "[view][import][emitter-conformance]") {
     CHECK(is_contained_relative("images/a.png"));
@@ -906,12 +1251,64 @@ TEST_CASE("staged assets never write outside the staging directory",
     CHECK_FALSE(fs::exists(escaped));
 }
 
+TEST_CASE("every generated fixture is compared, by exact name", "[emitter-conformance]") {
+    std::set<std::string> compared;
+    for (const auto& fixture : fixtures())
+        compared.insert(fixture.name);
+    CHECK(compared ==
+          std::set<std::string>{"form-controls-08", "spectr", "kelvin", "keyed-list-18",
+                                "fidelity-scene"});
+
+    // The build's generated set (one stem per CMake row) must equal the
+    // compared set, so a fixture that is generated and linked but never
+    // listed, or listed but not generated, fails here.
+    std::set<std::string> generated;
+    std::stringstream stems(VELLUM_CONFORMANCE_STEMS);
+    for (std::string stem; std::getline(stems, stem, ',');) {
+        std::replace(stem.begin(), stem.end(), '_', '-');
+        generated.insert(stem);
+    }
+    CHECK(generated == compared);
+    CHECK(fixtures().back().name == "fidelity-scene");
+}
+
+TEST_CASE("every emitter lane is compared for every fixture", "[emitter-conformance]") {
+    std::set<std::string> compared;
+    (void)all_divergences(&compared);
+    std::set<std::string> expected;
+    for (const char* lane : {"js", "cpp", "swiftui"})
+        for (const char* fixture :
+             {"form-controls-08", "spectr", "kelvin", "keyed-list-18", "fidelity-scene"})
+            expected.insert(std::string(lane) + "/" + fixture);
+    CHECK(compared == expected);
+}
+
+TEST_CASE("the display stand-ins are reached through the ids the emitters use",
+          "[emitter-conformance]") {
+    // Every lane builds displays through make_data_display(<id>). A stand-in
+    // that no fixture requests means the importer names an id the registry
+    // does not hold, or no fixture carries that display; either way the gate
+    // cannot see a mismatch for it. The fixtures reach the level display only;
+    // the series and bin stand-ins stay registered but are not exercised.
+    display_requests().clear();
+    for (const auto& fixture : fixtures()) {
+        const auto ir = load(fixture);
+        const StagedAssets assets(ir);
+        (void)native_lane(ir, assets.dir());
+    }
+    CHECK(display_requests()["pulp.level"] > 0);
+    std::set<std::string> requested;
+    for (const auto& [id, count] : display_requests())
+        if (count > 0)
+            requested.insert(id);
+    CHECK(requested == std::set<std::string>{"pulp.level"});
+}
+
 TEST_CASE("the JS lane records only bindings the bridge accepted, and a rejected one is reported",
           "[emitter-conformance]") {
     const auto fixture = fixtures().back();
     REQUIRE(fixture.name == "fidelity-scene");
     const auto ir = load(fixture);
-    REQUIRE_FALSE(has_display_widget(ir.root));
     const StagedAssets assets(ir);
 
     const auto run = js_run(ir, assets.dir());
@@ -979,4 +1376,7 @@ TEST_CASE("the conformance comparison reports planted divergences",
     }
 }
 
-int main() { return mini_test::run_all(); }
+int main() {
+    register_conformance_displays();
+    return mini_test::run_all();
+}

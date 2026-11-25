@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-1be630664b681c18dc9095f17060e7030e340ce5",
+  "kind": "resolution",
+  "created_at": "2026-11-24T13:43:01Z",
+  "resolves": "vellum-1be630664b681c18dc9095f17060e7030e340ce5",
+  "disposition": "port-required",
+  "rationale": "Offline .fig decoder import. The decoder files are Pulp's tools/import-design/fig/*.mjs and fig_decode.mjs at d4bf36a8 (tests from 9fa7e5cb): all eight pulp_sha256 values in provenance/importers/fig-decode.json match those Pulp blobs, and both commits are ancestors of Pulp main. The backend glue (backend-source.js, fig-file/import.js, index.js) is Vellum-native. One Vellum addition is missing from Pulp: container.mjs resolves zlib.zstdDecompressSync lazily and reports that zstd needs Node 22.15, while Pulp's container.mjs imports zstdDecompressSync by name, so on Node 22.0-22.14 the module fails to load even for deflate-only files. Debt to port: the lazy zstd lookup and its error in tools/import-design/fig/container.mjs. Evidence, Pulp main b0ee92d21944d5c956603afd1108b575e50c1302 (full clone): [absent] `git -C <pulp> grep -c -F -e 'typeof zlib.zstdDecompressSync' b0ee92d21944 -- tools/import-design/fig` = 0; [present] `git -C <pulp> grep -c -F -e 'import { inflateRawSync, zstdDecompressSync } from 'node:zlib'' b0ee92d21944 -- tools/import-design/fig/container.mjs` = 1; [absent] `git -C <pulp> grep -c -F -e 'decodeFigSource' b0ee92d21944 -- tools/import-design core` = 0; [control] `git -C <pulp> grep -c -F -e 'export function unpackFig' b0ee92d21944 -- tools/import-design/fig` = 1. [control] searches show the instrument finds the nearest Pulp counterpart. Classified by the Vellum lead under the owner's one-time delegation of 2026-11-24 (pulp-planning vellum-move/DECISIONS.md); any later resolution overrides it.",
+  "owner": "@vellum-lead",
+  "linked_commits": [
+    "1be630664b681c18dc9095f17060e7030e340ce5",
+    "9fa7e5cbd3343fcaea1b0f355dda4a05a1593f6a",
+    "d4bf36a8e0055edbf2146605cc3995d32813917e"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}

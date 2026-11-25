@@ -93,6 +93,8 @@ bool yield_to_gesture_with_handoff(View& root, View*& drag_target,
 /// of truth; the process-global focus shim is never consulted.
 bool transfer_input_focus(View& root, View* target);
 
+bool transfer_input_focus(View& root, View* target, FocusCause cause);
+
 /// Return this root's live focused input. Uses RootInteractionState rather than
 /// the process-global compatibility shim.
 View* focused_input_under_root(View& root);

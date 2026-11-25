@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-72949c8955a6bad3c4af9c658e76e079f103b22d",
+  "kind": "resolution",
+  "created_at": "2026-11-24T13:43:02Z",
+  "resolves": "vellum-72949c8955a6bad3c4af9c658e76e079f103b22d",
+  "disposition": "port-required",
+  "rationale": "Fixes three defects in the ported decoder. The ./fig/ import path fix is Vellum's own layout and does not apply to Pulp. The other two are in Pulp's origin files: fonts.mjs still accepts any stem that starts with the family (RobotoCondensed stands in for Roboto), and scene.mjs still rounds font_size (12.5 renders as 13). Debt to port: familyMatchesStem with its weight/style suffix rule into tools/import-design/fig/fonts.mjs, and two-decimal font sizes in tools/import-design/fig/scene.mjs materializeFrame. Evidence, Pulp main b0ee92d21944d5c956603afd1108b575e50c1302 (full clone): [present] `git -C <pulp> grep -c -F -e 'if (stem.startsWith(want)) return true;' b0ee92d21944 -- tools/import-design/fig/fonts.mjs` = 1; [present] `git -C <pulp> grep -c -F -e 'out.font_size = Math.round(fs)' b0ee92d21944 -- tools/import-design/fig/scene.mjs` = 1; [absent] `git -C <pulp> grep -c -F -e 'familyMatchesStem' b0ee92d21944 -- tools/import-design` = 0; [control] `git -C <pulp> grep -c -F -e 'export function isFontAvailable' b0ee92d21944 -- tools/import-design/fig/fonts.mjs` = 1. [control] searches show the instrument finds the nearest Pulp counterpart. Classified by the Vellum lead under the owner's one-time delegation of 2026-11-24 (pulp-planning vellum-move/DECISIONS.md); any later resolution overrides it.",
+  "owner": "@vellum-lead",
+  "linked_commits": [
+    "72949c8955a6bad3c4af9c658e76e079f103b22d"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}

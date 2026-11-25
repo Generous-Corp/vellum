@@ -47,6 +47,13 @@ enum class RuntimeViewKind : std::uint8_t {
     generic, knob, fader, toggle, scroll, eq_curve, design_frame
 };
 
+/// Why a view gained or lost focus.
+enum class FocusCause : std::uint8_t {
+    pointer,
+    keyboard,
+    programmatic,
+};
+
 /// Identity-safe reference to a View captured across native event boundaries.
 /// Capturing records the root and current structure generation while the View
 /// is known-live. `live_in()` is therefore O(1) until a detach invalidates that
@@ -478,6 +485,25 @@ public:
     /// Called when this view gains or loses focus.
     /// Default implementation updates has_focus_ state. Subclasses should call base.
     virtual void on_focus_changed(bool gained) { has_focus_ = gained; }
+
+    virtual void on_focus_changed(bool gained, FocusCause cause) {
+        focus_cause_ = cause;
+        focus_visible_ = gained && cause != FocusCause::pointer;
+        on_focus_changed(gained);
+    }
+
+    virtual void on_descendant_focus_changed(View& child, bool gained, FocusCause cause) {
+        (void)child;
+        (void)gained;
+        (void)cause;
+    }
+
+    FocusCause focus_cause() const { return focus_cause_; }
+    bool focus_visible() const { return has_focus_ && focus_visible_; }
+    bool focus_within() const;
+
+    std::function<void(bool gained, FocusCause cause)> on_focus_event;
+    std::function<void(View& child, bool gained, FocusCause cause)> on_descendant_focus_event;
 
     /// Gesture event (pinch/rotate from multi-touch or trackpad).
     virtual void on_gesture_event(const GestureEvent& event) {
@@ -3081,6 +3107,8 @@ private:
     /// unmarked paint mutation (the repaint requests use it: they mark).
     void stale_subtree_caches_up();
     bool has_focus_ = false;
+    bool focus_visible_ = false;
+    FocusCause focus_cause_ = FocusCause::programmatic;
     // WidgetBridge may lend the root focus slot to a materialized document
     // while that document has an explicit, bounded navigation interaction.
     // This is intentionally private: ordinary roots must never become general

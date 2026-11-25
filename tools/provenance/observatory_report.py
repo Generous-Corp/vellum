@@ -58,6 +58,25 @@ def activation_blockers(root: Path, lock: dict[str, object]) -> list[str]:
     return sorted(set(blockers))
 
 
+def counts_as_recent_fix(
+    event: dict[str, object], budgets: dict[str, int], now: dt.datetime | None
+) -> bool:
+    """Whether a port-required or ported event falls inside the repeated-fix window.
+
+    The budget looks for a burst of fixes to one contract, so an event counts
+    from the time it was classified (its latest resolution, else its discovery)
+    for `repeated_generic_fix_window_days`. The window's start is inclusive and
+    it has no end, so an event stamped after `now` still counts. Without the
+    budget key, or without a time to judge at, every event counts.
+    """
+    window = budgets.get("repeated_generic_fix_window_days")
+    if window is None or now is None:
+        return True
+    stamp = event.get("resolved_at", event["discovered_at"])
+    classified = parse_utc(stamp, "event.resolved_at")
+    return classified >= now - dt.timedelta(days=window)
+
+
 def build_report(
     *,
     root: Path,
@@ -90,6 +109,16 @@ def build_report(
     repeat_counts: dict[str, int] = {}
     for event in effective:
         if event["disposition"] not in {"port-required", "ported"}:
+            continue
+        # Windowed reports count independent Pulp fixes. Legacy reports without
+        # a window or judgment time retain their count across both directions.
+        if (
+            budgets.get("repeated_generic_fix_window_days") is not None
+            and now is not None
+            and event["direction"] != "Pulp-to-framework"
+        ):
+            continue
+        if not counts_as_recent_fix(event, budgets, now):
             continue
         for key in event["contract_keys"]:
             repeat_counts[str(key)] = repeat_counts.get(str(key), 0) + 1

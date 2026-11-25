@@ -324,7 +324,7 @@ void ComboBox::open_dropdown() {
     // path to blur the previous owner. Use the same root-scoped transfer
     // protocol: a focused TextEditor commits exactly once before navigation
     // focus moves to this menu, and re-entrant unmount fails closed.
-    if (!transfer_input_focus(*root, this)) return;
+    if (!transfer_input_focus(*root, this, FocusCause::programmatic)) return;
     set_overflow(Overflow::visible);
     open_ = true;
     hover_index_ = selected_;  // highlight the current selection on open so

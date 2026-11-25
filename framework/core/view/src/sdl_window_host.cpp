@@ -543,7 +543,7 @@ private:
         pointer_capture_.set(target);
         if (target) ComboBox::notify_global_click(target);
         target = pointer_capture_.live_in(root_);
-        if (!target || !transfer_input_focus(root_, target)) {
+        if (!target || !transfer_input_focus(root_, target, FocusCause::pointer)) {
             pointer_capture_.reset();
             return;
         }

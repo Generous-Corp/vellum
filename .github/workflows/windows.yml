@@ -5,12 +5,12 @@ name: Windows
 # Windows x64 and ARM64, and runs the tests that configuration registers.
 #
 # What this lane does not build: framework/. The framework is compiled only
-# through the landed mirror, whose closures record the Darwin arm64
-# configuration (tools/mirror/VellumMirror.cmake refuses any other), and
-# gpu-runtime's Dawn device, whose renderer lock names macOS only. A Windows
-# framework build needs a Windows closure and a Windows renderer lock entry
-# first. So the mirror and the GPU backend are off here, and the configure
-# check below fails if either turns on silently.
+# through the landed mirror and gpu-runtime's Dawn device. The mirror accepts a
+# Windows target from its platform closure record
+# (provenance/framework/platforms/windows-x64), but the renderer lock still names
+# macOS only, so there is no Skia/Dawn archive to link and the module stops at
+# that requirement. So the mirror and the GPU backend are off here, and the
+# configure check below fails if either turns on silently.
 #
 # Tests: every registered test not run by the Python interpreter (the C++
 # binaries and the CMake install-consumer scripts) must pass, and a named set

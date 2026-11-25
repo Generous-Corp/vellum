@@ -155,6 +155,28 @@ static IndicatorColorSelection select_indicator_color(
     return {};
 }
 
+// The cap of a fader over a static captured track, as one setFaderSkin call.
+// Track and fill stay empty because the capture beneath holds them; the cap
+// colour is the isolated per-control thumb colour, else the design accent,
+// the same precedence the native materializer applies. Its size comes from
+// the shared captured-cap helper, or zeros for the widget's authored default.
+static void emit_fader_cap_skin(std::ostringstream& ss, const std::string& ind,
+                                const std::string& id_expr, const IRNode& node) {
+    std::string thumb;
+    if (const auto it = node.attributes.find("fader_ind_color");
+        it != node.attributes.end() && css_color_syntax_supported(it->second))
+        thumb = it->second;
+    else if (const auto accent = node.attributes.find("design_accent");
+             accent != node.attributes.end() && css_color_syntax_supported(accent->second))
+        thumb = accent->second;
+    const auto cap = captured_fader_cap_size(node);
+    ss << ind << "setFaderSkin(" << id_expr << ", '', '', '"
+       << js_single_quote_escape(thumb) << "', '', "
+       << (cap ? cap->width : 0.0f) << ", " << (cap ? cap->height : 0.0f) << ", "
+       << finite_numeric_attribute(node, "fader_thumb_corner_radius", 0.0)
+       << ", true);\n";
+}
+
 static bool captured_line_decision_usable(const IRNode& node) {
     // Validate only source-owned structure here. Generated bundles register
     // their packaged fonts at runtime before constructing labels, so the
@@ -510,7 +532,8 @@ static void generate_node(std::ostringstream& ss, const IRNode& node,
                     node.attributes.find("fader_indicator_asset_path");
                 if (body != node.attributes.end() &&
                     indicator != node.attributes.end()) {
-                    ss << ind << "setFaderCapturedArt(" << var << "._id, '"
+                    ss << ind << "if (typeof setFaderCapturedArt === 'function') {\n";
+                    ss << ind << "  setFaderCapturedArt(" << var << "._id, '"
                        << js_single_quote_escape(body->second) << "', "
                        << finite_numeric_attribute(node, "fader_body_natural_w", 0.0)
                        << ", "
@@ -535,6 +558,7 @@ static void generate_node(std::ostringstream& ss, const IRNode& node,
                        << (attr_bool(node, "fader_body_includes_static_track")
                                ? "true" : "false")
                        << ");\n";
+                    ss << ind << "}\n";
                 }
             }
 
@@ -551,8 +575,9 @@ static void generate_node(std::ostringstream& ss, const IRNode& node,
                 };
                 const auto indicator = select_indicator_color(
                     node, "fader_ind_color");
-                if (!color("design_track").empty() ||
-                    !color("design_accent").empty() || !indicator.color.empty()) {
+                if (!(browser_control_overlay && fader_cap_over_static_capture(node)) &&
+                    (!color("design_track").empty() ||
+                     !color("design_accent").empty() || !indicator.color.empty())) {
                     ss << ind << "setFaderSkin(" << var << "._id, '"
                        << color("design_track") << "', '"
                        << color("design_accent") << "', '"
@@ -608,11 +633,17 @@ static void generate_node(std::ostringstream& ss, const IRNode& node,
                 ss << ind << "setAccentColor(" << var << "._id, '"
                    << js_single_quote_escape(accent->second) << "');\n";
             }
-            if (browser_control_overlay &&
-                (node.audio_widget == AudioWidgetType::toggle ||
-                 node.audio_widget == AudioWidgetType::stepper ||
-                 node.audio_widget == AudioWidgetType::selector))
+            const bool fader_cap_only = browser_control_overlay &&
+                node.audio_widget == AudioWidgetType::fader &&
+                fader_cap_over_static_capture(node);
+            if (fader_cap_only ||
+                (browser_control_overlay &&
+                 (node.audio_widget == AudioWidgetType::toggle ||
+                  node.audio_widget == AudioWidgetType::stepper ||
+                  node.audio_widget == AudioWidgetType::selector)))
                 ss << ind << "setDesignedOverlay(" << var << "._id, true);\n";
+            if (fader_cap_only)
+                emit_fader_cap_skin(ss, ind, var + "._id", node);
             emit_js_param_binding(ss, ind, var + "._id", node);
 
             // Same anchor contract as every non-widget node below: the
@@ -640,10 +671,17 @@ static void generate_node(std::ostringstream& ss, const IRNode& node,
     ss << ind << "const " << var << " = document.createElement('" << tag << "');\n";
 
     // Apply layout styles for container nodes
+    // The web-compat runtime lays out flex only, so a row-flow grid with
+    // several column tracks is approximated by wrapped flex rows. Lowered as a
+    // plain flex row, its fixed cells overflow instead of forming rows.
+    const auto& L = node.layout;
+    const bool grid_rows = L.display && *L.display == "grid" && L.grid_template_columns &&
+                           GridStyle::parse_template(*L.grid_template_columns).size() > 1 &&
+                           (!L.grid_auto_flow || L.grid_auto_flow->rfind("row", 0) == 0);
     if (!node.children.empty() || node.type == "frame") {
         ss << ind << var << ".style.display = 'flex';\n";
         ss << ind << var << ".style.flexDirection = '"
-           << (node.layout.direction == LayoutDirection::row ? "row" : "column") << "';\n";
+           << (grid_rows || L.direction == LayoutDirection::row ? "row" : "column") << "';\n";
 
         if (node.layout.gap > 0)
             ss << ind << var << ".style.gap = '" << format_px(node.layout.gap) << "';\n";
@@ -669,7 +707,7 @@ static void generate_node(std::ostringstream& ss, const IRNode& node,
             ss << ind << var << ".style.justifyContent = '" << align_to_css(node.layout.justify) << "';\n";
         if (node.layout.align != LayoutAlign::stretch)
             ss << ind << var << ".style.alignItems = '" << align_to_css(node.layout.align) << "';\n";
-        if (node.layout.wrap)
+        if (grid_rows || node.layout.wrap)
             ss << ind << var << ".style.flexWrap = 'wrap';\n";
 
         // Sizing
@@ -1305,6 +1343,8 @@ static void emit_js_audio_widget(const NativeEmit& e) {
         designed_body != node.attributes.end() &&
         (designed_body->second == "underlay" ||
          designed_body->second == "capture");
+    const bool fader_cap_only = browser_control_overlay &&
+        wtype == AudioWidgetType::fader && fader_cap_over_static_capture(node);
 
     // Extract label text, value text, and stroke color from child nodes
     std::string label_text = node.audio_label;
@@ -1608,9 +1648,11 @@ static void emit_js_audio_widget(const NativeEmit& e) {
             if (fc_it != node.attributes.end()) {
                 try { frames = std::max(1, std::stoi(fc_it->second)); } catch (...) {}
             }
-            ss << ind << "setKnobSpriteStrip('" << id << "', '"
+            ss << ind << "if (typeof setKnobSpriteStrip === 'function') {\n";
+            ss << ind << "  setKnobSpriteStrip('" << id << "', '"
                << js_single_quote_escape(skin_it->second) << "', "
                << frames << ", 'vertical');\n";
+            ss << ind << "}\n";
             // Core-fit: when the importer recovered the body art's opaque
             // core (single-frame sprite bodies only), pass it so the engine
             // scales the disc to fill the knob box (shadow bleed extends
@@ -1726,7 +1768,8 @@ static void emit_js_audio_widget(const NativeEmit& e) {
             body != node.attributes.end()) {
             const auto indicator = node.attributes.find("fader_indicator_asset_path");
             if (indicator != node.attributes.end()) {
-                ss << ind << "setFaderCapturedArt('" << id << "', '"
+                ss << ind << "if (typeof setFaderCapturedArt === 'function') {\n";
+                ss << ind << "  setFaderCapturedArt('" << id << "', '"
                    << js_single_quote_escape(body->second) << "', "
                    << finite_numeric_attribute(node, "fader_body_natural_w", 0.0)
                    << ", "
@@ -1751,6 +1794,7 @@ static void emit_js_audio_widget(const NativeEmit& e) {
                    << (attr_bool(node, "fader_body_includes_static_track")
                            ? "true" : "false")
                    << ");\n";
+                ss << ind << "}\n";
             }
         }
         // Panel/design colours are fallbacks. Emit them before pixel-derived
@@ -1764,7 +1808,7 @@ static void emit_js_audio_widget(const NativeEmit& e) {
             const std::string track = attr("design_track");
             const std::string fill = attr("design_accent");
             const std::string thumb = attr("design_indicator");
-            if (!track.empty() || !fill.empty() || !thumb.empty()) {
+            if (!fader_cap_only && (!track.empty() || !fill.empty() || !thumb.empty())) {
                 ss << ind << "setFaderSkin('" << id << "', '"
                    << js_single_quote_escape(track) << "', '"
                    << js_single_quote_escape(fill) << "', '"
@@ -1777,7 +1821,7 @@ static void emit_js_audio_widget(const NativeEmit& e) {
         // the native fader renders the captured look while the thumb still
         // moves with setValue(). No per-instance hardcoding: every value
         // comes from node.attributes stamped by the sampler.
-        if (opts.skin_faders) {
+        if (opts.skin_faders && !fader_cap_only) {
             auto attr = [&](const char* k) -> std::string {
                 auto it = node.attributes.find(k);
                 return it != node.attributes.end() ? it->second : std::string();
@@ -1810,7 +1854,7 @@ static void emit_js_audio_widget(const NativeEmit& e) {
         // it last so it wins over both panel fallback and sampled per-control skin,
         // independently of captured-art path survival.
         if (const auto thumb = node.attributes.find("fader_ind_color");
-            thumb != node.attributes.end() && !thumb->second.empty()) {
+            !fader_cap_only && thumb != node.attributes.end() && !thumb->second.empty()) {
             ss << ind << "setFaderSkin('" << id << "', '', '', '"
                << js_single_quote_escape(thumb->second)
                << "', '', 0, 0, 0, true);\n";
@@ -2002,11 +2046,14 @@ static void emit_js_audio_widget(const NativeEmit& e) {
     // read as disabled came out indistinguishable from a live one.
     if (!needs_label_wrapper) emit_js_absolute_position(e, id);
     emit_js_visual_overrides(e, id);
-    if (browser_control_overlay &&
-        (wtype == AudioWidgetType::toggle ||
-         wtype == AudioWidgetType::stepper ||
-         wtype == AudioWidgetType::selector))
+    if (fader_cap_only ||
+        (browser_control_overlay &&
+         (wtype == AudioWidgetType::toggle ||
+          wtype == AudioWidgetType::stepper ||
+          wtype == AudioWidgetType::selector)))
         ss << ind << "setDesignedOverlay('" << id << "', true);\n";
+    if (fader_cap_only)
+        emit_fader_cap_skin(ss, ind, "'" + id + "'", node);
     // The binding is the reason an audio widget exists, and this arm did not
     // emit one. It printed the parameter's name in the grey sub-stack above
     // instead, which reads as wiring and is a caption.
@@ -2164,8 +2211,10 @@ static void emit_js_image_node(const NativeEmit& e) {
            << js_single_quote_escape(*node.style.object_fit) << "');\n";
     auto it = node.attributes.find("asset_path");
     if (it != node.attributes.end() && !it->second.empty()) {
-        ss << ind << "setImageSource('" << id << "', '"
+        ss << ind << "if (typeof setImageSource === 'function') {\n";
+        ss << ind << "  setImageSource('" << id << "', '"
            << js_single_quote_escape(it->second) << "');\n";
+        ss << ind << "}\n";
     }
     // Sprite sizing. A captured sprite (knob graphic, etc.) is exported as
     // a PNG that bleeds well past its layout box: the solid art sits in
