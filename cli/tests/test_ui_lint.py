@@ -161,6 +161,26 @@ export function Docs() {
         self.assertEqual([f["line"] for f in report["findings"]
                           if f["code"] == "literal-color"], [2, 3], report)
 
+    def test_declarations_in_comments_and_strings_are_not_components(self):
+        report = self._report(
+            """// function Div_123() {}
+export function Docs() {
+  const s = "function Div_9(";
+  return <p data-pulp-action="d">{s}</p>;
+}
+"""
+        )
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(report["components"], 1)
+
+    def test_same_line_apostrophe_does_not_hide_click_target(self):
+        report = self._report(
+            "export function Live() {\n"
+            "  return <><p>don't</p><div onClick={() => 1}>x</div></>;\n"
+            "}\n"
+        )
+        self.assertIn("nonsemantic-click-target", {f["code"] for f in report["findings"]})
+
     def test_real_violations_still_fire_beside_masked_text(self):
         report = self._report(
             """// Math.random() in a comment is fine

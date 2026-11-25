@@ -294,6 +294,11 @@ def _mask_non_markup_regions(text: str, *, strings: bool = True) -> str:
         if text[index] not in "'\"`":
             index += 1
             continue
+        if text[index] == "'" and index > 0 and (text[index - 1].isalnum() or text[index - 1] == "_"):
+            # An apostrophe after a word character ("don't" in JSX text) is
+            # prose, not the start of a JavaScript string.
+            index += 1
+            continue
 
         quote = text[index]
         end = index + 1
@@ -419,10 +424,12 @@ def lint_source(root: Path, *, enforce_size: bool = False, max_component_lines: 
         except UnicodeDecodeError:
             findings.append(Finding("invalid-utf8", rel, 1, "source file is not valid UTF-8"))
             continue
+        code_text = _mask_non_markup_regions(text, strings=False)
+        bare_text = _mask_non_markup_regions(text)
         # Generic component/file names lose semantic identity on re-import.
         if GENERIC_NAME.search(path.stem):
             findings.append(Finding("generic-name", rel, 1, "file name is positional or generic"))
-        for match in COMPONENT_DECL.finditer(text):
+        for match in COMPONENT_DECL.finditer(bare_text):
             component_count += 1
             if GENERIC_NAME.search(match.group(1)):
                 findings.append(Finding("generic-name", rel, _line_for(text, match.start(1)),
@@ -430,8 +437,6 @@ def lint_source(root: Path, *, enforce_size: bool = False, max_component_lines: 
         # Semantic scans must not fire on comments or quoted prose. Colour and
         # style values live inside quotes, so those scans mask comments only;
         # offsets are preserved so line numbers still come from ``text``.
-        code_text = _mask_non_markup_regions(text, strings=False)
-        bare_text = _mask_non_markup_regions(text)
         # Static inline styles are importer output; dynamic values are allowed.
         for match in STATIC_STYLE.finditer(code_text):
             if bare_text[match.start()] != "s":
@@ -484,14 +489,14 @@ def lint_source(root: Path, *, enforce_size: bool = False, max_component_lines: 
                 f"complete JSX subtree occurs {count} times across lines: {signature[:80]}"))
         if enforce_size:
             lines = text.count("\n") + 1
-            for match in COMPONENT_DECL.finditer(text):
+            for match in COMPONENT_DECL.finditer(bare_text):
                 # Conservative file-level accounting is preferable to claiming
                 # precise brace parsing; split large files before enabling this.
                 if lines > max_component_lines:
                     findings.append(Finding("component-size", rel, _line_for(text, match.start()),
                                             f"component file exceeds {max_component_lines} lines"))
                     break
-            for match in FUNCTION_DECL.finditer(text):
+            for match in FUNCTION_DECL.finditer(bare_text):
                 if lines > max_function_lines:
                     findings.append(Finding("function-size", rel, _line_for(text, match.start()),
                                             f"function file exceeds {max_function_lines} lines"))
