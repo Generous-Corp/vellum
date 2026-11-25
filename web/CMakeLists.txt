@@ -85,6 +85,22 @@ if(VELLUM_BUILD_TESTS)
             --negative-control)
     set_tests_properties(vellum.web.editor-session vellum.web.editor-session-negative-control
         PROPERTIES SKIP_RETURN_CODE 77)
+    add_test(NAME vellum.web.superconvolver-view
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_superconvolver_view_browser.py"
+            --core-root "$<TARGET_FILE_DIR:vellum-web-core>"
+            --capture-dir "${CMAKE_BINARY_DIR}/web-captures/superconvolver-view")
+    foreach(control IN ITEMS move swap)
+        add_test(NAME vellum.web.superconvolver-view-${control}-control
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_superconvolver_view_browser.py"
+                --core-root "$<TARGET_FILE_DIR:vellum-web-core>"
+                --capture-dir "${CMAKE_BINARY_DIR}/web-captures/superconvolver-view-${control}-control"
+                --negative-control ${control})
+    endforeach()
+    set_tests_properties(vellum.web.superconvolver-view
+        vellum.web.superconvolver-view-move-control vellum.web.superconvolver-view-swap-control
+        PROPERTIES SKIP_RETURN_CODE 77)
     add_test(NAME vellum.web.text-ime-accessibility
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_text_semantics_browser.py"
