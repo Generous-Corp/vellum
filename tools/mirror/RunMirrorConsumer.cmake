@@ -29,7 +29,7 @@ file(REMOVE_RECURSE "${_work}")
 function(_run label)
     execute_process(COMMAND ${ARGN}
         RESULT_VARIABLE _result OUTPUT_VARIABLE _stdout ERROR_VARIABLE _stderr)
-    if(NOT _result EQUAL 0)
+    if(NOT _result STREQUAL "0")
         message(FATAL_ERROR "${label} failed (${_result})\n${_stdout}\n${_stderr}")
     endif()
     message(STATUS "${label}: ok")
@@ -37,6 +37,13 @@ function(_run label)
 endfunction()
 
 _run("install" "${CMAKE_COMMAND}" --install "${VELLUM_BUILD_DIR}" --prefix "${_prefix}")
+file(READ "${_prefix}/share/vellum/runtime-images.json" _runtime_images)
+string(JSON _provider_relative GET "${_runtime_images}" provider)
+string(JSON _canvas_relative GET "${_runtime_images}" canvas)
+set(_provider "${_prefix}/${_provider_relative}")
+set(_canvas "${_prefix}/${_canvas_relative}")
+get_filename_component(_provider_name "${_provider}" NAME)
+get_filename_component(_canvas_name "${_canvas}" NAME)
 file(GLOB_RECURSE _package_files "${_prefix}/*.cmake")
 foreach(_package_file IN LISTS _package_files)
     file(READ "${_package_file}" _contents)
@@ -203,6 +210,53 @@ if(DEFINED ENV{VELLUM_MIRROR_LIVE_GPU})
     endif()
 endif()
 
+find_program(_nm nm REQUIRED)
+set(_provider_census "${Python3_EXECUTABLE}" -I
+    "${VELLUM_SOURCE_DIR}/tools/mirror/provider_symbol_census.py"
+    "${_provider}" "${VELLUM_SOURCE_DIR}/cmake/skia_dawn_provider.exports")
+_run("provider export and bind census" ${_provider_census})
+execute_process(COMMAND ${_provider_census} --plant
+    RESULT_VARIABLE _plant_result OUTPUT_VARIABLE _plant_stdout ERROR_VARIABLE _plant_stderr)
+if(NOT _plant_result EQUAL 1 OR NOT _plant_stderr MATCHES "provider has 5 unexpected exports:")
+    message(FATAL_ERROR "provider census did not catch the planted exports:\n${_plant_stdout}\n${_plant_stderr}")
+endif()
+message(STATUS "provider export census negative control: ok")
+
+set(_weak_tint_dir "${_work}/weak-tint")
+file(MAKE_DIRECTORY "${_weak_tint_dir}")
+file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/weak_tint_main.cpp"
+    DESTINATION "${_weak_tint_dir}")
+file(WRITE "${_weak_tint_dir}/CMakeLists.txt" [=[
+cmake_minimum_required(VERSION 3.24)
+project(VellumWeakTintConsumer LANGUAGES CXX)
+find_package(Vellum CONFIG REQUIRED)
+add_executable(vellum-weak-tint-consumer weak_tint_main.cpp)
+target_compile_features(vellum-weak-tint-consumer PRIVATE cxx_std_20)
+target_link_options(vellum-weak-tint-consumer PRIVATE "LINKER:-export_dynamic")
+target_link_libraries(vellum-weak-tint-consumer PRIVATE Vellum::SkiaDawnProvider)
+]=])
+_run("weak Tint consumer configure" "${CMAKE_COMMAND}"
+    -S "${_weak_tint_dir}" -B "${_weak_tint_dir}/build" ${_generator}
+    -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=${_prefix}"
+    -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
+    -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE)
+_run("weak Tint consumer build" "${CMAKE_COMMAND}" --build "${_weak_tint_dir}/build")
+set(_weak_tint_host "${_weak_tint_dir}/build/vellum-weak-tint-consumer")
+_run("weak Tint consumer symbol table" "${_nm}" -m "${_weak_tint_host}")
+string(REGEX MATCH "weak external (__ZN4tint[^ \n]+)" _host_match "${_last_stdout}")
+if(NOT _host_match)
+    message(FATAL_ERROR "weak Tint consumer did not export its conflicting definition")
+endif()
+set(_weak_tint_name "${CMAKE_MATCH_1}")
+_run("provider symbol table" "${_nm}" -jU "${_provider}")
+if(NOT _last_stdout MATCHES "(^|\n)${_weak_tint_name}(\n|$)")
+    message(FATAL_ERROR "provider does not define the Tint matcher planted in the consumer")
+endif()
+_run("weak Tint consumer using Dawn Null" "${_weak_tint_host}")
+if(_run_live_gpu)
+    _run("weak Tint consumer using Metal" "${_weak_tint_host}" --live-gpu)
+endif()
+
 # A plug-in editor's view of the host: plugin_view_host.hpp reaches the GPU
 # device type only through platform/gpu_fwd.hpp, so it builds, links and runs
 # against the installed package without VELLUM_MIRROR_BUILD.
@@ -237,6 +291,68 @@ endif()
 _run("plug-in view host consumer run" "${_pvh_dir}/build/vellum-plugin-view-host-consumer" ${_pvh_args})
 message(STATUS "${_last_stdout}")
 
+# A native plug-in editor keeps its editor translation units on the installed
+# mirror and names GPU types only through gpu_fwd.hpp. A separate translation
+# unit includes the device definition from the installed VellumGpuRuntime
+# package and links its Device target.
+set(_native_gpu_runtime_ready FALSE)
+if(DEFINED VELLUM_GPU_RUNTIME_PREFIX AND
+   IS_DIRECTORY "${VELLUM_GPU_RUNTIME_PREFIX}" AND
+   EXISTS "${VELLUM_GPU_RUNTIME_PREFIX}/lib/cmake/VellumGpuRuntime/VellumGpuRuntimeConfig.cmake")
+    set(_native_gpu_runtime_ready TRUE)
+endif()
+if(_native_gpu_runtime_ready)
+    set(_native_gpu_editor_dir "${_work}/native-gpu-editor")
+    file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/native-gpu-editor/"
+        DESTINATION "${_native_gpu_editor_dir}")
+    execute_process(COMMAND "${CMAKE_COMMAND}"
+        -S "${_native_gpu_editor_dir}" -B "${_native_gpu_editor_dir}/build" ${_generator}
+        -DCMAKE_BUILD_TYPE=Release
+        "-DCMAKE_PREFIX_PATH=${_prefix}"
+        "-DVellumGpuRuntime_DIR=${VELLUM_GPU_RUNTIME_PREFIX}/lib/cmake/VellumGpuRuntime"
+        -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
+        -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE
+        RESULT_VARIABLE _native_gpu_configure_result
+        OUTPUT_VARIABLE _native_gpu_configure_out
+        ERROR_VARIABLE _native_gpu_configure_err)
+    if(NOT _native_gpu_configure_result EQUAL 0)
+        message(FATAL_ERROR "native GPU editor consumer configure failed (${_native_gpu_configure_result})\n"
+            "${_native_gpu_configure_out}\n${_native_gpu_configure_err}")
+    endif()
+    message(STATUS "native GPU editor consumer configure: ok")
+    _run("native GPU editor consumer build"
+        "${CMAKE_COMMAND}" --build "${_native_gpu_editor_dir}/build")
+else()
+    message(STATUS "native GPU editor consumer: skipped (no VELLUM_GPU_RUNTIME_PREFIX package)")
+endif()
+
+# The editor-side choke header remains a deliberate compile-time failure.
+set(_native_gpu_negative_dir "${_work}/native-gpu-editor-negative")
+file(MAKE_DIRECTORY "${_native_gpu_negative_dir}")
+file(COPY
+    "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/native-gpu-editor/negative/CMakeLists.txt"
+    "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/native-gpu-editor/negative_editor.cpp"
+    DESTINATION "${_native_gpu_negative_dir}")
+_run("native GPU editor negative configure" "${CMAKE_COMMAND}"
+    -S "${_native_gpu_negative_dir}" -B "${_native_gpu_negative_dir}/build" ${_generator}
+    -DCMAKE_BUILD_TYPE=Release
+    "-DCMAKE_PREFIX_PATH=${_prefix}"
+    -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
+    -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE)
+execute_process(COMMAND "${CMAKE_COMMAND}" --build "${_native_gpu_negative_dir}/build"
+    RESULT_VARIABLE _native_gpu_negative_result
+    OUTPUT_VARIABLE _native_gpu_negative_out ERROR_VARIABLE _native_gpu_negative_err)
+if(_native_gpu_negative_result EQUAL 0)
+    message(FATAL_ERROR "including <vellum/render/gpu_surface.hpp> unexpectedly compiled")
+endif()
+string(FIND "${_native_gpu_negative_out}${_native_gpu_negative_err}"
+    "not part of the installed mirror's supported surface" _native_gpu_negative_hit)
+if(_native_gpu_negative_hit EQUAL -1)
+    message(FATAL_ERROR "native GPU editor negative control failed without the installed guard message:\n"
+        "${_native_gpu_negative_out}\n${_native_gpu_negative_err}")
+endif()
+message(STATUS "native GPU editor choke-header negative control: ok")
+
 # The native bootstrap entry points are provider-owned. The installed mirror
 # consumer must resolve them from that dylib, and must not carry the Dawn proc
 # table calls that the old inline header emitted into plug-in objects. The
@@ -244,18 +360,18 @@ message(STATUS "${_last_stdout}")
 # cannot link a second pinned Dawn archive through this package boundary. The
 # no-proc-reference check below is the strongest installed-consumer proof, while
 # the provider's own whole-archive link remains the sole Dawn definition.
-set(_provider "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-skia-dawn-provider.dylib")
 find_program(_nm nm REQUIRED)
 execute_process(COMMAND "${_nm}" -gU "${_provider}"
     RESULT_VARIABLE _provider_nm_result OUTPUT_VARIABLE _provider_nm ERROR_VARIABLE _provider_nm_error)
 if(NOT _provider_nm_result EQUAL 0 OR
    NOT _provider_nm MATCHES "register_native_dawn_bootstrap" OR
-   NOT _provider_nm MATCHES "register_native_dawn_bootstrap_for_bundle")
+   NOT _provider_nm MATCHES "register_native_dawn_bootstrap_for_bundle" OR
+   NOT _provider_nm MATCHES "create_dawn")
     message(FATAL_ERROR
-        "the installed provider does not export both native Dawn bootstrap entry points:\n"
+        "the installed provider does not export the native Dawn bootstrap and GpuSurface ABI entry points:\n"
         "${_provider_nm}\n${_provider_nm_error}")
 endif()
-message(STATUS "provider exports native Dawn bootstrap entry points: ok")
+message(STATUS "provider exports native Dawn bootstrap and GpuSurface ABI entry points: ok")
 # nm prints C++ names mangled (__ZN4dawn6native8GetProcsEv), so the pattern
 # matches the mangled spelling as well as the demangled one and the C entry
 # points. A planted reference proves the pattern sees what nm really prints.
@@ -325,16 +441,15 @@ set(VELLUM_MIRROR_PREFIX "" CACHE PATH "Installed Vellum prefix")
 set(VELLUM_INSTALL_LIBDIR "lib" CACHE STRING "Installed Vellum library directory")
 add_library(vellum-mirror-direct SHARED IMPORTED)
 set_target_properties(vellum-mirror-direct PROPERTIES
-    IMPORTED_LOCATION "${VELLUM_MIRROR_PREFIX}/mirror/lib/libvellum-mirror-canvas.dylib"
+    IMPORTED_LOCATION "${VELLUM_MIRROR_CANVAS}"
     INTERFACE_INCLUDE_DIRECTORIES "${VELLUM_MIRROR_PREFIX}/mirror/include")
 add_executable(vellum-mirror-direct-consumer direct_main.cpp)
 target_link_libraries(vellum-mirror-direct-consumer PRIVATE vellum-mirror-direct)
-# Retain only libvellum-mirror-canvas.dylib as the explicit link input; the
-# installed prefix also supplies the runtime search paths below.
+# Retain only the canvas dylib as the explicit link input.
 target_link_directories(vellum-mirror-direct-consumer PRIVATE
     "${VELLUM_MIRROR_PREFIX}/${VELLUM_INSTALL_LIBDIR}")
 target_link_options(vellum-mirror-direct-consumer PRIVATE
-    "LINKER:-needed_library,${VELLUM_MIRROR_PREFIX}/mirror/lib/libvellum-mirror-canvas.dylib")
+    "LINKER:-needed_library,${VELLUM_MIRROR_CANVAS}")
 set_target_properties(vellum-mirror-direct-consumer PROPERTIES
     BUILD_RPATH "${VELLUM_MIRROR_PREFIX}/mirror/lib;${VELLUM_MIRROR_PREFIX}/${VELLUM_INSTALL_LIBDIR}")
 ]=])
@@ -344,21 +459,24 @@ _run("direct consumer configure" "${CMAKE_COMMAND}"
     -S "${_work}/direct" -B "${_work}/direct-build"
     ${_generator} -DCMAKE_BUILD_TYPE=Release
     "-DVELLUM_MIRROR_PREFIX=${_prefix}"
-    "-DVELLUM_INSTALL_LIBDIR=${VELLUM_INSTALL_LIBDIR}")
+    "-DVELLUM_INSTALL_LIBDIR=${VELLUM_INSTALL_LIBDIR}"
+    "-DVELLUM_MIRROR_CANVAS=${_canvas}")
 _run("direct consumer build" "${CMAKE_COMMAND}" --build "${_work}/direct-build")
-_run("direct consumer run" "${_work}/direct-build/vellum-mirror-direct-consumer")
+_run("direct consumer run" "${_work}/direct-build/vellum-mirror-direct-consumer"
+    "@rpath/${_canvas_name}" "${_provider_name}")
 
 # Keep the ABI assertion explicit so a future change cannot make this fixture
 # pass by hiding the re-export behind target transitivity or a second provider
 # definition.
 find_program(_otool otool REQUIRED)
 execute_process(
-    COMMAND "${_otool}" -L "${_prefix}/mirror/lib/libvellum-mirror-canvas.dylib"
+    COMMAND "${_otool}" -L "${_canvas}"
     RESULT_VARIABLE _mirror_otool_result
     OUTPUT_VARIABLE _mirror_otool
     ERROR_VARIABLE _mirror_otool_error)
+string(FIND "${_mirror_otool}" "@rpath/${_provider_name} (" _mirror_provider_link)
 if(NOT _mirror_otool_result EQUAL 0 OR
-   NOT _mirror_otool MATCHES "libvellum-skia-dawn-provider\\.dylib" OR
+   _mirror_provider_link EQUAL -1 OR
    NOT _mirror_otool MATCHES "reexport")
     message(FATAL_ERROR
         "MirrorCanvas does not carry the provider re-export contract:\n"
@@ -387,7 +505,7 @@ target_include_directories(vellum-gpu-direct-consumer PRIVATE
 target_link_directories(vellum-gpu-direct-consumer PRIVATE
     "${VELLUM_MIRROR_PREFIX}/${VELLUM_INSTALL_LIBDIR}")
 target_link_options(vellum-gpu-direct-consumer PRIVATE
-    "LINKER:-dylib_file,@rpath/libvellum-skia-dawn-provider.dylib:${VELLUM_MIRROR_PREFIX}/${VELLUM_INSTALL_LIBDIR}/libvellum-skia-dawn-provider.dylib")
+    "LINKER:-dylib_file,@rpath/${VELLUM_PROVIDER_NAME}:${VELLUM_PROVIDER_PATH}")
 ]=])
 file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/direct_gpu_main.cpp"
     DESTINATION "${_work}/direct-gpu")
@@ -395,7 +513,9 @@ _run("direct GPU consumer configure" "${CMAKE_COMMAND}"
     -S "${_work}/direct-gpu" -B "${_work}/direct-gpu-build"
     ${_generator} -DCMAKE_BUILD_TYPE=Release
     "-DVELLUM_MIRROR_PREFIX=${_prefix}"
-    "-DVELLUM_INSTALL_LIBDIR=${VELLUM_INSTALL_LIBDIR}")
+    "-DVELLUM_INSTALL_LIBDIR=${VELLUM_INSTALL_LIBDIR}"
+    "-DVELLUM_PROVIDER_PATH=${_provider}"
+    "-DVELLUM_PROVIDER_NAME=${_provider_name}")
 _run("direct GPU consumer build" "${CMAKE_COMMAND}" --build "${_work}/direct-gpu-build")
 
 # A local mirror-consumer run may not have a live GPU even when the installed
@@ -434,17 +554,18 @@ _run("runtime image census build" "${CMAKE_COMMAND}"
     --build "${_work}/runtime-census-build")
 _run("runtime image census"
     "${_work}/runtime-census-build/vellum-runtime-image-census"
-    "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-skia-dawn-provider.dylib"
+    "${_provider}"
     "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-gpu.dylib"
-    "${_prefix}/mirror/lib/libvellum-mirror-canvas.dylib")
+    "${_canvas}")
 
 execute_process(
     COMMAND "${_otool}" -L "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-gpu.dylib"
     RESULT_VARIABLE _gpu_otool_result
     OUTPUT_VARIABLE _gpu_otool
     ERROR_VARIABLE _gpu_otool_error)
+string(FIND "${_gpu_otool}" "@rpath/${_provider_name} (" _gpu_provider_link)
 if(NOT _gpu_otool_result EQUAL 0 OR
-   NOT _gpu_otool MATCHES "libvellum-skia-dawn-provider\\.dylib" OR
+   _gpu_provider_link EQUAL -1 OR
    NOT _gpu_otool MATCHES "reexport")
     message(FATAL_ERROR
         "GPU frontend does not carry the provider re-export contract:\n"
@@ -460,15 +581,12 @@ message(STATUS "GPU provider re-export metadata: ok")
 find_program(_install_name_tool install_name_tool REQUIRED)
 set(_cross_image_dir "${_work}/cross-image")
 file(MAKE_DIRECTORY "${_cross_image_dir}")
-set(_provider "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-skia-dawn-provider.dylib")
-set(_duplicate "${_cross_image_dir}/libvellum-skia-dawn-provider-duplicate.dylib")
-file(COPY "${_provider}" DESTINATION "${_cross_image_dir}")
-file(RENAME
-    "${_cross_image_dir}/libvellum-skia-dawn-provider.dylib"
-    "${_duplicate}")
+set(_duplicate_name "duplicate-${_provider_name}")
+set(_duplicate "${_cross_image_dir}/${_duplicate_name}")
+file(COPY_FILE "${_provider}" "${_duplicate}")
 execute_process(
     COMMAND "${_install_name_tool}" -id
-        "@rpath/libvellum-skia-dawn-provider-duplicate.dylib" "${_duplicate}"
+        "@rpath/${_duplicate_name}" "${_duplicate}"
     RESULT_VARIABLE _duplicate_id_result
     OUTPUT_VARIABLE _duplicate_id_stdout
     ERROR_VARIABLE _duplicate_id_stderr)
@@ -511,7 +629,7 @@ execute_process(
         "${_work}/consumer/vellum-mirror-consumer"
         "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-gpu.dylib"
         "${_provider}"
-        "${_prefix}/mirror/lib/libvellum-mirror-canvas.dylib"
+        "${_canvas}"
         "${_duplicate}"
     RESULT_VARIABLE _duplicate_census_result
     OUTPUT_VARIABLE _duplicate_census_stdout
@@ -528,8 +646,8 @@ _run("shared provider symbol ownership" "${Python3_EXECUTABLE}"
     "${VELLUM_SOURCE_DIR}/graphics/tests/test_dawn_provider_topology.py"
     "${_work}/consumer/vellum-mirror-consumer"
     "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-gpu.dylib"
-    "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-skia-dawn-provider.dylib"
-    "${_prefix}/mirror/lib/libvellum-mirror-canvas.dylib")
+    "${_provider}"
+    "${_canvas}")
 _run("Phase-6 debt inertness" "${Python3_EXECUTABLE}"
     "${VELLUM_SOURCE_DIR}/tools/mirror/verify_mirror_inertness.py"
     --prefix "${_prefix}" --install-libdir "${VELLUM_INSTALL_LIBDIR}"
@@ -593,19 +711,6 @@ target_link_libraries(vellum-v8-consumer PRIVATE Vellum::MirrorView_script)
 ]=])
     file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/v8_main.cpp"
         DESTINATION "${_work}/v8-consumer")
-    if(VELLUM_INSTALL_THREEJS)
-    file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/threejs_v8_main.cpp"
-        DESTINATION "${_work}/v8-consumer")
-    file(APPEND "${_work}/v8-consumer/CMakeLists.txt" [=[
-add_executable(vellum-threejs-v8-consumer threejs_v8_main.cpp)
-target_link_libraries(vellum-threejs-v8-consumer PRIVATE Vellum::MirrorView_script)
-if(VELLUM_THREEJS_ROOT STREQUAL "")
-    message(FATAL_ERROR "find_package(Vellum) did not export VELLUM_THREEJS_ROOT")
-endif()
-target_compile_definitions(vellum-threejs-v8-consumer PRIVATE
-    "VELLUM_THREEJS_ROOT=\"${VELLUM_THREEJS_ROOT}\"")
-]=])
-    endif()
     _run("V8 consumer configure" "${CMAKE_COMMAND}"
         -S "${_work}/v8-consumer" -B "${_work}/v8-consumer-build"
         ${_generator} -DCMAKE_BUILD_TYPE=Release
@@ -616,8 +721,15 @@ target_compile_definitions(vellum-threejs-v8-consumer PRIVATE
     _run("V8 consumer run" "${_work}/v8-consumer-build/vellum-v8-consumer" "${VELLUM_V8_VERSION}")
     message(STATUS "${_last_stdout}")
     if(VELLUM_INSTALL_THREEJS)
-        _run("installed Three.js payload consumer run"
-            "${_work}/v8-consumer-build/vellum-threejs-v8-consumer")
+        _run("Three.js demo configure" "${CMAKE_COMMAND}"
+            -S "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/threejs-demo"
+            -B "${_work}/threejs-demo" ${_generator} -DCMAKE_BUILD_TYPE=Release
+            "-DVellum_DIR=${_prefix}/${VELLUM_INSTALL_LIBDIR}/cmake/Vellum"
+            -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
+            -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE)
+        _run("Three.js demo build" "${CMAKE_COMMAND}" --build "${_work}/threejs-demo")
+        _run("Three.js demo tests" "${CMAKE_CTEST_COMMAND}"
+            --test-dir "${_work}/threejs-demo" --no-tests=error --verbose)
         message(STATUS "${_last_stdout}")
     endif()
 endif()

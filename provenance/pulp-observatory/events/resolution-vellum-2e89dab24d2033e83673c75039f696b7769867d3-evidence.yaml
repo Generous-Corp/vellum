@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-2e89dab24d2033e83673c75039f696b7769867d3-evidence",
+  "kind": "resolution",
+  "created_at": "2026-11-24T20:42:33Z",
+  "resolves": "vellum-2e89dab24d2033e83673c75039f696b7769867d3",
+  "disposition": "ported",
+  "rationale": "Charges stored (uncompressed) ZIP entries to the cumulative decompression cap. Pulp carries it: b228bd8b (charge stored ZIP entries) added chargeStored and ca1af9e0 made its regression real. Pulp's container.mjs now matches Vellum's except for the zstd guard recorded on 1be630664. Evidence supplement; the disposition is unchanged. See provenance/pulp-observatory/reports/decoder-evidence.md for immutable implementation links, executable boundary checks and mutation controls at Pulp b0ee92d21944d5c956603afd1108b575e50c1302. The previous event is retained as history; this evidence replaces its identifier-count argument.",
+  "owner": "@repair-lane",
+  "linked_commits": [
+    "2e89dab24d2033e83673c75039f696b7769867d3",
+    "b228bd8b90687ed159b1ad622b7bf3852d776f25",
+    "ca1af9e047b46dfdff7cc337fa150ed2e4961ca8"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/issues/12758"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}

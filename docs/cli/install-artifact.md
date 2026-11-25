@@ -4,7 +4,7 @@ The repository builds a reproducible local artifact, and the installer supports
 local development, verified local archive, and an exact-version release mode.
 The commands below install the published, immutable `v0.1.6` tagged release
 from `Generous-Corp/vellum`, the current published release. The source tree
-identifies as `0.2.2`, the next release, and is unreleased.
+identifies as `0.2.3`, the next release, and is unreleased.
 The name `v0.1.7` is retired and is never reused; [`provenance/retired-release-tags.json`](../../provenance/retired-release-tags.json)
 records why, and `scripts/verify_release_tag.py` refuses any retired tag.
 `v0.1.8` and `v0.1.9` are retired too: their tags stay in place, frozen, but no
@@ -101,10 +101,11 @@ sdk/lib/libvellum-*.a
 sdk/bin/vellum-app-host             # pinned-Skia mode
 sdk/lib/libvellum-authoring.dylib   # pinned-Skia mode
 sdk/lib/libvellum-gpu.dylib         # pinned-Skia mode
-sdk/lib/libvellum-skia-dawn-provider.dylib # pinned-Skia provider closure
-sdk/mirror/lib/libvellum-mirror-foundation.dylib # provider runtime dependency
-sdk/mirror/lib/libvellum-mirror-canvas.dylib # mirrored canvas runtime
-sdk/mirror/lib/libvellum-mirror-state-core.dylib # provider runtime dependency
+sdk/share/vellum/runtime-images.json # installed paths for the provider and required mirror units
+sdk/lib/libvellum-skia-dawn-provider-<identity>.dylib # pinned-Skia provider closure
+sdk/mirror/lib/libvellum-mirror-foundation-<identity>.dylib # provider runtime dependency
+sdk/mirror/lib/libvellum-mirror-canvas-<identity>.dylib # mirrored canvas runtime
+sdk/mirror/lib/libvellum-mirror-state-core-<identity>.dylib # provider runtime dependency
 design-ir/bin/vellum-backend.js
 design-ir/src/...
 design-ir/schema/...
@@ -257,10 +258,10 @@ Build and validate the artifact:
 ```sh
 python3 scripts/build_sdk_artifact.py --output-dir dist --json
 python3 scripts/verify_sdk_artifact.py \
-  --archive dist/vellum-sdk-0.2.2-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.2.3-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS --json
 python3 scripts/validate_installed_sdk.py \
-  --archive dist/vellum-sdk-0.2.2-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.2.3-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS \
   --output dist/installed-validation.json --json
 ```
@@ -323,40 +324,70 @@ release attestation is required and verified. See
 [Immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)
 and [GitHub security features](https://docs.github.com/en/code-security/getting-started/github-security-features#artifact-attestations).
 
-These are release gates, not claims that `v0.2.2` exists before the tag workflow
+These are release gates, not claims that `v0.2.3` exists before the tag workflow
 has completed. The local artifact flow exercises the same archive verification
 and transactional installation logic but cannot claim hosted release
 immutability or GitHub asset digests.
 
-## Unsupported surface
+## Native plug-in editors that use the GPU
 
-The installed mirror (`sdk/mirror/`) does not support using the GPU device
-types `vellum::render::GpuSurface` and `vellum::render::GpuCompute`. These are
-`gpu_runtime` types whose symbols the package does not export, so no installed
-consumer may include a header that defines them or includes
-`<gpu_runtime/...>`.
+The installed SDK supports a native plug-in editor with two package targets.
+Keep editor translation units on the mirror package. Include
+`<vellum/platform/gpu_fwd.hpp>` when an editor needs to name a GPU surface and
+include `<vellum/view/plugin_view_host.hpp>` for the host. The forward
+declaration is the supported boundary and does not require `VELLUM_MIRROR_BUILD`.
 
-Naming them is supported. `vellum/platform/gpu_fwd.hpp` only forward-declares
-the types, and an incomplete type reaches none of their symbols. A header that
-holds a `GpuSurface*` through it compiles for an installed consumer, so a
-plug-in editor can include `<vellum/view/plugin_view_host.hpp>` and subclass or
-hold a `PluginViewHost` without `VELLUM_MIRROR_BUILD`. The installed targets
-define `PULP_GPU_RUNTIME`, so the forward declaration names the same
-`gpu_runtime` class the libraries were built with.
+Put device creation and GPU work in a separate translation unit. That unit may
+include `<gpu_runtime/gpu_surface.hpp>` and must link the `Device` target from
+the separately published `vellum-gpu-runtime-0.2.3-darwin-arm64.tar.gz`
+artifact. The runtime package provides the `DeviceApi`, `Device`, `Bootstrap`,
+and `SkiaLogBridge` targets. Add both installed prefixes to
+`CMAKE_PREFIX_PATH` when the SDK and runtime artifact are installed separately.
 
-The unsupported part fails at compile time. A *choke header* defines a
-`gpu_runtime` type or includes `<gpu_runtime/...>`. A `namespace gpu_runtime`
-that holds only forward declarations does not make a header a choke. The
-installed copy of each choke header includes
-`vellum/mirror/gpu_surface_unsupported.hpp`, which is an `#error`:
+```cmake
+cmake_minimum_required(VERSION 3.24)
+project(NativeEditor LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+find_package(Vellum 0.2.3 EXACT CONFIG REQUIRED)
+find_package(VellumGpuRuntime 0.2.3 EXACT CONFIG REQUIRED COMPONENTS Device)
+
+add_library(editor_host editor.cpp) # only vellum/platform/gpu_fwd.hpp and view headers
+target_link_libraries(editor_host PRIVATE Vellum::MirrorView_core)
+
+add_library(editor_gpu editor_gpu.cpp) # includes <gpu_runtime/gpu_surface.hpp>
+target_link_libraries(editor_gpu PRIVATE VellumGpuRuntime::Device)
+
+add_executable(my_plugin editor_entry.cpp)
+target_link_libraries(my_plugin PRIVATE editor_host editor_gpu)
+```
+
+An editor receives the host-owned surface through
+`PluginViewHost::observe_gpu_surface()`. Keep the returned subscription alive
+while the editor consumes status changes. Treat `pending` as “wait”, use the
+surface only in the `ready` callback, and stop using it when the host publishes
+`unavailable`. The generation-checked `PluginViewHost::GpuSurfaceLease` from
+Vellum PR 703 adds the same teardown fence for worker code. Once that PR lands,
+acquire a lease from the ready notification and stop the worker when
+`lease.get()` returns null. The host invalidates the lease before it releases or
+replaces the surface.
+
+The mirror deliberately rejects a consumer that includes
+`<vellum/render/gpu_surface.hpp>` (or another header that reaches that
+definition). The exact compiler diagnostic is:
 
 > the render unit's GpuSurface / GpuCompute definitions and the mirrored headers
 > that include them (for example render/gpu_surface.hpp, render/skia_surface.hpp)
 > are not part of the installed mirror's supported surface.
 
+That diagnostic identifies a mirror-boundary violation in the editor translation
+unit. Native editor compilation remains supported when the definition and device
+calls live in the runtime translation unit, the editor side uses `gpu_fwd.hpp`,
+and the two installed packages are linked as shown above.
+
 The guard is lifted only by `VELLUM_MIRROR_BUILD`, a private definition on the
-mirror's own targets. A consumer that defines it itself is outside the supported
-surface.
+mirror's own targets. An installed consumer must not define it.
 
 **Which headers are guarded.** `tools/mirror/gpu_surface_guard.py` computes the
 guarded set from `framework/`; nobody lists it by hand. The package records it
@@ -379,7 +410,3 @@ every installed mirror header equals its `framework/` source. The
 including `<vellum/render/skia_surface.hpp>` or `<vellum/render/gpu_surface.hpp>`
 fails with the guard's message, and that a consumer subclassing `PluginViewHost`
 builds, links and runs without `VELLUM_MIRROR_BUILD`.
-
-**Not yet supported.** Exposing the GPU API to installed consumers through the
-Skia/Dawn provider is a named, unscheduled follow-up: "installed GPU API through
-the provider".

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-bd34f13f5aadd560cac7edf6881fe867238ff1ac-evidence",
+  "kind": "resolution",
+  "created_at": "2026-11-24T20:42:33Z",
+  "resolves": "vellum-bd34f13f5aadd560cac7edf6881fe867238ff1ac",
+  "disposition": "ported",
+  "rationale": "Exposes the decoder's frame outline and frame selection by name (refusing ambiguous names) through Vellum's backend and CLI. The behaviour is Pulp's: fig_decode.mjs gained the outline in 5b31a035 and ambiguous-name refusal in c1d4e568, both on Pulp main. The Vellum backend and CLI wiring has no Pulp counterpart. Nothing further to port. Evidence supplement; the disposition is unchanged. See provenance/pulp-observatory/reports/decoder-evidence.md for immutable implementation links, executable boundary checks and mutation controls at Pulp b0ee92d21944d5c956603afd1108b575e50c1302. The previous event is retained as history; this evidence replaces its identifier-count argument.",
+  "owner": "@repair-lane",
+  "linked_commits": [
+    "5b31a0356c5e75dba80b66caa93a823f76cf41be",
+    "bd34f13f5aadd560cac7edf6881fe867238ff1ac",
+    "c1d4e5687c03616813a5c7f512ef898160b96d00"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { decodeFigFile } from '../src/fig-file/import.js';
+import { decodeFigFile, decodeFigSource } from '../src/fig-file/import.js';
 import { loadSource } from '../bin/backend-source.js';
 import { validateDesignIR } from '../src/index.js';
 import * as zlib from 'node:zlib';
@@ -27,6 +27,27 @@ test('backend accepts .fig as a local source without archive dispatch', async ()
     const loaded = await loadSource(fixture.pathname, { sourceArchive: null, sourceKey: 'main', sourceType: 'fig' });
     assert.equal(loaded.sourceArtifact.kind, 'fig');
     assert.equal(loaded.document.source.key, 'main');
+});
+
+test('a default import persists the resolved frame GUID so reimport pins it', async () => {
+    const loaded = await loadSource(fixture.pathname, { sourceArchive: null, sourceKey: 'main', sourceType: 'fig' });
+    assert.match(loaded.sourceArtifact.frame, /^\d+:\d+$/);
+    assert.equal(Object.hasOwn(loaded, 'frame'), false);
+    const pinned = await loadSource(fixture.pathname, {
+        figFrame: loaded.sourceArtifact.frame, sourceArchive: null, sourceKey: 'main', sourceType: 'fig',
+    });
+    assert.deepEqual(pinned.document, loaded.document);
+    assert.equal(pinned.sourceArtifact.frame, loaded.sourceArtifact.frame);
+});
+
+test('duplicate frame names require a page or GUID', () => {
+    const bytes = makeSyntheticFig({ duplicateFrameName: true });
+    assert.throws(
+        () => decodeFigSource(bytes, { frame: 'Paint Lab' }),
+        /ambiguous.*0:10.*0:2/,
+    );
+    assert.equal(decodeFigSource(bytes, { frame: 'Paint Lab', page: 'Empty Page' }).frame, '0:2');
+    assert.equal(decodeFigSource(bytes, { frame: '0:10' }).frame, '0:10');
 });
 
 test('a zstd-compressed .fig decodes where Node has zstd, and is refused clearly where it does not', () => {
@@ -67,4 +88,38 @@ test('a font family matches its own faces, not a different family that shares it
     assert.equal(familyMatchesStem('Inter', 'Inter[opsz,wght]'), true);
     assert.equal(familyMatchesStem('Roboto', 'RobotoCondensed-Regular'), false);
     assert.equal(familyMatchesStem('Roboto', 'RobotoMono'), false);
+});
+
+test('offline instance text overrides render as text without audio metadata', () => {
+    const document = decodeFigFile(makeSyntheticFig({ instance: true }));
+    const instance = document.root.children.find((node) => node.name === 'Badge instance');
+    assert.equal(instance.children[0].text, 'Ready');
+});
+
+test('offline loss diagnostics keep the source code and message', async () => {
+    const document = decodeFigFile(await readFile(fixture), { frame: '0:10' });
+    const diagnostic = document.diagnostics.find(({ code }) => code === 'unsupported-paint-type');
+    assert.equal(diagnostic?.disposition, 'unsupported');
+    assert.match(diagnostic.message, /VIDEO/);
+});
+
+test('offline layout preserves solved positions across grid and wrapped rows', () => {
+    for (const layoutMode of ['grid', 'wrap']) {
+        const document = decodeFigFile(makeSyntheticFig({ layoutMode }));
+        const row = document.root.children.find(({ identity }) => identity.sourceId === '0:6');
+        assert.equal(row.properties.layout.display, layoutMode === 'grid' ? 'grid' : 'flex');
+        assert.deepEqual(row.children.map(({ properties: { layout } }) => [layout.x, layout.y]),
+            [[4, 8], [36, 8], [4, 40]]);
+    }
+});
+
+test('offline PNG paint references the hash of its embedded bytes', async () => {
+    const bytes = await readFile(fixture);
+    const document = decodeFigFile(bytes, { frame: '0:10' });
+    const image = document.root.children.find(({ identity }) => identity.sourceId === '0:12');
+    assert.equal(image.kind, 'image');
+    assert.match(image.properties.image.source, /^sha256:[0-9a-f]{64}$/);
+    assert.equal(image.properties.image.source, document.assets[0].contentHash);
+    assert.equal(image.properties.image.fit, 'contain');
+    assert.equal(image.compositing.opacity, 0.5);
 });

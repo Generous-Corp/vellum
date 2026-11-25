@@ -69,7 +69,7 @@ void print_usage() {
                  "[--service-capabilities JSON] "
                  "[--manual-clock] [--advance MS] [--capture-step NAME] [--capture-dir DIR] [--dump-tree JSON] "
                  "[--component ID=DYLIB] [--state-file FILE] "
-                 "[--expect-width N --expect-height N] [--capture PNG]\n";
+                 "[--expect-width N --expect-height N] [--capture PNG] [--capture-scale 1|2]\n";
 }
 
 std::optional<Options> parse_options(int argc, const char* argv[]) {
@@ -92,6 +92,11 @@ std::optional<Options> parse_options(int argc, const char* argv[]) {
             options.steps.push_back({
                 AutomationStep::Kind::capture, {}, argv[index],
             });
+        } else if (argument == "--capture-scale") {
+            if (++index >= argc) return std::nullopt;
+            const std::string_view scale = argv[index];
+            if (scale != "1" && scale != "2") return std::nullopt;
+            options.capture_scale = scale == "2" ? 2U : 1U;
         } else if (argument == "--capture-dir") {
             if (++index >= argc || argv[index][0] == '\0') return std::nullopt;
             options.capture_dir = argv[index];

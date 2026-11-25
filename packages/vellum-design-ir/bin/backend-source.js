@@ -2,19 +2,23 @@ import { lstat, readFile } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import {
     decodeFigmaPluginExport,
+    FIGMA_PLUGIN_FORMAT,
     lowerBrowserCaptureToDesignIR,
     normalizeImport,
     normalizeSha256ContentHash,
     parseDesignIR,
 } from '../src/index.js';
-import { decodeFigFile } from '../src/fig-file/import.js';
+import { decodeFigSource, outlineFigFile } from '../src/fig-file/import.js';
+import { decodeNativeSource, nativeSourceTypes } from './backend-native-source.js';
 import {
     fail,
     isSafeRelativeAsset,
+    jsonBytes,
     sha256,
     validateRevision,
 } from './backend-protocol.js';
 
+const pluginSourceTypes = new Set(['figma', 'figma-plugin']);
 const MAX_SOURCE_BYTES = 16 * 1024 * 1024;
 const MAX_ARCHIVE_BYTES = 256 * 1024 * 1024;
 const MAX_ASSET_BYTES = 128 * 1024 * 1024;
@@ -22,20 +26,55 @@ const MAX_ASSET_COUNT = 10_000;
 const MAX_NODE_COUNT = 100_000;
 const MAX_TREE_DEPTH = 512;
 
-export async function loadSource(sourcePath, { captureEnvelope, sourceArchive, sourceKey, sourceType }) {
-    if (!['fig', 'figma', 'design-ir', 'html', 'claude-design'].includes(sourceType)) {
-        fail('unsupported_source_type', `Unsupported source type '${sourceType}'`);
-    }
-    const file = resolve(sourcePath);
+function isFigSource(file, sourceType) {
+    return sourceType === 'fig' || (sourceType === 'figma' && file.toLowerCase().endsWith('.fig'));
+}
+
+async function readImportSource(file, byteLimit) {
     const metadata = await lstat(file).catch(() => null);
     if (!metadata?.isFile() || metadata.isSymbolicLink()) {
         fail('invalid_source', `Import source must be a regular file: ${file}`);
     }
-    if (metadata.size > MAX_SOURCE_BYTES) {
-        fail('source_too_large', `Import source exceeds ${MAX_SOURCE_BYTES} bytes`);
+    if (metadata.size > byteLimit) {
+        fail('source_too_large', `Import source exceeds ${byteLimit} bytes`);
     }
-    const sourceBytes = await readFile(file);
-    if (sourceArchive === null && !basename(file).toLowerCase().endsWith('.fig') && (
+    return readFile(file);
+}
+
+export async function outlineSource(sourcePath, sourceType) {
+    const file = resolve(sourcePath);
+    if (!isFigSource(file, sourceType)) {
+        fail('invalid_fig_outline', '--outline requires a local Figma .fig source');
+    }
+    const bytes = await readImportSource(file, MAX_ARCHIVE_BYTES);
+    try {
+        return outlineFigFile(bytes);
+    } catch (error) {
+        fail('invalid_fig', `Figma .fig outline could not be decoded: ${error.message}`);
+    }
+}
+
+export async function loadSource(sourcePath, {
+    captureEnvelope, extraFiles = [], figFrame, figPage, sourceArchive, sourceKey, sourceType,
+}) {
+    const isPluginType = pluginSourceTypes.has(sourceType);
+    if (!['fig', 'design-ir', 'html', 'claude-design'].includes(sourceType) &&
+        !isPluginType && !nativeSourceTypes.has(sourceType)) {
+        fail('unsupported_source_type', `Unsupported source type '${sourceType}'`);
+    }
+    const file = resolve(sourcePath);
+    const isFig = isFigSource(file, sourceType);
+    if (figFrame !== undefined && (!(isFig || isPluginType) || !figFrame.trim())) {
+        fail('invalid_fig_frame', '--frame requires a Figma source and a frame GUID or name');
+    }
+    if (extraFiles.length > 0 && (!isPluginType || isFig || sourceArchive !== null || figFrame !== undefined)) {
+        fail('invalid_arguments', 'Repeated files require Figma plugin JSON envelopes with one root each');
+    }
+    if (figPage !== undefined && (!isFig || figFrame === undefined || !figPage.trim())) {
+        fail('invalid_fig_frame', '--page requires a local Figma .fig frame selector and a page name');
+    }
+    let sourceBytes = await readImportSource(file, isFig ? MAX_ARCHIVE_BYTES : MAX_SOURCE_BYTES);
+    if (sourceArchive === null && !isFig && (
         basename(file).toLowerCase().endsWith('.pulp.zip') || hasZipMagic(sourceBytes)
     )) {
         fail(
@@ -98,39 +137,69 @@ export async function loadSource(sourcePath, { captureEnvelope, sourceArchive, s
             sourceName: sourceArtifact.name,
         };
     }
-    if (sourceType === 'fig' || (sourceType === 'figma' && basename(file).toLowerCase().endsWith('.fig'))) {
-        let document;
+    if (isFig) {
+        let decoded;
         try {
-            document = decodeFigFile(sourceBytes, { sourceKey });
+            decoded = decodeFigSource(sourceBytes, { sourceKey, frame: figFrame, page: figPage });
         } catch (error) {
             fail('invalid_fig', `Figma .fig source could not be decoded: ${error.message}`);
         }
         const sourceHash = `sha256:${sha256(sourceBytes)}`;
-        const revision = validateRevision(document.source.revision);
+        const { frame: resolvedFrame, ...decodedParts } = decoded;
+        const revision = validateRevision(decodedParts.document.source.revision);
         return {
-            archiveBytes: null, backendDiagnostics: [], document, revision,
-            sourceArtifact: { kind: 'fig', name: basename(file), sha256: sourceHash },
+            archiveBytes: null, backendDiagnostics: [], ...decodedParts, revision,
+            // Persist the resolved GUID even when --frame was omitted, so reimport
+            // cannot drift to a different "first frame" after the file is edited.
+            sourceArtifact: {
+                kind: 'fig', name: basename(file), sha256: sourceHash,
+                frame: resolvedFrame,
+            },
             sourceBytes, sourceHash, sourceName: basename(file),
         };
     }
-    let input;
-    try {
-        input = JSON.parse(sourceBytes.toString('utf8'));
-    } catch (error) {
-        fail('invalid_source_json', `Import source is not valid JSON: ${error.message}`);
+    if (nativeSourceTypes.has(sourceType)) {
+        const sourceHash = `sha256:${sha256(sourceBytes)}`;
+        const decoded = decodeNativeSource(sourceBytes, { sourceKey, sourceHash, sourceType });
+        return {
+            ...decoded,
+            archiveBytes: null,
+            revision: validateRevision(decoded.document.source.revision),
+            sourceArtifact: { kind: sourceType, name: basename(file), sha256: sourceHash },
+            sourceBytes, sourceHash, sourceName: basename(file),
+        };
     }
-    if (archive && !(
-        input?.$schema === 'https://pulp.dev/schemas/figma-plugin-export-v1.json' &&
-        input?.format_version === '2026.05-figma-plugin-v1'
-    )) {
-        fail(
-            'invalid_source_archive',
-            'Pulp ZIP scene must use the pinned Figma plugin export contract',
-        );
+    let input = parseSourceJson(sourceBytes);
+    const isPlugin = isPluginType && input?.format_version === FIGMA_PLUGIN_FORMAT;
+    if (archive && (!isPlugin || input.$schema !== 'https://pulp.dev/schemas/figma-plugin-export-v1.json')) {
+        fail('invalid_source_archive', 'Pulp ZIP scene must use the pinned Figma plugin export contract');
+    }
+    if ((sourceType === 'figma-plugin' || extraFiles.length > 0) && !isPlugin) {
+        fail('invalid_figma_plugin', 'Import requires a pinned Figma plugin export');
+    }
+    if (figFrame !== undefined && !isPlugin) {
+        fail('invalid_fig_frame', '--frame requires a local Figma .fig file or plugin envelope');
+    }
+
+    let embeddedAssets;
+    if (extraFiles.length > 0) {
+        const merged = await mergePluginSources(file, input, sourceBytes.length, extraFiles, sourceKey);
+        ({ input, embeddedAssets } = merged);
+        sourceBytes = jsonBytes(input);
+        if (sourceBytes.length > MAX_SOURCE_BYTES) {
+            fail('source_too_large', `Merged Figma source exceeds ${MAX_SOURCE_BYTES} bytes`);
+        }
     }
     const sceneHash = `sha256:${sha256(sourceBytes)}`;
     const sourceHash = archive?.sha256 ?? sceneHash;
     enforceSourceLimits(input);
+    const hasPluginStates = Array.isArray(input?.root?.alternate_frames);
+    let resolvedFrame;
+    if (figFrame !== undefined) {
+        const frame = selectPluginFrame(input.root, figFrame);
+        resolvedFrame = frame.figma_node_id;
+        input = { ...input, root: frame };
+    }
     let document;
     if (input?.$schema === 'https://vellum.dev/schemas/design-ir/v1') {
         document = parseDesignIR(input);
@@ -141,8 +210,8 @@ export async function loadSource(sourcePath, { captureEnvelope, sourceArchive, s
             );
         }
     } else {
-        if (sourceType === 'figma' && input?.format_version === '2026.05-figma-plugin-v1') {
-            input = decodeFigmaPluginExport(input, { sourceHash, sourceKey });
+        if (isPlugin) {
+            input = decodePlugin(input, { sourceHash, sourceKey });
         }
         if (!input?.source || !input?.root) {
             fail(
@@ -158,19 +227,23 @@ export async function loadSource(sourcePath, { captureEnvelope, sourceArchive, s
         document = normalizeImport(normalizedInput);
     }
     const revision = validateRevision(document.source.revision);
+    const frameMetadata = resolvedFrame === undefined ? {} : { frame: resolvedFrame };
     const sourceArtifact = archive ? {
+        ...frameMetadata,
         kind: 'pulp-zip',
         member: archive.member,
         name: archive.name,
         sceneSha256: sceneHash,
         sha256: archive.sha256,
     } : {
-        kind: 'json',
+        ...frameMetadata,
+        kind: isPlugin && hasPluginStates ? 'figma-plugin-states' : 'json',
         name: basename(file),
         sha256: sceneHash,
     };
     return {
         archiveBytes: archive?.bytes ?? null,
+        embeddedAssets,
         backendDiagnostics: [],
         document,
         revision,
@@ -181,21 +254,126 @@ export async function loadSource(sourcePath, { captureEnvelope, sourceArchive, s
     };
 }
 
-export async function planAssets(sourcePath, document, paths) {
+function parseSourceJson(bytes) {
+    try {
+        return JSON.parse(bytes.toString('utf8'));
+    } catch (error) {
+        fail('invalid_source_json', `Import source is not valid JSON: ${error.message}`);
+    }
+}
+
+function decodePlugin(input, options) {
+    try {
+        return decodeFigmaPluginExport(input, options);
+    } catch (error) {
+        fail('invalid_figma_plugin', error.message);
+    }
+}
+
+function selectPluginFrame(root, selector) {
+    const frames = [];
+    const name = selector.toLowerCase();
+    const pending = [root];
+    while (pending.length > 0) {
+        const node = pending.pop();
+        if (typeof node?.type === 'string' && node.type.toLowerCase() === 'frame' &&
+            node.name !== '<multi-export>') frames.push(node);
+        for (const children of [node?.children, node?.alternate_frames]) {
+            if (Array.isArray(children)) {
+                for (const child of children) pending.push(child);
+            }
+        }
+    }
+    const byId = frames.filter((frame) => frame.figma_node_id === selector);
+    const matches = byId.length > 0 ? byId : frames.filter((frame) =>
+        typeof frame.name === 'string' && frame.name.toLowerCase() === name);
+    if (matches.length !== 1 || typeof matches[0].figma_node_id !== 'string') {
+        fail('invalid_fig_frame', `Figma frame '${selector}' must resolve to exactly one frame`);
+    }
+    return matches[0];
+}
+
+async function mergePluginSources(primary, input, totalBytes, extraFiles, sourceKey) {
+    const frames = [];
+    const embeddedAssets = new Map();
+    const assets = new Map();
+    const fonts = new Map();
+    const diagnostics = [];
+    let assetBytes = 0;
+
+    for (const [index, file] of [primary, ...extraFiles.map((name) => resolve(name))].entries()) {
+        let envelope = input;
+        if (index > 0) {
+            const bytes = await readImportSource(file, MAX_SOURCE_BYTES - totalBytes);
+            totalBytes += bytes.length;
+            envelope = parseSourceJson(bytes);
+        }
+        enforceSourceLimits(envelope);
+        if (envelope?.root?.alternate_frames !== undefined) {
+            fail('invalid_figma_plugin', 'Repeated Figma inputs must each contain one exported frame');
+        }
+        const decoded = decodePlugin(envelope, { sourceHash: 'sha256:' + '0'.repeat(64), sourceKey });
+        if (index > 0) frames.push(envelope.root);
+        for (const diagnostic of envelope.diagnostics ?? []) diagnostics.push(diagnostic);
+        for (const [assetIndex, asset] of decoded.assets.entries()) {
+            const raw = envelope.asset_manifest.assets[assetIndex];
+            const existing = assets.get(asset.id);
+            if (existing && (existing.contentHash !== asset.contentHash || existing.uri !== asset.uri)) {
+                fail('invalid_figma_plugin', `Figma state assets conflict for '${asset.id}'`);
+            }
+            assets.set(asset.id, existing ?? { ...asset, raw });
+            if (asset.uri === undefined || !isSafeRelativeAsset(asset.uri)) continue;
+            const bytes = await readSourceAsset(file, asset);
+            if (bytes === undefined) continue;
+            if (asset.contentHash !== undefined && asset.contentHash !== `sha256:${sha256(bytes)}`) {
+                fail('asset_hash_mismatch', `Asset '${asset.id}' does not match its declared hash`);
+            }
+            const previous = embeddedAssets.get(asset.uri);
+            if (previous && !previous.equals(bytes)) {
+                fail('invalid_figma_plugin', `Figma state assets conflict at '${asset.uri}'`);
+            }
+            if (previous) continue;
+            assetBytes += bytes.length;
+            if (assetBytes > MAX_ARCHIVE_BYTES) {
+                fail('asset_too_large', `Figma state assets exceed ${MAX_ARCHIVE_BYTES} bytes`);
+            }
+            embeddedAssets.set(asset.uri, bytes);
+        }
+        for (const font of envelope.font_family_assets ?? []) {
+            const id = font?.asset_id ?? fonts.size;
+            const existing = fonts.get(id);
+            if (existing && existing.content_hash !== font.content_hash) {
+                fail('invalid_figma_plugin', `Figma state fonts conflict for '${id}'`);
+            }
+            fonts.set(id, existing ?? font);
+        }
+    }
+    return {
+        input: {
+            ...input,
+            asset_manifest: { ...input.asset_manifest, version: 1, assets: [...assets.values()].map(({ raw }) => raw) },
+            diagnostics,
+            font_family_assets: [...fonts.values()],
+            root: { ...input.root, alternate_frames: frames },
+        },
+        embeddedAssets,
+    };
+}
+
+export async function planAssets(sourcePath, { document, embeddedAssets }, paths) {
     const manifest = [];
     const copies = [];
     const diagnostics = [];
     for (const asset of document.assets) {
         const receipt = { ...asset, status: 'declared' };
         if (typeof asset.uri === 'string' && isSafeRelativeAsset(asset.uri)) {
-            const sourceAsset = resolve(dirname(resolve(sourcePath)), asset.uri);
-            await assertSafeSourceAsset(dirname(resolve(sourcePath)), sourceAsset);
-            const metadata = await lstat(sourceAsset).catch(() => null);
-            if (metadata?.isFile() && !metadata.isSymbolicLink()) {
-                if (metadata.size > MAX_ASSET_BYTES) {
+            const bytes = embeddedAssets
+                ? embeddedAssets.get(asset.uri)
+                : await readSourceAsset(sourcePath, asset);
+            if (bytes !== undefined) {
+                if (bytes.length > MAX_ASSET_BYTES) {
                     fail('asset_too_large', `Asset '${asset.id}' exceeds ${MAX_ASSET_BYTES} bytes`);
                 }
-                const bytes = await readFile(sourceAsset);
                 const digest = `sha256:${sha256(bytes)}`;
                 let declaredHash;
                 if (asset.contentHash !== undefined) {
@@ -239,6 +417,18 @@ export async function planAssets(sourcePath, document, paths) {
     return { copies, diagnostics, manifest };
 }
 
+async function readSourceAsset(sourcePath, asset) {
+    const directory = dirname(resolve(sourcePath));
+    const sourceAsset = resolve(directory, asset.uri);
+    await assertSafeSourceAsset(directory, sourceAsset);
+    const metadata = await lstat(sourceAsset).catch(() => null);
+    if (!metadata?.isFile() || metadata.isSymbolicLink()) return undefined;
+    if (metadata.size > MAX_ASSET_BYTES) {
+        fail('asset_too_large', `Asset '${asset.id}' exceeds ${MAX_ASSET_BYTES} bytes`);
+    }
+    return readFile(sourceAsset);
+}
+
 function hasZipMagic(bytes) {
     if (bytes.length < 4 || bytes[0] !== 0x50 || bytes[1] !== 0x4b) return false;
     return (
@@ -250,8 +440,8 @@ function hasZipMagic(bytes) {
 
 async function loadStagedSourceArchive(value, sourceType) {
     if (value === null) return null;
-    if (sourceType !== 'figma') {
-        fail('invalid_source_archive', 'Pulp ZIP sources require the figma source type');
+    if (!pluginSourceTypes.has(sourceType)) {
+        fail('invalid_source_archive', 'Pulp ZIP sources require a Figma plugin source type');
     }
     if (
         typeof value.name !== 'string' || !value.name ||
@@ -288,7 +478,8 @@ async function loadStagedSourceArchive(value, sourceType) {
 }
 
 function enforceSourceLimits(input) {
-    if (Array.isArray(input?.assets) && input.assets.length > MAX_ASSET_COUNT) {
+    const assets = input?.assets ?? input?.asset_manifest?.assets;
+    if (Array.isArray(assets) && assets.length > MAX_ASSET_COUNT) {
         fail('source_limit_exceeded', `Import source exceeds ${MAX_ASSET_COUNT} assets`);
     }
     if (!input?.root || typeof input.root !== 'object') return;
@@ -303,8 +494,10 @@ function enforceSourceLimits(input) {
         if (depth > MAX_TREE_DEPTH) {
             fail('source_limit_exceeded', `Import source exceeds tree depth ${MAX_TREE_DEPTH}`);
         }
-        if (Array.isArray(node?.children)) {
-            for (const child of node.children) stack.push({ depth: depth + 1, node: child });
+        for (const children of [node?.children, node?.alternate_frames]) {
+            if (Array.isArray(children)) {
+                for (const child of children) stack.push({ depth: depth + 1, node: child });
+            }
         }
     }
 }

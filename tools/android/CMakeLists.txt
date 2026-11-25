@@ -16,10 +16,16 @@ cmake_minimum_required(VERSION 3.24)
 
 project(VellumAndroid LANGUAGES CXX)
 
+include("${CMAKE_CURRENT_LIST_DIR}/AndroidPlatform.cmake")
+
 if(NOT ANDROID)
     message(FATAL_ERROR
         "tools/android builds for Android only; pass the NDK's android.toolchain.cmake")
 endif()
+
+vellum_android_platform_configure()
+
+option(VELLUM_ANDROID_GPU_SURFACE "Compile the Android Dawn/Vulkan surface boundary" ON)
 
 set(VELLUM_CHOC_ROOT "" CACHE PATH
     "Root of the pinned CHOC checkout (the header-only utility library)")
@@ -54,9 +60,17 @@ foreach(_skip IN LISTS _excluded)
     list(REMOVE_ITEM _sources "${_core}/${_skip}")
 endforeach()
 
-# One source per line, the framework units, so a lane can hold
+set(_gpu_surface_sources
+    ${_root}/framework/core/render/src/render_loop_android.cpp
+    ${_root}/framework/core/render/platform/android/android_gpu_surface.cpp
+    ${_root}/framework/core/render/platform/android/android_gpu_surface_jni.cpp)
+
+# One source per line, every unit this file compiles, so a lane can hold
 # the number of compiled objects to what this file selected.
 set(_selected ${_sources})
+if(VELLUM_ANDROID_GPU_SURFACE)
+    list(APPEND _selected ${_gpu_surface_sources})
+endif()
 list(JOIN _selected "\n" _selected_text)
 file(WRITE "${CMAKE_BINARY_DIR}/android-sources.txt" "${_selected_text}\n")
 
@@ -73,3 +87,15 @@ target_include_directories(vellum-android-framework PUBLIC
     "${VELLUM_CHOC_ROOT}")
 set_target_properties(vellum-android-framework PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(vellum-android-framework PUBLIC log android)
+
+if(VELLUM_ANDROID_GPU_SURFACE)
+    add_library(vellum-android-gpu-surface STATIC ${_gpu_surface_sources})
+    target_compile_features(vellum-android-gpu-surface PUBLIC cxx_std_20)
+    target_compile_definitions(vellum-android-gpu-surface PRIVATE __ANDROID__)
+    target_include_directories(vellum-android-gpu-surface PUBLIC
+        "${_root}/framework/core/render/include"
+        "${_root}/framework/core/render/platform/android"
+        "${_root}/gpu-runtime/include")
+    target_link_libraries(vellum-android-gpu-surface PUBLIC log android)
+    set_target_properties(vellum-android-gpu-surface PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()

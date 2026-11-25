@@ -18,6 +18,7 @@
 #include "test_support.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -153,8 +154,26 @@ void check_command_mapping(vellum::graphics::SkiaDawnSurface& surface) {
     command.transform_enabled = true;
     command.transform = {2.0f, 0.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f, 0.0f,
                          0.0f, 0.0f, 1.0f, 0.0f,  0.0f, 0.0f, 0.0f, 1.0f};
+    const auto before_raw = renderer.triangles_submitted();
     renderer.submit(command);
-    VELLUM_RMLUI_CHECK(renderer.triangles_submitted() == 2);
+    VELLUM_RMLUI_CHECK(renderer.triangles_submitted() - before_raw == 2);
+
+    // A loaded PNG is decoded by the Vellum GPU provider when the caller has
+    // not installed a custom decoder. This is the normal Backend path for
+    // <img> and image decorators.
+    auto loaded_image = command;
+    loaded_image.texture_path = "checker.png";
+    loaded_image.texture_bytes = std::make_shared<const std::string>(
+        test::read_binary(fixtures / "checker.png"));
+    loaded_image.texture_width = 16;
+    loaded_image.texture_height = 16;
+    const auto before_loaded = renderer.triangles_submitted();
+    renderer.submit(loaded_image);
+    VELLUM_RMLUI_CHECK(renderer.triangles_submitted() - before_loaded == 2);
+    VELLUM_RMLUI_CHECK(renderer.skipped_draws() == 0);
+    VELLUM_RMLUI_CHECK(renderer.scene().root.children.back().mesh->texture);
+    VELLUM_RMLUI_CHECK(renderer.scene().root.children.back().mesh->texture->width == 16);
+    VELLUM_RMLUI_CHECK(renderer.scene().root.children.back().mesh->texture->height == 16);
 
     auto projective = command;
     // w = 1 - 0.1 * x: the fourth vertex lands at x = 11 after translation,
@@ -166,8 +185,9 @@ void check_command_mapping(vellum::graphics::SkiaDawnSurface& surface) {
         {-10.0f, 1.0f, 0.0f, 0.0f, 0xffffffffu},
         {1.0f, 0.0f, 0.0f, 0.0f, 0xffffffffu},
     });
+    const auto before_projective = renderer.triangles_submitted();
     renderer.submit(projective);
-    VELLUM_RMLUI_CHECK(renderer.triangles_submitted() == 3);
+    VELLUM_RMLUI_CHECK(renderer.triangles_submitted() - before_projective == 1);
 
     auto image = command;
     image.texture_path = "missing.png";
@@ -175,7 +195,7 @@ void check_command_mapping(vellum::graphics::SkiaDawnSurface& surface) {
     VELLUM_RMLUI_CHECK(renderer.skipped_draws() == 1);
 
     const auto& nodes = renderer.scene().root.children;
-    VELLUM_RMLUI_CHECK(nodes.size() == 2);
+    VELLUM_RMLUI_CHECK(nodes.size() == 3);
     const auto& mesh = *nodes[0].mesh;
     VELLUM_RMLUI_CHECK(nodes[0].kind == vellum::graphics::SceneNode::Kind::mesh);
     VELLUM_RMLUI_CHECK(mesh.vertices.size() == 6 && mesh.indices.size() == 6);
@@ -189,9 +209,70 @@ void check_command_mapping(vellum::graphics::SkiaDawnSurface& surface) {
                            std::vector<std::uint8_t>(8, std::uint8_t{0x7f}));
     // The projective command keeps only its first triangle; the second uses
     // the vertex at x = 11, where w is negative.
-    VELLUM_RMLUI_CHECK(nodes[1].mesh->vertices.size() == 3);
+    VELLUM_RMLUI_CHECK(nodes[2].mesh->vertices.size() == 3);
     // A shared generated texture is converted once.
-    VELLUM_RMLUI_CHECK(nodes[1].mesh->texture == mesh.texture);
+    VELLUM_RMLUI_CHECK(nodes[2].mesh->texture == mesh.texture);
+
+    // Detaching retains decoded textures for a short, clock-controlled grace
+    // period so a quick reattach does not decode them again.
+    auto now = std::chrono::steady_clock::time_point{};
+    std::size_t decodes = 0;
+    VellumRenderer cached(surface, 0x000000ffu, [&] { return now; });
+    cached.set_image_decoder([&](const std::string&, std::uint32_t& decoded_width,
+                                 std::uint32_t& decoded_height,
+                                 std::vector<std::uint8_t>& pixels) {
+        ++decodes;
+        decoded_width = 2;
+        decoded_height = 1;
+        pixels.assign(8, 0x7f);
+        return true;
+    });
+    auto image_bytes = std::make_shared<const std::string>("encoded");
+    auto cached_image = command;
+    cached_image.texture_path = "image.png";
+    cached_image.texture_bytes = image_bytes;
+    cached.begin_frame(width, height);
+    cached.submit(cached_image);
+    cached.end_frame();
+    VELLUM_RMLUI_CHECK(decodes == 1 && cached.cached_texture_count() == 1);
+    cached.on_detach();
+    now += std::chrono::milliseconds(100);
+    cached.on_attach();
+    cached.begin_frame(width, height);
+    cached.submit(cached_image);
+    cached.end_frame();
+    VELLUM_RMLUI_CHECK(decodes == 1);
+    cached.on_detach();
+    now += std::chrono::milliseconds(251);
+    cached.on_idle();
+    VELLUM_RMLUI_CHECK(cached.cached_texture_count() == 0);
+    cached.begin_frame(width, height);
+    cached.submit(cached_image);
+    cached.end_frame();
+    VELLUM_RMLUI_CHECK(decodes == 2);
+    // The same shared buffer submitted as a raw texture is not served from the
+    // decoded entry: its dimensions are validated against the buffer.
+    auto raw_as_image = cached_image;
+    raw_as_image.texture_path.clear();
+    raw_as_image.texture_width = 5;
+    raw_as_image.texture_height = 5;
+    cached.begin_frame(width, height);
+    cached.submit(cached_image);
+    cached.submit(raw_as_image);
+    cached.end_frame();
+    VELLUM_RMLUI_CHECK(cached.skipped_draws() == 1);
+    // A texture whose bytes RmlUi has released is evicted at the next frame.
+    auto released = cached_image;
+    released.texture_bytes = std::make_shared<const std::string>("replaced");
+    cached.begin_frame(width, height);
+    cached.submit(released);
+    cached.end_frame();
+    const auto before_release = cached.cached_texture_count();
+    released = {};
+    cached.begin_frame(width, height);
+    VELLUM_RMLUI_CHECK(cached.cached_texture_count() == before_release - 1);
+    cached.on_close();
+    VELLUM_RMLUI_CHECK(cached.cached_texture_count() == 0);
 }
 
 } // namespace

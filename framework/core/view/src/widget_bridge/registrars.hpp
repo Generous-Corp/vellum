@@ -69,12 +69,14 @@ struct BridgeRegistrars {
     static void register_storage_key_value_api(WidgetBridge& self);
     static void register_asset_loading_api(WidgetBridge& self);
     static void register_font_assets_api(WidgetBridge& self);
+    static void register_embedded_font_api(WidgetBridge& self);
     static void register_svg_api(WidgetBridge& self);
     static void register_shader_widget_api(WidgetBridge& self);
     static void register_shader_canvas_api(WidgetBridge& self);
     static void register_theme_api(WidgetBridge& self);
     static void register_tokens_api(WidgetBridge& self);
     static void register_widget_assets_api(WidgetBridge& self);
+    static void register_widget_asset_styling_api(WidgetBridge& self);
     static void register_widget_schema_api(WidgetBridge& self);
     static void register_widget_factory_controls_api(WidgetBridge& self);
     static void register_widget_value_controls_api(WidgetBridge& self);

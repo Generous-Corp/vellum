@@ -1056,6 +1056,8 @@ struct SceneNode final {
     Color fill = Color::rgba(0.0F, 0.0F, 0.0F, 0.0F);
     std::vector<LinearGradient> fill_gradients;
     std::vector<BoxShadow> box_shadows;
+    float border_width = 0.0F;
+    Color border_color = Color::rgba(0.0F, 0.0F, 0.0F, 0.0F);
     float corner_radius = 0.0F;
     std::string text;
     float font_size = 14.0F;

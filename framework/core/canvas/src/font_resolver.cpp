@@ -90,6 +90,9 @@ std::string platform_family_for_css_generic(const std::string& css_family) {
     // CSS.getPlatformFontsForNode. Keywords Chromium does not support on this
     // platform (ui-monospace, ui-sans-serif, -apple-system, ...) are left
     // unmapped so the list walk moves on to the next entry, as it does there.
+    // `system` is among them: it is a literal family name in CSS, not the UI
+    // font. The widget alias of the same spelling is resolved by the canvas
+    // before a family reaches this table (SkiaCanvas::set_font).
     struct Entry {
         const char* keyword;
         const char* family;

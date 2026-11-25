@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(Vellum
-    VERSION 0.2.2
+    VERSION 0.2.3
     DESCRIPTION "Experimental audio-free native application kernel"
     LANGUAGES CXX)
 
@@ -96,9 +96,11 @@ endif()
 # library has no native default here: the embedding executable bootstraps it.
 set(GPU_RUNTIME_BUILD_TESTS ${VELLUM_BUILD_TESTS})
 set(GPU_RUNTIME_HOST_OWNS_DAWN_PROCS ON)
+set(GPU_RUNTIME_BUILD_PROVIDER OFF)
 if(VELLUM_HAS_SKIA_DAWN)
     set(GPU_RUNTIME_SKIA_DIR "${VELLUM_SKIA_DIR}")
     set(GPU_RUNTIME_REQUIRE_DEVICE ON)
+    set(GPU_RUNTIME_BUILD_PROVIDER ON)
 endif()
 add_subdirectory(gpu-runtime)
 
@@ -169,8 +171,8 @@ if(APPLE AND VELLUM_BUILD_TESTS)
 endif()
 
 # The RmlUi module is a self-contained project; it is also built on its own
-# with `cmake -S rmlui`. It is added after the graphics targets so its optional
-# VellumRenderer can link Vellum::Gpu; nothing else in it uses Vellum.
+# with `cmake -S rmlui`. Add it after the Vellum targets so its optional
+# VellumRenderer and PluginView bridges can link their Vellum units.
 if(VELLUM_ENABLE_RMLUI)
     add_subdirectory(rmlui)
 endif()
@@ -584,6 +586,13 @@ if(VELLUM_BUILD_TESTS)
     add_test(NAME vellum.renderer-lock-drift-unit
         COMMAND "${Python3_EXECUTABLE}" -I scripts/test_check_renderer_lock.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.renderer-platform-evidence-unit
+        COMMAND "${Python3_EXECUTABLE}" -I scripts/test_renderer_platform_evidence.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.skia-dawn-platform-selection
+        COMMAND "${CMAKE_COMMAND}" "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}" -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_skia_dawn_platform_selection.cmake"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.threejs-payload
         COMMAND "${Python3_EXECUTABLE}" -I scripts/check_threejs_payload.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -687,12 +696,34 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}" -m unittest discover
             -s tools/mirror -p "test_*.py"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.mirror-platform-record-gate
+        COMMAND "${Python3_EXECUTABLE}" -m unittest
+            tools.mirror.test_platform_cmake.PlatformCmakeTests
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    # Evaluates VellumMirror.cmake for each declared platform with a stand-in
+    # planner, so it runs whether or not this build enabled the mirror.
+    add_test(NAME vellum.mirror-platform-targets
+        COMMAND "${Python3_EXECUTABLE}" -m unittest
+            tools.mirror.test_mirror_platform_targets
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     if(VELLUM_PACKAGE_HAS_MIRROR)
+        add_test(NAME vellum.mirror-export-targets
+            COMMAND "${CMAKE_COMMAND}"
+                "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunMirrorExportConsumer.cmake")
         set(_vellum_view_audio_archive_arg)
         if(DEFINED VELLUM_VIEW_AUDIO_ARCHIVE AND
            NOT VELLUM_VIEW_AUDIO_ARCHIVE STREQUAL "")
             set(_vellum_view_audio_archive_arg
                 "-DVELLUM_VIEW_AUDIO_ARCHIVE=${VELLUM_VIEW_AUDIO_ARCHIVE}")
+        endif()
+        set(_vellum_gpu_runtime_prefix_arg)
+        if(DEFINED VELLUM_GPU_RUNTIME_PREFIX AND
+           NOT VELLUM_GPU_RUNTIME_PREFIX STREQUAL "")
+            set(_vellum_gpu_runtime_prefix_arg
+                "-DVELLUM_GPU_RUNTIME_PREFIX=${VELLUM_GPU_RUNTIME_PREFIX}")
         endif()
         add_test(NAME vellum.mirror-install-consumer
             COMMAND "${CMAKE_COMMAND}"
@@ -706,6 +737,7 @@ if(VELLUM_BUILD_TESTS)
                 "-DVELLUM_V8_VERSION=${VELLUM_V8_VERSION}"
                 "-DVELLUM_INSTALL_THREEJS=${VELLUM_INSTALL_THREEJS}"
                 "-DVELLUM_PULP_CENSUS_LIBRARIES=${VELLUM_PULP_CENSUS_LIBRARIES}"
+                ${_vellum_gpu_runtime_prefix_arg}
                 ${_vellum_view_audio_archive_arg}
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/mirror/RunMirrorConsumer.cmake")
         # An installed consumer reaches Vellum's value model through the view
@@ -824,6 +856,7 @@ install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/VellumConfig.cmake"
     "${CMAKE_CURRENT_BINARY_DIR}/VellumConfigVersion.cmake"
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/Vellum")
+include(cmake/VellumWebCompat.cmake)
 install(FILES LICENSE.md NOTICE.md DEPENDENCIES.md
     DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/Vellum")
 if(VELLUM_INSTALL_THREEJS)

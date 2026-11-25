@@ -16,6 +16,21 @@ const { inflateRawSync } = zlib;
 // decode to tens of MB; this bounds a decompression bomb from OOM-killing the
 // process. Node throws RangeError past the limit, which the CLI maps to exit 3.
 const MAX_DECOMPRESSED_BYTES = 512 * 1024 * 1024;
+// Cumulative ceiling across every entry of one ZIP, so many small bombs cannot
+// add up to gigabytes of retained buffers.
+export const MAX_TOTAL_DECOMPRESSED_BYTES = 512 * 1024 * 1024;
+
+function chargeStored(raw, budget) {
+  if (raw.length > budget.remaining) throw new RangeError('cumulative decompression budget exceeded');
+  budget.remaining -= raw.length;
+  return Buffer.from(raw);
+}
+
+function inflateEntry(raw, budget) {
+  const out = inflateRawSync(raw, { maxOutputLength: Math.min(MAX_DECOMPRESSED_BYTES, budget.remaining) });
+  budget.remaining -= out.length;
+  return out;
+}
 
 const ZIP_LOCAL_MAGIC = 0x04034b50;
 const ZIP_EOCD_MAGIC = 0x06054b50;
@@ -31,12 +46,13 @@ export function isZip(buffer) {
  * streaming (data-descriptor) and central-directory layouts, supporting stored
  * and DEFLATE methods — the only two Figma emits.
  */
-export function unzip(buffer) {
+export function unzip(buffer, budget = { remaining: MAX_TOTAL_DECOMPRESSED_BYTES }) {
   // If any local header uses a data descriptor (sizes deferred), the sizes in
   // the local headers are zero, so trust the central directory instead.
+  const startBudget = budget.remaining;
   let cursor = 0;
   let needsCentral = false;
-  const streamed = {};
+  let streamed = {};
   while (cursor + 30 <= buffer.length) {
     if (buffer.readUInt32LE(cursor) !== ZIP_LOCAL_MAGIC) break;
     const flags = buffer.readUInt16LE(cursor + 6);
@@ -51,13 +67,17 @@ export function unzip(buffer) {
     const name = buffer.toString('utf8', cursor + 30, cursor + 30 + nameLen);
     const dataStart = cursor + 30 + nameLen + extraLen;
     const raw = buffer.subarray(dataStart, dataStart + compSize);
-    streamed[name] = method === 8 ? inflateRawSync(raw, { maxOutputLength: MAX_DECOMPRESSED_BYTES }) : Buffer.from(raw);
+    streamed[name] = method === 8 ? inflateEntry(raw, budget) : chargeStored(raw, budget);
     cursor = dataStart + compSize;
   }
-  return needsCentral ? unzipViaCentralDirectory(buffer) : streamed;
+  if (!needsCentral) return streamed;
+  // The central-directory pass re-inflates every entry: release the first pass first.
+  streamed = null;
+  budget.remaining = startBudget;
+  return unzipViaCentralDirectory(buffer, budget);
 }
 
-function unzipViaCentralDirectory(buffer) {
+function unzipViaCentralDirectory(buffer, budget) {
   let eocd = -1;
   for (let i = buffer.length - 22; i >= 0; i--) {
     if (buffer.readUInt32LE(i) === ZIP_EOCD_MAGIC) {
@@ -81,7 +101,7 @@ function unzipViaCentralDirectory(buffer) {
     const localExtraLen = buffer.readUInt16LE(localOffset + 28);
     const dataStart = localOffset + 30 + localNameLen + localExtraLen;
     const raw = buffer.subarray(dataStart, dataStart + compSize);
-    entries[name] = method === 8 ? inflateRawSync(raw, { maxOutputLength: MAX_DECOMPRESSED_BYTES }) : Buffer.from(raw);
+    entries[name] = method === 8 ? inflateEntry(raw, budget) : chargeStored(raw, budget);
     cd += 46 + nameLen + extraLen + commentLen;
   }
   return entries;
@@ -104,11 +124,12 @@ function unzipViaCentralDirectory(buffer) {
  * @returns {FigContainer}
  */
 export function unpackFig(fileBytes) {
+  const budget = { remaining: MAX_TOTAL_DECOMPRESSED_BYTES };
   let canvas = fileBytes;
   const images = new Map();
   let meta = null;
   if (isZip(fileBytes)) {
-    const entries = unzip(fileBytes);
+    const entries = unzip(fileBytes, budget);
     const canvasName = Object.keys(entries).find((n) => n.endsWith('.fig'));
     if (!canvasName) throw new Error('.fig ZIP has no inner canvas .fig entry');
     canvas = entries[canvasName];
@@ -143,19 +164,26 @@ export function unpackFig(fileBytes) {
   return {
     magic,
     version,
-    schemaBytes: decompressChunk(chunks[0]),
-    messageBytes: decompressChunk(chunks[1]),
+    schemaBytes: decompressChunk(chunks[0], budget),
+    messageBytes: decompressChunk(chunks[1], budget),
     images,
     meta,
   };
 }
 
-export function decompressChunk(chunk) {
+export function decompressChunk(chunk, budget = { remaining: MAX_TOTAL_DECOMPRESSED_BYTES }) {
+  const maxOutputLength = Math.min(MAX_DECOMPRESSED_BYTES, budget.remaining);
+  const out = decompressWithin(chunk, maxOutputLength);
+  budget.remaining -= out.length;
+  return out;
+}
+
+function decompressWithin(chunk, maxOutputLength) {
   if (chunk.length >= 4 && chunk.readUInt32LE(0) === ZSTD_MAGIC) {
     if (typeof zlib.zstdDecompressSync !== 'function') {
       throw new Error(`this .fig uses zstd compression, which needs Node.js 22.15 or newer (running ${process.version})`);
     }
-    return zlib.zstdDecompressSync(chunk, { maxOutputLength: MAX_DECOMPRESSED_BYTES });
+    return zlib.zstdDecompressSync(chunk, { maxOutputLength });
   }
-  return inflateRawSync(chunk, { maxOutputLength: MAX_DECOMPRESSED_BYTES });
+  return inflateRawSync(chunk, { maxOutputLength });
 }

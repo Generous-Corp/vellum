@@ -9,11 +9,11 @@ set(_vellum_framework_test_includes
     "${VELLUM_MIRROR_BUILD_INFO_DIR}"
     "${VELLUM_MIRROR_CHOC_ROOT}")
 
-# vellum_add_framework_test(<name> SOURCES <file>... UNITS <Vellum::Mirror target>...)
+# vellum_add_framework_test(<name> SOURCES <file>... UNITS <Vellum::Mirror target>... [ARGS <arg>...])
 # Builds one test executable and registers it as `vellum.framework.<name>`
 # with the `framework` label.
 function(vellum_add_framework_test name)
-    cmake_parse_arguments(PARSE_ARGV 1 _test "" "" "SOURCES;UNITS")
+    cmake_parse_arguments(PARSE_ARGV 1 _test "" "" "SOURCES;UNITS;ARGS")
     if(NOT _test_SOURCES OR NOT _test_UNITS)
         message(FATAL_ERROR "vellum_add_framework_test(${name}) needs SOURCES and UNITS")
     endif()
@@ -33,7 +33,7 @@ function(vellum_add_framework_test name)
         OSX_ARCHITECTURES arm64
         MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
         BUILD_RPATH "$<TARGET_FILE_DIR:vellum-skia-dawn-provider>")
-    add_test(NAME "vellum.framework.${name}" COMMAND "${_target}")
+    add_test(NAME "vellum.framework.${name}" COMMAND "${_target}" ${_test_ARGS})
     set_tests_properties("vellum.framework.${name}" PROPERTIES LABELS framework)
     foreach(_source IN LISTS _test_SOURCES)
         get_filename_component(_source "${_source}" NAME)
@@ -41,8 +41,51 @@ function(vellum_add_framework_test name)
     endforeach()
 endfunction()
 
+# The routing policy test supplies parser operations without linking a canvas library.
+add_executable(vellum-framework-font-container-route-test font_container_route_test.cpp)
+target_include_directories(vellum-framework-font-container-route-test PRIVATE
+    "${PROJECT_SOURCE_DIR}/framework/core/view/include"
+    "${PROJECT_SOURCE_DIR}/framework/core/canvas/include")
+add_test(NAME vellum.framework.font-container-route
+    COMMAND vellum-framework-font-container-route-test)
+set_tests_properties(vellum.framework.font-container-route PROPERTIES LABELS framework)
+set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES font_container_route_test.cpp)
+
 vellum_add_framework_test(widget-bridge
     SOURCES widget_bridge_test.cpp
+    UNITS Vellum::MirrorView_script)
+# The sealed-font cases register a real face from the repository's fonts.
+target_compile_definitions(vellum-framework-widget-bridge-test PRIVATE
+    VELLUM_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/framework/external/fonts/Jost-Regular.ttf")
+
+vellum_add_framework_test(gpu-surface-lease
+    SOURCES gpu_surface_lease_test.cpp
+    UNITS Vellum::MirrorView_core Vellum::MirrorRender_2d)
+# The test fakes a surface through the gpu_runtime header the render unit wraps.
+target_include_directories(vellum-framework-gpu-surface-lease-test PRIVATE
+    "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    vellum_add_framework_test(canvas-raster-parity
+        SOURCES canvas_raster_parity_test.cpp
+        UNITS Vellum::MirrorView_core
+        ARGS "${PROJECT_SOURCE_DIR}/fixtures/canvas/pulp-raster-parity.pam")
+    target_include_directories(vellum-framework-canvas-raster-parity-test PRIVATE
+        "${PROJECT_SOURCE_DIR}/framework/core/render/src")
+else()
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES canvas_raster_parity_test.cpp)
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    vellum_add_framework_test(text-button-measure
+        SOURCES text_button_measure_test.cpp
+        UNITS Vellum::MirrorView_core)
+else()
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES text_button_measure_test.cpp)
+endif()
+
+vellum_add_framework_test(react-materialization
+    SOURCES react_materialization_test.cpp
     UNITS Vellum::MirrorView_script)
 
 vellum_add_framework_test(param-model-binding
@@ -69,15 +112,14 @@ else()
 endif()
 
 # The scripted WebGPU binding against a headless Dawn device (the Null
-# adapter). The provider keeps GpuSurface::create_dawn hidden, so the test links
-# the device library itself, which brings the one Dawn this executable uses. It
-# needs the GPU backend; the test exits 77 and is skipped when no adapter is
-# available.
-if(TARGET vellum-dawn-headers AND TARGET VellumGpuRuntime::Device)
+# adapter). The provider exports the gpu_runtime surface ABI, so these tests
+# use Vellum::Gpu and keep the provider's Dawn copy process-wide. They need the
+# GPU backend; each exits 77 and is skipped when no adapter is available.
+if(TARGET vellum-dawn-headers AND TARGET vellum-gpu)
     vellum_add_framework_test(webgpu-error-scopes
         SOURCES webgpu_error_scopes_test.cpp
         UNITS Vellum::MirrorView_script Vellum::MirrorRender_2d Vellum::DawnHeaders
-               VellumGpuRuntime::Device)
+               Vellum::Gpu)
     # The test builds a headless device through the surface's own header.
     target_include_directories(vellum-framework-webgpu-error-scopes-test PRIVATE
         "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
@@ -99,13 +141,13 @@ if(VELLUM_ENABLE_V8)
         UNITS Vellum::MirrorView_script)
     target_compile_definitions(vellum-framework-threejs-modules-test PRIVATE
         VELLUM_TEST_THREEJS_DIR="${VELLUM_THREEJS_DIR}")
-    if(TARGET vellum-dawn-headers AND TARGET VellumGpuRuntime::Device)
+    if(TARGET vellum-dawn-headers AND TARGET vellum-gpu)
         foreach(_vellum_threejs_name IN ITEMS scene render)
             set(_vellum_threejs_target "vellum-framework-threejs-${_vellum_threejs_name}-test")
             vellum_add_framework_test(threejs-${_vellum_threejs_name}
                 SOURCES threejs_${_vellum_threejs_name}_test.cpp
                 UNITS Vellum::MirrorView_script Vellum::MirrorRender_2d Vellum::DawnHeaders
-                       VellumGpuRuntime::Device)
+                       Vellum::Gpu)
             target_include_directories("${_vellum_threejs_target}" PRIVATE
                 "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
             target_compile_definitions("${_vellum_threejs_target}" PRIVATE
@@ -126,14 +168,14 @@ vellum_add_framework_test(gpu-capabilities
     UNITS Vellum::MirrorRender_2d)
 
 # Several draws in one scripted WebGPU render pass, read back through Skia on a
-# real Dawn adapter. The test links the device library for the headless
-# surface, as the other GPU tests here do, and exits 77 (skipped) without a
-# rendering adapter.
-if(TARGET vellum-dawn-headers AND TARGET VellumGpuRuntime::Device)
+# real Dawn adapter. The test uses Vellum::Gpu so the headless surface and the
+# mirrored renderer share the provider's Dawn image, and exits 77 (skipped)
+# without a rendering adapter.
+if(TARGET vellum-dawn-headers AND TARGET vellum-gpu)
     vellum_add_framework_test(webgpu-multi-draw
         SOURCES webgpu_multi_draw_test.cpp
         UNITS Vellum::MirrorView_script Vellum::MirrorRender_2d Vellum::DawnHeaders
-               VellumGpuRuntime::Device)
+               Vellum::Gpu)
     target_include_directories(vellum-framework-webgpu-multi-draw-test PRIVATE
         "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
     set_tests_properties(vellum.framework.webgpu-multi-draw PROPERTIES SKIP_RETURN_CODE 77)
@@ -228,7 +270,8 @@ vellum_add_framework_test(widget-bridge-param-model
 # or a session bus a case exits 77 and ctest reports a skip. Each has a control
 # that must also pass (an unexported path, and a run with the resize and the
 # click left out).
-set(_vellum_linux_host_sources linux_atspi_tree_test.cpp linux_sdl_window_x11_test.cpp)
+set(_vellum_linux_host_sources linux_atspi_tree_test.cpp linux_sdl_window_x11_test.cpp
+    linux_plugin_view_host_x11_test.cpp)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET Vellum::MirrorView_core)
     find_package(X11 REQUIRED COMPONENTS Xtst)
     vellum_add_framework_test(linux-atspi-tree
@@ -237,6 +280,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET Vellum::MirrorView_core)
     vellum_add_framework_test(linux-sdl-window-x11
         SOURCES linux_sdl_window_x11_test.cpp
         UNITS Vellum::MirrorView_core)
+    vellum_add_framework_test(linux-plugin-view-host-x11
+        SOURCES linux_plugin_view_host_x11_test.cpp
+        UNITS Vellum::MirrorView_core)
+    target_link_libraries(vellum-framework-linux-plugin-view-host-x11-test PRIVATE X11::X11)
     target_link_libraries(vellum-framework-linux-sdl-window-x11-test PRIVATE X11::X11 X11::Xtst)
     add_test(NAME vellum.framework.linux-sdl-window-x11-control
         COMMAND vellum-framework-linux-sdl-window-x11-test --control)
@@ -248,7 +295,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET Vellum::MirrorView_core)
     set_tests_properties(vellum.framework.linux-atspi-tree-hang-control PROPERTIES
         PASS_REGULAR_EXPRESSION "bounded client call expired" LABELS "framework;linux-host" TIMEOUT 90)
     foreach(_linux_host_test IN ITEMS linux-atspi-tree linux-sdl-window-x11
-            linux-sdl-window-x11-control)
+            linux-sdl-window-x11-control linux-plugin-view-host-x11)
         set_tests_properties(vellum.framework.${_linux_host_test} PROPERTIES
             SKIP_RETURN_CODE 77 LABELS "framework;linux-host" TIMEOUT 90)
     endforeach()
@@ -260,19 +307,35 @@ vellum_add_framework_test(scripted-ui-param-model
     SOURCES scripted_ui_param_model_test.cpp
     UNITS Vellum::MirrorView_script Vellum::Value)
 
+vellum_add_framework_test(design-codegen-web-grid
+    SOURCES design_codegen_web_grid_test.cpp
+    UNITS Vellum::MirrorView_script)
+
 vellum_add_framework_test(host-param-surface-model
     SOURCES host_param_surface_model_test.cpp
     UNITS Vellum::MirrorView_core Vellum::Value)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    vellum_add_framework_test(main-thread-timer
+        SOURCES main_thread_timer_test.mm
+        UNITS Vellum::MirrorFoundation)
+    target_link_libraries(vellum-framework-main-thread-timer-test PRIVATE "-framework CoreFoundation")
+    set_tests_properties(vellum.framework.main-thread-timer PROPERTIES TIMEOUT 20)
+
     vellum_add_framework_test(native-dialog-delivery
         SOURCES native_dialog_delivery_test.cpp
         UNITS Vellum::MirrorFoundation)
     target_link_libraries(vellum-framework-native-dialog-delivery-test PRIVATE "-framework CoreFoundation")
     set_tests_properties(vellum.framework.native-dialog-delivery PROPERTIES TIMEOUT 15)
 else()
-    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES native_dialog_delivery_test.cpp)
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+        main_thread_timer_test.mm native_dialog_delivery_test.cpp)
 endif()
+
+# iOS-only: compiled by tools/mirror/consumer/ios-auv3 against the iOS simulator
+# SDK, never by this macOS tree. Naming it here keeps the guard below honest.
+set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+    ios_au_editor_controller_test.mm)
 
 # Every test file here must be registered above. A test file that no
 # vellum_add_framework_test() names would build nothing and run nothing while

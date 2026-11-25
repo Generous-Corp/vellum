@@ -208,15 +208,15 @@ RELEASE_PIPELINE_ATTESTER = "release-pipeline:Generous-Corp/vellum"
 # (owner decision 2026-11-01, ruling 1). The parity re-freeze gates every later
 # release.
 # Exceptions: the owner also waived v0.2.0, which carries the same parity
-# state v0.1.11 was waived for, and v0.2.1, which ships the same way while the
-# parity re-freeze remains open. The set is exact names, never a pattern, and
-# every release after v0.2.1 needs parity-completion-1.json at its release
-# commit.
+# state v0.1.11 was waived for, and v0.2.1 and v0.2.2, which ship the same way
+# while the parity re-freeze remains open. The set is exact names, never a
+# pattern, and every release after v0.2.2 needs parity-completion-1.json at its
+# release commit.
 AUTHORITY_PROMOTION_KIND = "vellum-authority-promotion-attestation"
 MIRROR_PROMOTION_KIND = "vellum-mirror-promotion-attestation"
 MIRROR_PROMOTION_ATTESTATION_ID = "full-design-import-render-v1-mirror-promotion-1"
 MIRROR_PROMOTION_PARITY = "not-proven-deferred-to-matrix-refreeze"
-MIRROR_PROMOTION_RELEASE_TAGS = frozenset({"v0.1.10", "v0.1.11", "v0.2.0", "v0.2.1"})
+MIRROR_PROMOTION_RELEASE_TAGS = frozenset({"v0.1.10", "v0.1.11", "v0.2.0", "v0.2.1", "v0.2.2"})
 MIRROR_RECEIPT_INDEX_PATH = "provenance/mirror/receipts/index.json"
 MIRROR_RECEIPT_INDEX_SCHEMA = "vellum.mirror-receipt-index.v1"
 MIRROR_RECEIPT_PATH = re.compile(r"^provenance/mirror/receipts/[A-Za-z0-9][A-Za-z0-9._-]*\.json$")
@@ -767,6 +767,110 @@ PROMOTION_COMMON_SCALARS = {
         "full-design-import-render-v1-exact-boundary-acknowledgement-1"
     ),
 }
+PROMOTION_SNAPSHOT_KEYS = frozenset({
+    "open_pr_snapshot", "open_pr_snapshot_commit", "open_pr_snapshot_sha256",
+    "open_pr_release_bump_evidence", "open_pr_release_bump_evidence_sha256",
+})
+# The release dry-run tag namespace (scripts/release_dry_run.py). No release
+# tag vX.Y.Z can match it; its first group is the release identity it rehearses.
+DRY_RUN_TAG = re.compile(
+    r"dry-run/(v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))/[1-9][0-9]*-[1-9][0-9]*"
+)
+
+
+def canonical_json_sha256(value: Any) -> str:
+    return hashlib.sha256((json.dumps(value, sort_keys=True) + "\n").encode("utf-8")).hexdigest()
+
+
+def promotion_open_pr_binding(
+    commit: str, snapshot: Any, release_bump_evidence: Any,
+) -> dict[str, Any]:
+    """The attestation keys that bind the selection's open-PR audit inputs.
+
+    The pre-tag replay judges the live snapshot together with the release-bump
+    content evidence read with it; a signed release tag carries both so its own
+    run judges exactly what selection judged.
+    """
+    return {
+        "open_pr_snapshot_commit": commit,
+        "open_pr_snapshot": snapshot,
+        "open_pr_snapshot_sha256": canonical_json_sha256(snapshot),
+        "open_pr_release_bump_evidence": release_bump_evidence,
+        "open_pr_release_bump_evidence_sha256": canonical_json_sha256(release_bump_evidence),
+    }
+
+
+def validate_promotion_open_pr_snapshot(
+    data: Any, release_source_commit: str | None,
+) -> list[str]:
+    """Validate the open-PR audit inputs bound into a signed release attestation."""
+    errors: list[str] = []
+    if not isinstance(data, dict) or not PROMOTION_SNAPSHOT_KEYS.issubset(data):
+        return ["release readiness: signed-tag open-PR snapshot is missing"]
+    if data.get("open_pr_snapshot_commit") != release_source_commit:
+        errors.append("release readiness: signed-tag open-PR snapshot commit differs")
+    snapshot = data.get("open_pr_snapshot")
+    if not isinstance(snapshot, dict):
+        errors.append("release readiness: signed-tag open-PR snapshot is not an object")
+    elif data.get("open_pr_snapshot_sha256") != canonical_json_sha256(snapshot):
+        errors.append("release readiness: signed-tag open-PR snapshot digest differs")
+    if isinstance(snapshot, dict):
+        try:
+            times = []
+            for stamp in (snapshot.get("captured_at"), data.get("attested_at")):
+                if not isinstance(stamp, str) or not stamp.endswith("Z"):
+                    raise ValueError
+                parsed = dt.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+                if parsed.utcoffset() != dt.timedelta(0):
+                    raise ValueError
+                times.append(parsed)
+            age = times[1] - times[0]
+            # Compare signed times, so verifying an old tag does not expire
+            # its evidence. The signing workflow supplies attested_at now.
+            if not dt.timedelta(0) <= age <= dt.timedelta(hours=24):
+                errors.append("release readiness: signed-tag open-PR snapshot must be captured "
+                              "within the 24 hours before attestation")
+        except (TypeError, ValueError, OverflowError):
+            errors.append("release readiness: signed-tag open-PR snapshot capture and attestation "
+                          "times must be UTC timestamps ending in Z")
+    evidence = data.get("open_pr_release_bump_evidence")
+    if not isinstance(evidence, dict):
+        errors.append("release readiness: signed-tag release-bump evidence is not an object")
+    elif data.get("open_pr_release_bump_evidence_sha256") != canonical_json_sha256(evidence):
+        errors.append("release readiness: signed-tag release-bump evidence digest differs")
+    return errors
+
+
+def open_pr_audit_mode(
+    *, release_readiness: bool, release_tag: str | None, dry_run_tag: str | None,
+    pretag_replay: bool,
+) -> str:
+    """Which open-PR evidence a run judges: "signed" or "live".
+
+    A release tag's own run judges the snapshot signed into its attestation at
+    selection. The pre-tag replay (which produces that snapshot) and a release
+    dry run (which has no selection; it rehearses vX on the newest reconciled
+    commit, often after vX exists) judge a live snapshot, as every tag did
+    before signed snapshots. A dry run is recognised only by its own tag name,
+    which no vX.Y.Z tag can match, naming the identity under judgment.
+    """
+    if dry_run_tag is not None:
+        match = DRY_RUN_TAG.fullmatch(dry_run_tag) if isinstance(dry_run_tag, str) else None
+        if match is None or not release_readiness or match.group(1) != release_tag:
+            raise ValueError(
+                f"--dry-run-tag {dry_run_tag!r} is not a release dry-run tag for {release_tag!r}"
+            )
+        return "live"
+    if release_readiness and release_tag is not None and not pretag_replay:
+        return "signed"
+    return "live"
+
+
+def authority_open_pr_snapshot(
+    *, release_tag: str | None, recorded: Any, live: Any,
+) -> Any:
+    """Choose the immutable release snapshot or the live branch snapshot."""
+    return recorded if release_tag is not None else live
 
 
 def release_source_key(data: Any) -> str:
@@ -793,7 +897,10 @@ def validate_promotion_shape(
         "release_source_commit" if "release_source_commit" in extra_keys
         else "parity_release_source_commit"
     )
-    if not exact_keys(data, set(PROMOTION_COMMON_KEYS) | extra_keys, where, errors):
+    allowed = set(PROMOTION_COMMON_KEYS) | extra_keys
+    if isinstance(data, dict) and PROMOTION_SNAPSHOT_KEYS.issubset(data):
+        allowed |= PROMOTION_SNAPSHOT_KEYS
+    if not exact_keys(data, allowed, where, errors):
         return errors
     for key, expected in {**PROMOTION_COMMON_SCALARS, **extra_scalars}.items():
         if not exact_scalar(data[key], expected):
@@ -1682,9 +1789,8 @@ def validate_open_pr_snapshot(
             if isinstance(row, dict) and isinstance(row.get("number"), int):
                 bump_evidence.setdefault(row["number"], row)
     snapshot_rows: dict[tuple[str, int], tuple[str, list[str]]] = {}
-    if not isinstance(snapshot, dict) or set(snapshot) != {
-        "schema_version", "kind", "repositories"
-    }:
+    snapshot_keys = {"schema_version", "kind", "repositories"}
+    if not isinstance(snapshot, dict) or set(snapshot) not in (snapshot_keys, snapshot_keys | {"captured_at"}):
         return ["open PR snapshot: expected strict snapshot object"]
     if not exact_scalar(snapshot.get("schema_version"), 3) or not exact_scalar(
         snapshot.get("kind"), "github-open-pull-request-snapshot"
@@ -3320,8 +3426,13 @@ def validate_release_readiness(
     check_runs: Any = None,
     delivery_retired: bool = False,
     release_tag: str | None = None,
+    require_signed_open_pr_snapshot: bool | None = None,
 ) -> list[str]:
     errors: list[str] = []
+    if require_signed_open_pr_snapshot is None:
+        # Fail closed: a release-tag judgment needs the signed snapshot unless
+        # verify() decided this run judges a live one (open_pr_audit_mode).
+        require_signed_open_pr_snapshot = release_tag is not None
     if not isinstance(data, dict) or not isinstance(data.get("cells"), list):
         return ["release readiness: compatibility matrix cells are unavailable"]
     if check_runs is None:
@@ -3381,6 +3492,8 @@ def validate_release_readiness(
     if promotion_error is not None:
         errors.append(promotion_error)
         return errors
+    if require_signed_open_pr_snapshot:
+        errors.extend(validate_promotion_open_pr_snapshot(promotion_data, release_source_commit))
     if mirror_promotion:
         errors.extend(
             "release readiness: " + error
@@ -3441,6 +3554,7 @@ def verify(
     release_tag: str | None = None,
     pulp_main_ref: str | None = None,
     release_bump_evidence: Any = None,
+    dry_run_tag: str | None = None,
 ) -> dict[str, Any]:
     closure_errors = []
     try:
@@ -3509,6 +3623,29 @@ def verify(
         acknowledgement_data = load_json(acknowledgement)
         matrix_data = load_json(matrix)
         boundary_amendment_data = load_json(boundary_amendment)
+        open_pr_audit = open_pr_audit_mode(
+            release_readiness=release_readiness, release_tag=release_tag,
+            dry_run_tag=dry_run_tag,
+            pretag_replay=os.environ.get("VELLUM_PRETAG_REPLAY") == "1",
+        )
+        effective_open_pr_snapshot = open_pr_snapshot
+        effective_release_bump_evidence = release_bump_evidence
+        if open_pr_audit == "signed":
+            # The tag's own run judges only what its attestation signed at
+            # selection; a live snapshot or bump evidence handed in is ignored.
+            # validate_release_readiness binds both to their signed digests.
+            signed_promotion: Any = None
+            if promotion_attestation is not None and promotion_attestation.is_file():
+                try:
+                    signed_promotion = load_json(promotion_attestation)
+                except ValueError:
+                    signed_promotion = None
+            recorded = signed_promotion if isinstance(signed_promotion, dict) else {}
+            effective_open_pr_snapshot = authority_open_pr_snapshot(
+                release_tag=release_tag, recorded=recorded.get("open_pr_snapshot"),
+                live=open_pr_snapshot,
+            )
+            effective_release_bump_evidence = recorded.get("open_pr_release_bump_evidence")
         delivery_retired, retirement_errors = validate_delivery_repository_retirement(root)
         promotion_errors = list(retirement_errors)
         exact_acknowledgement_path = (
@@ -3527,13 +3664,14 @@ def verify(
                 exact_acknowledgement_data,
                 boundary_amendment_data,
                 check_runs,
-                open_pr_snapshot,
-                defer_live_open_pr_audit,
+                effective_open_pr_snapshot,
+                # A signed snapshot is always judged: there is nothing live to defer.
+                defer_live_open_pr_audit and open_pr_audit != "signed",
                 delivery_retired,
                 pulp_main_ref,
                 # Only release readiness judges an overlap as the release's own bump.
                 release_tag if release_readiness else None,
-                release_bump_evidence,
+                effective_release_bump_evidence,
             )
         parity_completion_path = root / PARITY_COMPLETION_PATH
         if parity_completion_path.is_file():
@@ -3566,6 +3704,7 @@ def verify(
                     check_runs=check_runs,
                     delivery_retired=delivery_retired,
                     release_tag=release_tag,
+                    require_signed_open_pr_snapshot=open_pr_audit == "signed",
                 )
                 if release_readiness
                 else []
@@ -3651,9 +3790,20 @@ def main() -> int:
     )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--release-readiness", action="store_true")
+    parser.add_argument(
+        "--dry-run-tag",
+        help="the release dry-run tag this run judges as --release-tag; it judges a live "
+        "open-PR snapshot, since a dry run has no signed selection snapshot",
+    )
     args = parser.parse_args()
     if args.pulp_main_ref is not None and args.pulp_root is None:
         parser.error("--pulp-main-ref requires --pulp-root")
+    if args.dry_run_tag is not None and os.environ.get("GITHUB_REF", f"refs/tags/{args.dry_run_tag}") != (
+        f"refs/tags/{args.dry_run_tag}"
+    ):
+        # Only the dry-run tag's own run may judge a live snapshot in place of
+        # a signed one: a release tag's run (GITHUB_REF=refs/tags/vX.Y.Z) never can.
+        parser.error("--dry-run-tag must name the tag this run is for (GITHUB_REF)")
     report = verify(
         args.root.resolve(),
         release_readiness=args.release_readiness,
@@ -3676,6 +3826,7 @@ def main() -> int:
             load_json(args.release_bump_evidence_json.resolve())
             if args.release_bump_evidence_json else None
         ),
+        dry_run_tag=args.dry_run_tag,
     )
     rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output:

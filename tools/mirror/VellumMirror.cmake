@@ -19,6 +19,13 @@
 # is enabled only by landing one.
 include("${CMAKE_CURRENT_LIST_DIR}/VellumMirrorPlatform.cmake")
 vellum_mirror_platform_args(_vellum_mirror_platform_args)
+# The Apple-only link rules below apply to macOS alone, not to the other Apple
+# systems, which plan from their own closure records.
+if(APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set(_vellum_mirror_darwin TRUE)
+else()
+    set(_vellum_mirror_darwin FALSE)
+endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     if(NOT VELLUM_HAS_SKIA_DAWN)
         message(FATAL_ERROR
@@ -40,6 +47,43 @@ if(APPLE)
     enable_language(OBJCXX)
 endif()
 find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
+
+# Every installed mirror closure gets a short identity. It is derived from the
+# source revision, the locked renderer and optional V8 inputs, and the ABI
+# switches that change compiled interfaces. Target names stay stable so the
+# package export and Pulp staging continue to use the same CMake targets.
+execute_process(
+    COMMAND git -C "${PROJECT_SOURCE_DIR}" rev-parse HEAD
+    OUTPUT_VARIABLE _vellum_runtime_source_revision
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE _vellum_runtime_source_result)
+# CMake regular expressions have no {n,m} interval, so the length is checked apart.
+string(LENGTH "${_vellum_runtime_source_revision}" _vellum_runtime_source_length)
+if(NOT _vellum_runtime_source_result EQUAL 0 OR
+   NOT _vellum_runtime_source_revision MATCHES "^[0-9a-fA-F]+$" OR
+   _vellum_runtime_source_length LESS 7 OR _vellum_runtime_source_length GREATER 64)
+    message(FATAL_ERROR "Vellum: runtime identity needs an authoritative source revision")
+endif()
+file(SHA256 "${PROJECT_SOURCE_DIR}/gpu-runtime/renderer-lock.json" _vellum_runtime_renderer_pin)
+file(SHA256 "${PROJECT_SOURCE_DIR}/provenance/third-party-lock.json" _vellum_runtime_dependency_pin)
+set(_vellum_runtime_abi_inputs
+    "mirror=${VELLUM_ENABLE_MIRROR}"
+    "v8=${VELLUM_ENABLE_V8}"
+    "tracing=${VELLUM_ENABLE_TRACING}"
+    "graphics=${VELLUM_ENABLE_GRAPHICS}"
+    "gpu=${VELLUM_ENABLE_GPU}"
+    "asan=${VELLUM_ENABLE_ADDRESS_SANITIZER}"
+    "renderer=${_vellum_runtime_renderer_pin}"
+    "dependencies=${_vellum_runtime_dependency_pin}")
+string(JOIN "|" _vellum_runtime_identity_seed
+    "source=${_vellum_runtime_source_revision}" ${_vellum_runtime_abi_inputs})
+string(SHA256 _vellum_runtime_identity_hash "${_vellum_runtime_identity_seed}")
+string(SUBSTRING "${_vellum_runtime_identity_hash}" 0 12 VELLUM_RUNTIME_IDENTITY_TAG)
+set(VELLUM_RUNTIME_IDENTITY_TAG "${VELLUM_RUNTIME_IDENTITY_TAG}" CACHE INTERNAL
+    "Identity of the Vellum runtime closure" FORCE)
+set(VELLUM_RUNTIME_IDENTITY_SUFFIX "-${VELLUM_RUNTIME_IDENTITY_TAG}")
+set(VELLUM_RUNTIME_OBJC_SUFFIX "_${VELLUM_RUNTIME_IDENTITY_TAG}")
+message(STATUS "Vellum: runtime closure identity ${VELLUM_RUNTIME_IDENTITY_TAG}")
 
 set(VELLUM_MIRROR_DEPS_DIR "${CMAKE_BINARY_DIR}/_deps/vellum-mirror" CACHE PATH
     "Where the mirror's pinned dependency sources are fetched")
@@ -200,6 +244,19 @@ function(_vellum_mirror_add_dependency name)
                 target_compile_options("${_provided}" PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${_option}>")
             endforeach()
         endif()
+        if(_provided STREQUAL "SDL3-static" AND APPLE)
+            foreach(_sdl_class IN ITEMS
+                    Cocoa_PasteboardDataProvider SDL3AppDelegate SDL3Application
+                    SDL3Cocoa_WindowListener SDL3METAL_PaletteData SDL3METAL_RenderData
+                    SDL3METAL_TextureData SDL3MessageBoxPresenter SDL3OpenGLContext
+                    SDL3TranslatorResponder SDL3View SDL3Window SDL3_RumbleContext
+                    SDL3_RumbleMotor SDL3_cocoametalview
+                    SDLCaptureVideoDataOutputSampleBufferDelegate SDLPrivateCameraData
+                    SDL_CocoaVideoData SDL_CocoaWindowData)
+                target_compile_definitions("${_provided}" PRIVATE
+                    "${_sdl_class}=${_sdl_class}_${VELLUM_RUNTIME_IDENTITY_TAG}")
+            endforeach()
+        endif()
     endforeach()
 endfunction()
 
@@ -314,6 +371,11 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         # installed choke headers is lifted (gpu_surface_guard.py). PRIVATE,
         # so it never reaches an installed consumer.
         target_compile_definitions("${_vellum_mirror_target}" PRIVATE VELLUM_MIRROR_BUILD=1)
+        if(APPLE)
+            target_compile_definitions("${_vellum_mirror_target}" PRIVATE
+                PULP_VIEW_OBJC_SUFFIX=${VELLUM_RUNTIME_OBJC_SUFFIX}
+                VellumMirrorEnvironmentObserver=VellumMirrorEnvironmentObserver_${VELLUM_RUNTIME_IDENTITY_TAG})
+        endif()
         # VELLUM_ENABLE_TRACING: every mirrored target compiles with the same
         # trace switch and Perfetto header, so no two objects disagree on
         # kTracingEnabled. Compile usage only; the one Perfetto library is
@@ -357,8 +419,10 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         _vellum_mirror_declared_recipe_usage("${_vellum_mirror_target}")
         # Link edges are resolved once, by the unit libraries below: a static
         # target that carried them would copy another unit's objects in.
-        add_dependencies("${_vellum_mirror_target}"
-            ${VELLUM_MIRROR_TARGET_${_tkey}_INTERNAL_LINKS})
+        if(VELLUM_MIRROR_TARGET_${_tkey}_INTERNAL_LINKS)
+            add_dependencies("${_vellum_mirror_target}"
+                ${VELLUM_MIRROR_TARGET_${_tkey}_INTERNAL_LINKS})
+        endif()
     endforeach()
 endforeach()
 
@@ -367,11 +431,55 @@ endforeach()
 # the public header is mirrored, while this implementation is authored here.
 if(TARGET pulp-view-core AND APPLE)
     target_sources(pulp-view-core PRIVATE
-        "${PROJECT_SOURCE_DIR}/framework/core/view/src/plugin_view_host.cpp"
-        "${PROJECT_SOURCE_DIR}/framework/core/view/platform/mac/gpu_plugin_editor_host_mac.mm"
-        "${PROJECT_SOURCE_DIR}/framework/core/view/platform/mac/window_host_mac_metal_view.mm")
+        "${PROJECT_SOURCE_DIR}/framework/core/view/src/plugin_view_host.cpp")
+    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        target_sources(pulp-view-core PRIVATE
+            "${PROJECT_SOURCE_DIR}/framework/core/view/platform/ios/ios_accessibility_bridge.mm"
+            "${PROJECT_SOURCE_DIR}/framework/core/view/platform/ios/ios_editor_surface_host.mm"
+            "${PROJECT_SOURCE_DIR}/framework/core/view/platform/ios/ios_window_surface_host.mm")
+    else()
+        target_sources(pulp-view-core PRIVATE
+            "${PROJECT_SOURCE_DIR}/framework/core/view/platform/mac/gpu_plugin_editor_host_mac.mm"
+            "${PROJECT_SOURCE_DIR}/framework/core/view/platform/mac/window_host_mac_metal_view.mm")
+    endif()
     target_include_directories(pulp-view-core PRIVATE
         "${PROJECT_SOURCE_DIR}/framework/core/view/include")
+endif()
+
+if(TARGET pulp-view-core AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(X11 REQUIRED)
+    target_sources(pulp-view-core PRIVATE
+        "${PROJECT_SOURCE_DIR}/framework/core/view/src/plugin_view_host.cpp"
+        "${PROJECT_SOURCE_DIR}/framework/core/view/platform/linux/gpu_plugin_editor_host_x11.cpp")
+    target_include_directories(pulp-view-core PRIVATE
+        "${PROJECT_SOURCE_DIR}/framework/core/view/include")
+    target_link_libraries(pulp-view-core PRIVATE X11::X11)
+endif()
+
+# Windows owns the HWND child editor host. Its Dawn surface is created after
+# attachment, when the child has its final parent and DPI context.
+if(TARGET pulp-view-core AND WIN32)
+    target_sources(pulp-view-core PRIVATE
+        "${PROJECT_SOURCE_DIR}/framework/core/view/src/plugin_view_host.cpp"
+        "${PROJECT_SOURCE_DIR}/framework/core/view/platform/win/gpu_plugin_editor_host_win.cpp")
+    target_include_directories(pulp-view-core PRIVATE
+        "${PROJECT_SOURCE_DIR}/framework/core/view/include")
+endif()
+
+if(TARGET vellum-skia-dawn-provider)
+    set_target_properties(vellum-skia-dawn-provider PROPERTIES
+        OUTPUT_NAME "vellum-skia-dawn-provider${VELLUM_RUNTIME_IDENTITY_SUFFIX}")
+    target_compile_definitions(vellum-skia-dawn-provider PRIVATE
+        PULP_VIEW_OBJC_SUFFIX=${VELLUM_RUNTIME_OBJC_SUFFIX}
+        VellumMirrorEnvironmentObserver=VellumMirrorEnvironmentObserver_${VELLUM_RUNTIME_IDENTITY_TAG})
+endif()
+
+# The provider force-links the GPU device archive, whose Metal surface view is
+# named through GPU_RUNTIME_OBJC_SUFFIX. Compile definitions on the provider do
+# not reach a static-library dependency, so the archive gets the suffix itself.
+if(TARGET gpu-runtime-device-provider)
+    target_compile_definitions(gpu-runtime-device-provider PRIVATE
+        GPU_RUNTIME_OBJC_SUFFIX=${VELLUM_RUNTIME_OBJC_SUFFIX})
 endif()
 
 # Optional V8 (VELLUM_ENABLE_V8). The closures build view-script with QuickJS
@@ -381,6 +489,13 @@ endif()
 # which arrive through the imported target and are part of V8's ABI. The
 # unit's objects live in vellum-skia-dawn-provider, which links libv8.dylib
 # and finds it beside itself once installed.
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set(_vellum_v8_provider_path "@rpath/libv8.dylib")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(_vellum_v8_provider_path "libv8.so")
+else()
+    set(_vellum_v8_provider_path "v8.dll")
+endif()
 set(VELLUM_MIRROR_HAS_V8 OFF)
 if(VELLUM_ENABLE_V8)
     if(NOT TARGET pulp-view-script)
@@ -398,7 +513,7 @@ if(VELLUM_ENABLE_V8)
     target_compile_definitions(pulp-view-script PRIVATE
         PULP_HAS_V8=1
         PULP_V8_PROVIDER_KIND="v8builder"
-        PULP_V8_PROVIDER_PATH="@rpath/libv8.dylib"
+        PULP_V8_PROVIDER_PATH="${_vellum_v8_provider_path}"
         PULP_V8_EXPECTED_RUNTIME_VERSION="${VELLUM_V8_VERSION}")
     target_link_libraries(vellum-skia-dawn-provider PRIVATE vellum-v8)
     install(FILES "${VELLUM_V8_LIBRARY}"
@@ -425,8 +540,26 @@ if(TARGET pulp-view-core)
         "$<TARGET_PROPERTY:pulp-view-core,COMPILE_DEFINITIONS>")
 endif()
 
-# Everything below packages and links with Apple-only rules.
+# The remaining packaging rules share one platform split. Darwin keeps its
+# symbol-list and re-export controls. Other declared platforms use ordinary
+# shared-library exports; equivalent export controls are not implemented.
 vellum_mirror_require_packaging()
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set(_vellum_mirror_install_rpath "@loader_path;@loader_path/../../${CMAKE_INSTALL_LIBDIR}")
+    set(_vellum_mirror_macos_architectures arm64)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(_vellum_mirror_install_rpath "\$ORIGIN;\$ORIGIN/../../${CMAKE_INSTALL_LIBDIR}")
+    set(_vellum_mirror_macos_architectures)
+else()
+    set(_vellum_mirror_install_rpath "")
+    set(_vellum_mirror_macos_architectures)
+endif()
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    message(STATUS
+        "Vellum: ${CMAKE_SYSTEM_NAME} mirror libraries omit Darwin "
+        "-exported_symbols_list, -unexported_symbols_list, and re-export controls, "
+        "and have no equivalent export controls yet")
+endif()
 
 # ── Package libraries ──────────────────────────────────────────────────────
 # One shared library per unit, each holding every object of its mirrored
@@ -445,11 +578,15 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
     add_library("Vellum::Mirror${_first}${_rest}" ALIAS "${_library}")
     set_target_properties("${_library}" PROPERTIES
         EXPORT_NAME "Mirror${_first}${_rest}"
-        MACOSX_RPATH ON
+        OUTPUT_NAME "vellum-mirror-${_vellum_mirror_unit}${VELLUM_RUNTIME_IDENTITY_SUFFIX}"
         BUILD_WITH_INSTALL_RPATH ON
-        INSTALL_RPATH "@loader_path;@loader_path/../../${CMAKE_INSTALL_LIBDIR}"
-        OSX_ARCHITECTURES arm64
-        MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
+        INSTALL_RPATH "${_vellum_mirror_install_rpath}")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        set_target_properties("${_library}" PROPERTIES
+            MACOSX_RPATH ON
+            OSX_ARCHITECTURES ${_vellum_mirror_macos_architectures}
+            MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
+    endif()
     set(_whole)
     set(_external)
     set(_skia OFF)
@@ -512,29 +649,34 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
                 list(APPEND _provider_unit_links "${_provider_link}")
             endif()
         endforeach()
+        # gpu-runtime-device-provider is the single provider-owned device
+        # archive. A closure may also name the hidden gpu-runtime-device
+        # target; linking both creates duplicate Dawn/device definitions and
+        # leaves provider consumers with undefined ABI symbols. The provider
+        # target supplies the one archive directly.
+        list(FILTER _provider_whole EXCLUDE REGEX "^gpu-runtime-device$")
+        list(FILTER _provider_unit_links EXCLUDE REGEX "^gpu-runtime-device$")
+        list(FILTER _third_party EXCLUDE REGEX "^gpu-runtime-device$")
         list(REMOVE_DUPLICATES _provider_whole)
         list(REMOVE_DUPLICATES _provider_unit_links)
         target_link_libraries(vellum-skia-dawn-provider PRIVATE
             "$<LINK_LIBRARY:WHOLE_ARCHIVE,${_provider_whole}>")
-        target_link_options(vellum-skia-dawn-provider PRIVATE
-            "LINKER:-unexported_symbols_list,${VELLUM_MIRROR_UNEXPORTS}")
-        set_property(TARGET vellum-skia-dawn-provider APPEND PROPERTY LINK_DEPENDS
-            "${VELLUM_MIRROR_UNEXPORTS}")
-        add_dependencies(vellum-skia-dawn-provider vellum-mirror-third-party-unexports)
         if(_provider_unit_links)
             target_link_libraries(vellum-skia-dawn-provider PRIVATE
                 ${_provider_unit_links})
         endif()
-        target_link_libraries(vellum-skia-dawn-provider PRIVATE
-            ${_third_party}
-            "-framework Accelerate"
-            "-framework AppKit"
-            "-framework CoreServices"
-            "-framework Security"
-            "-framework SystemConfiguration"
-            "-framework UniformTypeIdentifiers"
-            "-framework UserNotifications"
-            bsm)
+        target_link_libraries(vellum-skia-dawn-provider PRIVATE ${_third_party})
+        if(_vellum_mirror_darwin)
+            target_link_libraries(vellum-skia-dawn-provider PRIVATE
+                "-framework Accelerate"
+                "-framework AppKit"
+                "-framework CoreServices"
+                "-framework Security"
+                "-framework SystemConfiguration"
+                "-framework UniformTypeIdentifiers"
+                "-framework UserNotifications"
+                bsm)
+        endif()
         # Retain a concrete provider binding in this otherwise empty frontend.
         # Loading the frontend must also load its re-exported provider.
         target_sources("${_library}" PRIVATE
@@ -546,8 +688,10 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         # provider while retaining a standalone direct-link contract.
         target_link_libraries("${_library}" PUBLIC
             Vellum::SkiaDawnProvider ${_unit_links})
-        target_link_options("${_library}" PRIVATE
-            "LINKER:-reexport_library,$<TARGET_FILE:vellum-skia-dawn-provider>")
+        if(_vellum_mirror_darwin)
+            target_link_options("${_library}" PRIVATE
+                "LINKER:-reexport_library,$<TARGET_FILE:vellum-skia-dawn-provider>")
+        endif()
     else()
         target_link_libraries("${_library}" PRIVATE
             "$<LINK_LIBRARY:WHOLE_ARCHIVE,${_whole}>"
@@ -565,21 +709,23 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
     endif()
     set_target_properties("${_library}" PROPERTIES
         VELLUM_MIRROR_CARRIED_ARCHIVES "${_third_party}")
-    target_link_libraries("${_library}" PRIVATE
-        "-framework Accelerate"
-        "-framework AppKit"
-        "-framework CoreFoundation"
-        "-framework CoreGraphics"
-        "-framework CoreServices"
-        "-framework CoreText"
-        "-framework Foundation"
-        "-framework IOKit"
-        "-framework Security"
-        "-framework SystemConfiguration"
-        "-framework UniformTypeIdentifiers"
-        "-framework UserNotifications"
-        bsm)
-    if(_skia)
+    if(_vellum_mirror_darwin)
+        target_link_libraries("${_library}" PRIVATE
+            "-framework Accelerate"
+            "-framework AppKit"
+            "-framework CoreFoundation"
+            "-framework CoreGraphics"
+            "-framework CoreServices"
+            "-framework CoreText"
+            "-framework Foundation"
+            "-framework IOKit"
+            "-framework Security"
+            "-framework SystemConfiguration"
+            "-framework UniformTypeIdentifiers"
+            "-framework UserNotifications"
+            bsm)
+    endif()
+    if(_skia AND _vellum_mirror_darwin)
         # Export only the mirrored namespaces this unit defines.
         set(_exports "${CMAKE_CURRENT_BINARY_DIR}/vellum-mirror-${_vellum_mirror_unit}.exports")
         # The units' root namespace comes from the plan: pulp before the
@@ -598,7 +744,7 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         target_link_options("${_library}" PRIVATE
             "LINKER:-exported_symbols_list,${_exports}")
         set_property(TARGET "${_library}" APPEND PROPERTY LINK_DEPENDS "${_exports}")
-    else()
+    elseif(NOT _skia AND _vellum_mirror_darwin)
         # ld takes an export list or an unexport list, not both: the units
         # that have no export list leave the third-party names out.
         target_link_options("${_library}" PRIVATE
@@ -607,7 +753,9 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
             "${VELLUM_MIRROR_UNEXPORTS}")
         add_dependencies("${_library}" vellum-mirror-third-party-unexports)
     endif()
-    target_link_options("${_library}" PRIVATE "LINKER:-dead_strip_dylibs")
+    if(_vellum_mirror_darwin)
+        target_link_options("${_library}" PRIVATE "LINKER:-dead_strip_dylibs")
+    endif()
     target_compile_definitions("${_library}" INTERFACE
         ${VELLUM_MIRROR_UNIT_${_ukey}_DEFINITIONS})
     target_compile_features("${_library}" INTERFACE cxx_std_20)
@@ -618,6 +766,17 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
     target_link_libraries("${_library}" INTERFACE Vellum::Value)
     list(APPEND _vellum_mirror_unit_libraries "${_library}")
 endforeach()
+
+# Raw-path consumers use the same filenames as the exported CMake targets.
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/runtime-images.json" CONTENT
+"{
+  \"provider\": \"${CMAKE_INSTALL_LIBDIR}/$<TARGET_FILE_NAME:vellum-skia-dawn-provider>\",
+  \"canvas\": \"${VELLUM_MIRROR_INSTALL_DIR}/lib/$<TARGET_FILE_NAME:vellum-mirror-canvas>\",
+  \"foundation\": \"${VELLUM_MIRROR_INSTALL_DIR}/lib/$<TARGET_FILE_NAME:vellum-mirror-foundation>\",
+  \"state-core\": \"${VELLUM_MIRROR_INSTALL_DIR}/lib/$<TARGET_FILE_NAME:vellum-mirror-state-core>\"
+}
+")
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/runtime-images.json" DESTINATION "share/vellum")
 
 # Executables declared in provenance/framework/units.json. Each links the
 # unit libraries that carry the mirrored targets it names, so it holds one
@@ -630,9 +789,12 @@ foreach(_vellum_mirror_executable IN LISTS VELLUM_MIRROR_EXECUTABLES)
         CXX_STANDARD 20
         CXX_STANDARD_REQUIRED ON
         OBJCXX_STANDARD 20
-        OSX_ARCHITECTURES arm64
-        MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
         BUILD_RPATH "$<TARGET_FILE_DIR:vellum-skia-dawn-provider>")
+    if(_vellum_mirror_darwin)
+        set_target_properties("${_vellum_mirror_executable}" PROPERTIES
+            OSX_ARCHITECTURES arm64
+            MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
+    endif()
     target_include_directories("${_vellum_mirror_executable}" PRIVATE
         ${VELLUM_MIRROR_TARGET_${_tkey}_INCLUDE_DIRS}
         "$<TARGET_PROPERTY:vellum-value,INTERFACE_INCLUDE_DIRECTORIES>")

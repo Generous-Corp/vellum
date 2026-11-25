@@ -8,6 +8,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -83,6 +84,7 @@ observatory:
   maximum_overdue_events: 0
   maximum_pending_event_age_days: 7
   maximum_repeated_generic_fixes: 2
+  repeated_generic_fix_window_days: 14
   maximum_framework_effort_percent: 15
 """,
     )
@@ -2346,6 +2348,164 @@ class ObservatoryTests(unittest.TestCase):
 
 
 
+class RepeatedGenericFixWindowTests(unittest.TestCase):
+    """The repeated-fix budget counts a burst inside its window, not old debt."""
+
+    NOW = "2026-11-24T12:00:00Z"
+    BUDGETS = {
+        "security_or_p0_classification_hours": 24,
+        "ordinary_framework_classification_business_days": 3,
+        "other_classification_days": 7,
+        "maximum_pending_events": 20,
+        "maximum_overdue_events": 0,
+        "maximum_pending_event_age_days": 7,
+        "maximum_repeated_generic_fixes": 2,
+        "maximum_framework_effort_percent": 15,
+        "repeated_generic_fix_window_days": 14,
+    }
+
+    @staticmethod
+    def events(
+        resolved: list[str], *, direction: str = "Pulp-to-framework", disposition: str = "port-required",
+    ) -> list[tuple[Path, dict[str, object]]]:
+        """One observation per timestamp on contract `render`, each resolved at that time."""
+        events: list[tuple[Path, dict[str, object]]] = []
+        for index, stamp in enumerate(resolved):
+            sha = f"{index + 1:040x}"
+            source = "Generous-Corp/pulp" if direction == "Pulp-to-framework" else "Generous-Corp/vellum"
+            observation = {
+                "schema_version": 1, "event_id": f"obs-{sha}", "kind": "observation",
+                "source_repository": source, "source_commit": sha,
+                "discovered_at": "2026-07-01T00:00:00Z",
+                "scan_cursor": {"from_commit": "b" * 40, "to_commit": "c" * 40},
+                "direction": direction, "mapped_contracts": ["render"],
+                "mapped_paths": ["core/render/a.cpp"], "transitive_paths": [], "rename_candidates": [],
+                "patch_id": None, "include_dependency_deltas": [], "schema_api_deltas": [],
+                "class": "correctness", "severity": None, "disposition": "pending", "rationale": "Review.",
+                "owner": "@danielraffel", "linked_commits": [], "linked_pull_requests": [],
+                "contract_tests": ["render-contract"], "contract_keys": ["render"],
+                "shared_contract_release_blocker": False, "effort_minutes": 0,
+            }
+            resolution = {
+                "schema_version": 1, "event_id": f"resolution-{sha}", "kind": "resolution",
+                "created_at": stamp, "resolves": observation["event_id"],
+                "disposition": disposition, "rationale": "Classified.", "owner": "@danielraffel",
+                "linked_commits": [sha], "linked_pull_requests": [], "contract_tests": ["render-contract"],
+                "shared_contract_release_blocker": False, "effort_minutes": 5,
+            }
+            events += [(Path(f"obs-{index}"), observation), (Path(f"resolution-{index}"), resolution)]
+        return events
+
+    def report(
+        self, events: list[tuple[Path, dict[str, object]]], *, budgets: dict[str, int] | None = None,
+        now: str | None = NOW,
+    ) -> dict[str, object]:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            write_json(
+                root / "provenance/authority/trust-policy.v1.json",
+                {"schema_version": 1, "state": "disabled", "repositories": {
+                    "pulp": {"repository_id": None, "reader_app_id": None, "required_check_app_ids": {}},
+                    "vellum": {"repository_id": None, "reader_app_id": None, "required_check_app_ids": {}},
+                }},
+            )
+            lock = {"state": "prepared", "vellum_authority_start_commit": None, "pulp_activation_commit": None}
+            cursor = {"effort_window": {"framework_effort_minutes": 0, "observatory_effort_minutes": 0}}
+            return observatory.build_report(
+                root=root, lock=lock, cursor=cursor, events=events,
+                budgets=budgets if budgets is not None else self.BUDGETS,
+                now=observatory.parse_utc(now, "now") if now else None, coverage_gaps=[],
+            )
+
+    def test_a_burst_inside_the_window_over_the_limit_fails(self) -> None:
+        report = self.report(self.events(["2026-11-23T00:00:00Z"] * 3))
+        self.assertEqual(report["repeated_generic_fixes"], {"render": 3})
+        self.assertIn("repeated-generic-fix-threshold-exceeded", report["budget_violations"])
+
+    def test_framework_to_pulp_fixes_do_not_count(self) -> None:
+        for disposition in ("port-required", "ported"):
+            with self.subTest(disposition=disposition):
+                report = self.report(self.events(
+                    ["2026-11-23T00:00:00Z"] * 3, direction="framework-to-Pulp", disposition=disposition))
+                self.assertEqual(report["repeated_generic_fixes"], {})
+                self.assertEqual(report["health"], "pass")
+        mixed = self.events(["2026-11-23T00:00:00Z"] * 2) + [
+            (Path(f"vellum-{path}"), {**event, "event_id": f"vellum-{event['event_id']}",
+                                      **({"resolves": f"vellum-{event['resolves']}"} if "resolves" in event else
+                                         {"direction": "framework-to-Pulp"})})
+            for path, event in self.events(["2026-11-23T00:00:00Z"])
+        ]
+        self.assertEqual(self.report(mixed)["repeated_generic_fixes"], {"render": 2})
+
+    def test_the_same_fixes_older_than_the_window_pass(self) -> None:
+        report = self.report(self.events(["2026-11-01T00:00:00Z"] * 3))
+        self.assertEqual(report["repeated_generic_fixes"], {})
+        self.assertNotIn("repeated-generic-fix-threshold-exceeded", report["budget_violations"])
+        self.assertEqual(report["health"], "pass")
+
+    def test_a_fix_exactly_at_the_window_edge_counts(self) -> None:
+        inside = ["2026-11-23T00:00:00Z", "2026-11-23T00:00:00Z"]
+        at_edge = self.report(self.events([*inside, "2026-11-10T12:00:00Z"]))
+        self.assertEqual(at_edge["repeated_generic_fixes"], {"render": 3})
+        self.assertIn("repeated-generic-fix-threshold-exceeded", at_edge["budget_violations"])
+        past_edge = self.report(self.events([*inside, "2026-11-10T11:59:59Z"]))
+        self.assertEqual(past_edge["repeated_generic_fixes"], {"render": 2})
+        self.assertNotIn("repeated-generic-fix-threshold-exceeded", past_edge["budget_violations"])
+
+    def test_a_later_resolution_dates_the_fix(self) -> None:
+        events = self.events(["2026-11-01T00:00:00Z"] * 3)
+        for index in range(3):
+            observation = events[index * 2][1]
+            events.append((Path(f"ported-{index}"), {
+                **events[index * 2 + 1][1], "event_id": f"ported-{index}",
+                "created_at": "2026-11-23T00:00:00Z", "disposition": "ported",
+                "resolves": observation["event_id"],
+            }))
+        self.assertEqual(self.report(events)["repeated_generic_fixes"], {"render": 3})
+
+    def test_without_the_window_key_every_fix_counts(self) -> None:
+        budgets = {key: value for key, value in self.BUDGETS.items() if key != "repeated_generic_fix_window_days"}
+        self.assert_legacy_fix_counts(budgets=budgets)
+
+    def test_without_a_time_every_fix_counts(self) -> None:
+        self.assert_legacy_fix_counts(now=None)
+
+    def assert_legacy_fix_counts(self, **options: object) -> None:
+        for direction in ("Pulp-to-framework", "framework-to-Pulp"):
+            for disposition in ("port-required", "ported"):
+                with self.subTest(direction=direction, disposition=disposition):
+                    report = self.report(self.events(
+                        ["2026-08-01T00:00:00Z"] * 3,
+                        direction=direction, disposition=disposition,
+                    ), **options)
+                    self.assertEqual(report["repeated_generic_fixes"], {"render": 3})
+                    self.assertIn("repeated-generic-fix-threshold-exceeded", report["budget_violations"])
+                    self.assertEqual(report["health"], "fail")
+
+    def test_the_window_key_is_optional_and_must_be_positive(self) -> None:
+        required = "".join(
+            f"  {key}: {value}\n" for key, value in self.BUDGETS.items()
+            if key != "repeated_generic_fix_window_days"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "budgets.yaml"
+            write(path, "observatory:\n" + required)
+            self.assertNotIn("repeated_generic_fix_window_days", observatory.load_budgets(path))
+            write(path, "observatory:\n" + required + "  repeated_generic_fix_window_days: 14\n")
+            self.assertEqual(observatory.load_budgets(path)["repeated_generic_fix_window_days"], 14)
+            write(path, "observatory:\n" + required + "  repeated_generic_fix_window_days: 0\n")
+            with self.assertRaisesRegex(observatory.ObservatoryError, "at least 1"):
+                observatory.load_budgets(path)
+            write(path, "observatory:\n" + required + "  repeated_generic_fix_window_dayz: 14\n")
+            with self.assertRaisesRegex(observatory.ObservatoryError, "unknown"):
+                observatory.load_budgets(path)
+
+    def test_the_committed_budgets_window_the_repeated_fix_limit(self) -> None:
+        budgets = observatory.load_budgets(observatory.ROOT / observatory.BUDGETS_PATH)
+        self.assertEqual(budgets["maximum_repeated_generic_fixes"], 2)
+        self.assertEqual(budgets["repeated_generic_fix_window_days"], 14)
+
+
 class OwnCommitEventTests(unittest.TestCase):
     """A change adds Vellum observations only for its own commits."""
 
@@ -2803,10 +2963,10 @@ class VellumNativePathTests(unittest.TestCase):
             with self.assertRaisesRegex(observatory.ObservatoryError, "repeated"):
                 nat.load_native_paths(root)
 
-    def test_no_list_is_committed_until_the_data_follow_up(self) -> None:
+    def test_native_path_allowlist_is_committed_and_loaded(self) -> None:
         nat = self.native_module()
-        self.assertFalse((observatory.ROOT / nat.NATIVE_PATHS_PATH).exists())
-        self.assertEqual(nat.load_native_paths(observatory.ROOT), [])
+        entries = nat.load_native_paths(observatory.ROOT)
+        self.assertEqual([entry["id"] for entry in entries], ["native-cli-native-backend"])
 
     def test_an_entry_goes_stale_when_pulp_gains_its_symbol(self) -> None:
         nat = self.native_module()
@@ -3193,6 +3353,151 @@ class ReportReceiverOnlyTests(unittest.TestCase):
             self.verify(self.base)
             with self.assertRaisesRegex(observatory.ObservatoryError, "reports/current.json is stale"):
                 self.verify(self.base, policy="reconciled")
+
+
+def receiver_budget_flags() -> list[str]:
+    """The budget flags the receiver's reconcile verify passes, read from its workflow."""
+    text = (observatory.ROOT / ".github/workflows/pulp-observatory-receiver.yml").read_text(encoding="utf-8")
+    step = text.split("- name: Reconcile through the latest verified durable event head", 1)[1]
+    step = step.split("\n      - name: ", 1)[0]
+    verify = step.split("tools/provenance/observatory.py verify", 1)[1]
+    flags: list[str] = []
+    for name in ("--time-budgets", "--pending-event-scope"):
+        match = re.search(rf"{name} (\S+)", verify)
+        if match:
+            flags += [name, match.group(1)]
+    return flags
+
+
+def main_push_budget_flags() -> list[str]:
+    """The budget flags provenance.yml's observatory verify passes on a push to main.
+
+    The defaults are assigned once, and only the pull_request and merge_group
+    branch reassigns them; anything else reassigning them fails here.
+    """
+    text = (observatory.ROOT / ".github/workflows/provenance.yml").read_text(encoding="utf-8")
+    flags: list[str] = []
+    for variable, flag in (("observatory_time_budgets", "--time-budgets"),
+                           ("observatory_pending_event_scope", "--pending-event-scope")):
+        assignments = re.findall(rf"^( *){variable}=(\S+)$", text, flags=re.MULTILINE)
+        default = assignments[0]
+        overrides = assignments[1:]
+        if len(overrides) != 1:
+            raise AssertionError(f"{variable} is reassigned {len(overrides)} times")
+        guard = text.split(f"{variable}={overrides[0][1]}", 1)[0].rsplit("\n          if ", 1)[1]
+        if not guard.startswith('[[ "$GITHUB_EVENT_NAME" == pull_request || "$GITHUB_EVENT_NAME" == merge_group ]]'):
+            raise AssertionError(f"{variable} is reassigned outside the pull-request branch: {guard[:120]}")
+        flags += [flag, default[1]]
+    return flags
+
+
+class ReceiverBaseDebtTests(unittest.TestCase):
+    """The receiver's reconcile, judged as the workflow judges it: on-disk
+    events against git-base HEAD, with the budget flags its workflow passes."""
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        top = Path(temporary.name)
+        self.pulp, self.vellum, self.root = top / "pulp", top / "vellum", top / "state"
+        pulp_base, self.pulp_head = init_repo(self.pulp, "core/render/render.cpp")
+        self.vellum_base, _ = init_repo(self.vellum, "graphics/render.cpp")
+        make_state(self.root, pulp_base, self.vellum_base)
+        run(self.root, "git", "init", "-q", "-b", "main")
+        run(self.root, "git", "config", "user.email", "observatory@example.invalid")
+        run(self.root, "git", "config", "user.name", "Observatory Test")
+        commit_all(self.root, "state without events")
+        self.counter = 0
+        self.now = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(minutes=1)
+
+    def pulp_commits(self, count: int, *, mapped: bool = True) -> None:
+        for _ in range(count):
+            self.counter += 1
+            path = "core/render/render.cpp" if mapped else "README.md"
+            write(self.pulp / path, f"int value = {self.counter + 100};\n")
+            self.pulp_head = commit_all(self.pulp, f"pulp change {self.counter}")
+
+    def reconcile(self) -> None:
+        observatory.reconcile(
+            root=self.root, pulp_repo=self.pulp, vellum_repo=self.vellum,
+            pulp_target=self.pulp_head, vellum_target=self.vellum_base,
+            now_text=self.now.strftime("%Y-%m-%dT%H:%M:%SZ"), write=True,
+        )
+
+    def land_base(self, pending: int) -> None:
+        """Main with `pending` reconciled pending observations (init_repo's mapped change is one)."""
+        self.pulp_commits(pending - 1)
+        self.reconcile()
+        commit_all(self.root, "main's reconciled ledger")
+        self.assertEqual(self.pending(), pending)
+
+    def pending(self) -> int:
+        return sum(1 for event in observatory.effective_observations(observatory.load_events(self.root))
+                   if event["disposition"] == "pending")
+
+    def verify(self, flags: list[str], *, at: datetime | None = None) -> tuple[int, str]:
+        cli = ["--root", str(self.root), "verify", "--pulp-repo", str(self.pulp),
+               "--vellum-repo", str(self.vellum), "--git-base", run(self.root, "git", "rev-parse", "HEAD"),
+               "--pulp-target", self.pulp_head, "--vellum-target", self.vellum_base,
+               "--now", (at or self.now).strftime("%Y-%m-%dT%H:%M:%SZ"), *flags]
+        stderr = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(stderr):
+            code = observatory.main(cli)
+        return code, stderr.getvalue()
+
+    def test_the_budget_flags_are_the_workflows(self) -> None:
+        self.assertEqual(receiver_budget_flags(),
+                         ["--time-budgets", "report", "--pending-event-scope", "non-increasing"])
+        self.assertEqual(main_push_budget_flags(),
+                         ["--time-budgets", "enforce", "--pending-event-scope", "all"])
+
+    def test_new_pending_events_past_the_budget_fail_the_receiver(self) -> None:
+        self.land_base(20)
+        self.pulp_commits(21)
+        self.reconcile()
+        self.assertEqual(self.pending(), 41)
+        code, error = self.verify(receiver_budget_flags())
+        self.assertNotEqual(code, 0)
+        self.assertIn("pending-event-count-exceeded", error)
+        self.assertIn("41 pending events", error)
+
+    def test_one_new_pending_event_on_a_base_at_budget_fails_the_receiver(self) -> None:
+        self.land_base(20)
+        self.pulp_commits(1)
+        self.reconcile()
+        self.assertEqual(self.pending(), 21)
+        code, error = self.verify(receiver_budget_flags())
+        self.assertNotEqual(code, 0)
+        self.assertIn("pending-event-count-exceeded", error)
+        self.assertIn("the limit is 20", error)
+        # Judging only what the run introduces would let it through: every
+        # receiver run could add up to the budget again.
+        code, _ = self.verify(["--time-budgets", "report", "--pending-event-scope", "introduced"])
+        self.assertEqual(code, 0)
+
+    def test_base_debt_with_no_new_pending_events_passes_the_receiver_and_fails_main(self) -> None:
+        self.land_base(25)
+        self.pulp_commits(1, mapped=False)
+        self.reconcile()
+        self.assertEqual(self.pending(), 25)
+        self.assertNotEqual(run(self.root, "git", "status", "--porcelain"), "")
+        code, error = self.verify(receiver_budget_flags())
+        self.assertEqual(code, 0, error)
+        code, error = self.verify(main_push_budget_flags())
+        self.assertNotEqual(code, 0)
+        self.assertIn("pending-event-count-exceeded", error)
+
+    def test_overdue_base_debt_passes_the_receiver_and_fails_main(self) -> None:
+        self.land_base(3)
+        self.pulp_commits(1, mapped=False)
+        self.reconcile()
+        later = self.now + timedelta(days=30)
+        code, error = self.verify(receiver_budget_flags(), at=later)
+        self.assertEqual(code, 0, error)
+        code, error = self.verify(main_push_budget_flags(), at=later)
+        self.assertNotEqual(code, 0)
+        self.assertIn("overdue-event-count-exceeded", error)
+        self.assertIn("pending-event-age-exceeded", error)
 
 if __name__ == "__main__":
     unittest.main()

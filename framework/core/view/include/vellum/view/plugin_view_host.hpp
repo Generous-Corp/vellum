@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <atomic>
 
 #include <vellum/view/pending_damage.hpp>
 #include <vellum/view/view.hpp>
@@ -21,6 +22,11 @@ namespace detail {
 /// shared_ptr in the host and weak_ptr in each subscription, so neither
 /// destruction order is a use-after-free.
 class GpuSurfaceObserverRegistry;
+
+struct GpuSurfaceLeaseState {
+    std::atomic<render::GpuSurface*> surface{nullptr};
+    std::atomic<std::uint64_t> generation{0};
+};
 
 /// A lite editor binary (pulp_add_plugin LITE_EDITOR) is built without the GPU
 /// host. When its editor asks for one anyway (a scripted UI, or a view whose
@@ -117,6 +123,13 @@ public:
         /// decision, not a side effect of the adapter happening to advertise a
         /// feature.
         bool enable_gpu_timing = false;
+
+        /// Keep the native backing layer visible until resume_presentation().
+        /// The host still attaches, initializes GPU state, and services idle
+        /// and frame callbacks, but presents no drawable while deferred.
+        /// Other platform hosts may treat this as unsupported and present
+        /// normally.
+        bool defer_presentation = false;
 
         /// The editor's own background, 0xRRGGBB. The host paints it wherever
         /// the view tree does not: the native layer before the first frame,
@@ -221,6 +234,20 @@ public:
         return false;
     }
 
+    /// Number of frames presented by this host. The macOS GPU host exposes
+    /// this for installed-consumer tests. Hosts without a presentation counter
+    /// return zero.
+    virtual std::size_t presented_frame_count() const { return 0; }
+
+    /// Allow the root view to be painted after a deferred open. UI thread
+    /// only. Idempotent. Platform hosts that support deferral schedule their
+    /// first root frame here. Base-class hosts simply request a repaint.
+    virtual void resume_presentation() {
+        if (presentation_resumed_) return;
+        presentation_resumed_ = true;
+        repaint();
+    }
+
     // ── Bounded repaint damage ──────────────────────────────────────────
     //
     // Mirrors WindowHost's pending-damage surface so `View::request_repaint(Rect)`
@@ -252,6 +279,13 @@ public:
 
 protected:
     PendingDamage damage_;
+
+    /// Concrete hosts use this to keep their backing-layer paint background
+    /// only while Options::defer_presentation is active. Hosts that do not
+    /// support deferral can ignore it and continue presenting normally.
+    bool root_presentation_allowed() const noexcept {
+        return !presentation_deferred_ || presentation_resumed_;
+    }
 
 public:
 
@@ -335,6 +369,38 @@ public:
         GpuSurfaceState state = GpuSurfaceState::unavailable;
     };
 
+    // A generation-checked view of the host-owned surface. The lease carries
+    // no ownership. Call get() on the compute worker after receiving the lease
+    // from the UI thread and treat nullptr as a device-loss or teardown fence.
+    // The UI thread invalidates the lease before replacing or destroying the
+    // surface. A worker must stop using the returned pointer when get() is
+    // nullptr and reacquire a lease from a later ready notification.
+    class GpuSurfaceLease {
+    public:
+        GpuSurfaceLease() = default;
+
+        render::GpuSurface* get() const noexcept {
+            auto state = state_.lock();
+            if (!state || state->generation.load(std::memory_order_acquire) != generation_)
+                return nullptr;
+            auto* surface = state->surface.load(std::memory_order_acquire);
+            return state->generation.load(std::memory_order_acquire) == generation_
+                ? surface
+                : nullptr;
+        }
+        std::uint64_t generation() const noexcept { return generation_; }
+        explicit operator bool() const noexcept { return get() != nullptr; }
+
+    private:
+        friend class PluginViewHost;
+        GpuSurfaceLease(std::weak_ptr<detail::GpuSurfaceLeaseState> state,
+                        std::uint64_t generation)
+            : state_(std::move(state)), generation_(generation) {}
+
+        std::weak_ptr<detail::GpuSurfaceLeaseState> state_;
+        std::uint64_t generation_ = 0;
+    };
+
     // Called on the UI thread whenever the host's surface status changes, and
     // once immediately on subscription with the current status.
     using GpuSurfaceObserver = std::function<void(const GpuSurfaceStatus&)>;
@@ -387,6 +453,11 @@ public:
     GpuSurfaceStatus gpu_surface_status() const noexcept { return gpu_status_; }
     GpuSurfaceState gpu_surface_state() const noexcept { return gpu_status_.state; }
 
+    GpuSurfaceLease gpu_surface_lease() const noexcept {
+        return GpuSurfaceLease(gpu_lease_state_, gpu_lease_state_->generation.load(
+            std::memory_order_acquire));
+    }
+
     // Subscribe to surface transitions. `observer` fires immediately with the
     // current status (so a late subscriber is never stuck on a state it
     // missed), then on each change. UI thread only — the host publishes from
@@ -401,6 +472,12 @@ protected:
     // Re-publishing an identical status is a no-op, so a host may call it
     // defensively.
     void publish_gpu_surface(render::GpuSurface* surface, GpuSurfaceState state);
+
+    // Invalidate observers and leases before the host releases or replaces its
+    // surface. Hosts must call this on the UI thread before reset().
+    void invalidate_gpu_surface() {
+        publish_gpu_surface(nullptr, GpuSurfaceState::unavailable);
+    }
 
     // Shorthand for "this host will create a GPU surface later". Call from a
     // GPU-capable host's constructor so pre-creation nulls read as `pending`.
@@ -601,6 +678,9 @@ public:
     virtual float scale_factor() const { return 1.0f; }
 
 private:
+    bool presentation_deferred_ = false;
+    bool presentation_resumed_ = false;
+
     // Set by create() only after the host has been installed on the tree.
     // The View tree must outlive its host, as concrete hosts also retain it.
     View* root_view_ = nullptr;
@@ -637,6 +717,8 @@ private:
     // derived surface members are gone, so a consumer that outlives the host
     // still sees the detach edge rather than silently keeping a dead pointer.
     std::shared_ptr<detail::GpuSurfaceObserverRegistry> gpu_observers_;
+    std::shared_ptr<detail::GpuSurfaceLeaseState> gpu_lease_state_ =
+        std::make_shared<detail::GpuSurfaceLeaseState>();
     GpuSurfaceStatus gpu_status_{};
 };
 

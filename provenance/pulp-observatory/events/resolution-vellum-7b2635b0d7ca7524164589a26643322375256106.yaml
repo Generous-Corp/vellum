@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-7b2635b0d7ca7524164589a26643322375256106",
+  "kind": "resolution",
+  "created_at": "2026-11-24T13:43:10Z",
+  "resolves": "vellum-7b2635b0d7ca7524164589a26643322375256106",
+  "disposition": "port-required",
+  "rationale": "Paints a nonuniform rounded border as four side paths with matching outer and inner elliptical contours split at the width-weighted bisector, in Vellum's rendered tree materializer (plus Vellum's CDP capture). Pulp's View::paint_border fills each side as a trapezoid clipped to the outer radius and documents that the inner corner is mitred straight, so the same corner-ring gap applies there. Debt to port: per-side inner contours for nonuniform rounded borders in core/view/src/view_paint.cpp View::paint_border. Evidence, Pulp main b0ee92d21944d5c956603afd1108b575e50c1302 (full clone): [present] `git -C <pulp> grep -c -F -e 'the inner corner is mitred straight' b0ee92d21944 -- core/view/src/view_paint.cpp` = 1; [absent] `git -C <pulp> grep -c -F -e 'inner_rx' b0ee92d21944 -- core/view/src/view_paint.cpp` = 0; [control] `git -C <pulp> grep -c -F -e 'void View::paint_border' b0ee92d21944 -- core/view/src/view_paint.cpp` = 1. [control] searches show the instrument finds the nearest Pulp counterpart. Classified by the Vellum lead under the owner's one-time delegation of 2026-11-24 (pulp-planning vellum-move/DECISIONS.md); any later resolution overrides it.",
+  "owner": "@vellum-lead",
+  "linked_commits": [
+    "7b2635b0d7ca7524164589a26643322375256106"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}

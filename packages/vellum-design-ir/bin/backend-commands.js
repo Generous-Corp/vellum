@@ -37,13 +37,28 @@ import {
     sourceArchiveArguments,
     success,
 } from './backend-protocol.js';
-import { loadSource, planAssets } from './backend-source.js';
+import { loadSource, outlineSource, planAssets } from './backend-source.js';
 import {
     acquireImportOperationLock,
     releaseImportOperationLock,
 } from './import-operation-lock.js';
 
 export async function executeBackendCommand(command, project, args) {
+    if (command === 'import' && args.outline) {
+        if (args.frame !== undefined || args.page !== undefined) {
+            fail('invalid_fig_outline', '--outline takes no frame or page selector');
+        }
+        const outline = await outlineSource(requiredSource(args), args['source-type'] ?? 'figma');
+        const lines = [`${outline.title || '(untitled)'} · ${outline.pageCount} page(s)`];
+        for (const page of outline.pages) {
+            lines.push(`${page.name} · ${page.frameCount} frame(s)`);
+            for (const frame of page.frames) {
+                const size = frame.width && frame.height ? ` (${frame.width} × ${frame.height})` : '';
+                lines.push(`  ${frame.guid}  ${frame.name}${size} · ${frame.descendants} descendants`);
+            }
+        }
+        return success('fig_outline', lines.join('\n'), outline);
+    }
     if (command === 'import' || command === 'reimport') {
         return withImportLock(project, () => (
             command === 'import'
@@ -106,12 +121,13 @@ async function inspectGeneratedDesign(project, args, { failOnDrift }) {
         captureEnvelope: lockedSource.sourceArtifactKind === 'html' || lockedSource.sourceArtifactKind === 'claude-design-html'
             ? paths.snapshotCapture
             : undefined,
+        figFrame: lockedSource.figFrame,
         sourceArchive: archive,
         sourceKey,
-        sourceType: lockedSource.adapter,
+        sourceType: lockedSource.sourceArtifactKind === 'fig' ? 'fig' : lockedSource.adapter,
     });
     validateRegeneratedSource(loaded, lockedSource, provenance);
-    const assets = await planAssets(paths.snapshotSource, loaded.document, paths);
+    const assets = await planAssets(paths.snapshotSource, loaded, paths);
     const applied = applyAuthoredOverlay(loaded.document, overlay);
     if (applied.conflicts.length > 0) {
         fail('authored_overlay_conflict', 'The authored overlay no longer resolves against the active design', {
@@ -197,7 +213,8 @@ function validateSnapshotProvenance(provenance, sourceKey, lockedSource) {
         provenance.sourceHash !== lockedSource.snapshotHash ||
         provenance.sourceType !== lockedSource.adapter ||
         !provenance.sourceArtifact ||
-        provenance.sourceArtifact.kind !== (lockedSource.sourceArtifactKind ?? 'json')
+        provenance.sourceArtifact.kind !== (lockedSource.sourceArtifactKind ?? 'json') ||
+        provenance.sourceArtifact.frame !== lockedSource.figFrame
     ) {
         fail(
             'invalid_snapshot_provenance',
@@ -233,6 +250,9 @@ async function importDesign(project, args) {
         sourceArchive: sourceArchiveArguments(args),
         sourceKey,
         sourceType,
+        figFrame: args.frame,
+        extraFiles: args.file,
+        figPage: args.page,
     });
     const paths = projectPaths(project, sourceKey, loaded.revision);
     const importLock = await readOptionalJson(paths.importLock);
@@ -253,7 +273,7 @@ async function importDesign(project, args) {
             diagnostics: conflictsAsDiagnostics(applied.conflicts),
         });
     }
-    const assets = await planAssets(sourcePath, loaded.document, paths);
+    const assets = await planAssets(sourcePath, loaded, paths);
     const files = generatedFiles({
         applied,
         assets,
@@ -309,7 +329,9 @@ async function reimportDesignFilesystem(project, args) {
         captureEnvelope: args['capture-envelope'],
         sourceArchive: sourceArchiveArguments(args),
         sourceKey,
-        sourceType: lockedSource.adapter,
+        sourceType: lockedSource.sourceArtifactKind === 'fig' ? 'fig' : lockedSource.adapter,
+        figFrame: lockedSource.figFrame,
+        extraFiles: args.file,
     });
     if ((lockedSource.sourceArtifactKind ?? 'json') !== loaded.sourceArtifact.kind) {
         fail(
@@ -331,7 +353,7 @@ async function reimportDesignFilesystem(project, args) {
         lockedSource.activeRevision === loaded.revision &&
         lockedSource.snapshotHash === loaded.sourceHash
     ) {
-        const assets = await planAssets(sourcePath, loaded.document, paths);
+        const assets = await planAssets(sourcePath, loaded, paths);
         await assertImmutableSnapshot(paths.snapshotSource, loaded.sourceBytes);
         if (loaded.captureBytes !== undefined) {
             await assertImmutableSnapshot(paths.snapshotCapture, loaded.captureBytes);
@@ -375,6 +397,7 @@ async function reimportDesignFilesystem(project, args) {
             paths.resolvedTokenLayers,
         ]) {
             const expected = generated.get(path);
+            if (expected === undefined) continue;
             const current = await readFile(path).catch((error) => {
                 if (error.code === 'ENOENT') return null;
                 throw error;
@@ -403,7 +426,7 @@ async function reimportDesignFilesystem(project, args) {
         }, [...loaded.backendDiagnostics, ...assets.diagnostics]);
     }
     const result = reimportDesign(previous, loaded.document, overlay);
-    const assets = await planAssets(sourcePath, loaded.document, paths);
+    const assets = await planAssets(sourcePath, loaded, paths);
 
     await assertImmutableSnapshot(paths.snapshotSource, loaded.sourceBytes);
     const reviewFiles = new Map([

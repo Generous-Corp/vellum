@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { access, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -25,10 +25,11 @@ if (portability.status !== 'passed') {
     process.stderr.write(`${JSON.stringify(portability)}\n`);
     process.exit(1);
 }
-const importedDesignPath = process.argv[4] ? resolve(process.argv[4]) : null;
 let importedDesign = null;
+let generatedAssetRoot;
 let importedBindings = null;
-if (importedDesignPath) {
+if (process.argv[4]) {
+    const importedDesignPath = resolve(process.argv[4]);
     importedDesign = JSON.parse(await readFile(importedDesignPath, 'utf8'));
     const bindingName = basename(importedDesignPath).replace(
         /\.materialized\.json$/, '.bindings.json',
@@ -39,42 +40,9 @@ if (importedDesignPath) {
     importedBindings = JSON.parse(
         await readFile(join(dirname(importedDesignPath), bindingName), 'utf8'),
     );
-}
-
-async function packageImportedPngs() {
-    const generated = dirname(importedDesignPath);
-    const ui = dirname(generated);
-    const key = importedDesign.source?.key;
-    if (basename(generated) !== 'generated' || basename(ui) !== 'ui' ||
-        typeof key !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(key)) return;
-
-    const project = await realpath(dirname(ui));
-    const files = join(project, 'assets', 'generated', key, 'files');
-    for (const asset of importedDesign.assets ?? []) {
-        if (asset.mimeType !== 'image/png') continue;
-        const hash = /^sha256:([0-9a-f]{64})$/.exec(asset.contentHash)?.[1];
-        if (!hash || asset.uri !== `assets/${hash}.png`) continue;
-
-        const source = await realpath(join(files, asset.uri)).catch((error) => {
-            if (error.code === 'ENOENT') return null;
-            throw error;
-        });
-        if (!source) continue;
-        if (!source.startsWith(files + sep)) {
-            throw new Error(`Imported PNG escapes its generated asset directory: ${asset.uri}`);
-        }
-        const info = await stat(source);
-        if (!info.isFile() || info.size > 64 * 1024 * 1024) {
-            throw new Error(`Imported PNG is not a file within the image byte limit: ${asset.uri}`);
-        }
-        const bytes = await readFile(source);
-        if (createHash('sha256').update(bytes).digest('hex') !== hash) {
-            throw new Error(`Imported PNG does not match its content hash: ${asset.uri}`);
-        }
-        const directory = `${output}.images`;
-        await mkdir(directory, { recursive: true });
-        await writeFile(join(directory, `${hash}.png`), bytes);
-    }
+    const sourceKey = basename(importedDesignPath, '.materialized.json');
+    generatedAssetRoot = resolve(dirname(importedDesignPath), '..', '..',
+        'assets', 'generated', sourceKey, 'files');
 }
 
 async function findProjectRoot(start) {
@@ -94,6 +62,40 @@ async function findProjectRoot(start) {
     }
 }
 
+async function nativeImages() {
+    const hashes = new Set();
+    function collect(node) {
+        if (node?.kind === 'image') hashes.add(node.properties?.image?.source);
+        for (const child of node?.children ?? []) collect(child);
+    }
+    collect(importedDesign?.root);
+    const images = {};
+    let size = 0;
+    let root;
+    for (const asset of importedDesign?.assets ?? []) {
+        if (asset.mimeType !== 'image/png' || !hashes.has(asset.contentHash)) continue;
+        if (typeof asset.uri !== 'string' || !/^assets\/[a-zA-Z0-9_.-]+\.png$/.test(asset.uri)) {
+            throw new Error('native PNG asset requires an assets-relative PNG path');
+        }
+        root ??= await realpath(generatedAssetRoot);
+        const file = await realpath(join(root, asset.uri));
+        if (!file.startsWith(root + sep)) {
+            throw new Error('native PNG asset escapes the generated assets directory');
+        }
+        const metadata = await stat(file);
+        if (!metadata.isFile()) throw new Error('native PNG asset must be a regular file');
+        size += metadata.size;
+        if (size > 64 * 1024 * 1024) throw new Error('native PNG asset bundle exceeds 64 MiB');
+        const bytes = await readFile(file);
+        if (`sha256:${createHash('sha256').update(bytes).digest('hex')}` !== asset.contentHash) {
+            throw new Error('native PNG asset does not match its content hash');
+        }
+        images[asset.contentHash] = bytes.toString('base64');
+    }
+    return images;
+}
+
+const images = format === 'iife' ? await nativeImages() : {};
 await mkdir(dirname(output), { recursive: true });
 await build({
     entryPoints: [entry],
@@ -127,10 +129,14 @@ await build({
     }],
     logLevel: 'warning',
 });
-if (format === 'iife' && importedDesign) await packageImportedPngs();
 await finalizeBundleSourceMap({
     bundlePath: output,
     projectRoot: process.env.VELLUM_PROJECT_ROOT ?? await findProjectRoot(entry),
     packageRoot,
 });
+if (format === 'iife') {
+    const sidecar = `${output}.images.json`;
+    if (Object.keys(images).length > 0) await writeFile(sidecar, JSON.stringify(images));
+    else await rm(sidecar, { force: true });
+}
 process.stdout.write(`${output}\n`);

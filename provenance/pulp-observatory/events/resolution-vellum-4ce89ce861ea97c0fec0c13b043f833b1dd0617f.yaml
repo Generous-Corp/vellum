@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-4ce89ce861ea97c0fec0c13b043f833b1dd0617f",
+  "kind": "resolution",
+  "created_at": "2026-11-24T13:43:04Z",
+  "resolves": "vellum-4ce89ce861ea97c0fec0c13b043f833b1dd0617f",
+  "disposition": "framework-only",
+  "rationale": "Wires .fig sources through Vellum's import/reimport backend: frame GUID pinning in the import lock, embedded image assets from the container, the archive size limit, and the CLI flag. These are Vellum's backend files (bin/backend-*.js, fig-file/import.js, cli/) with no Pulp counterpart; Pulp's fig_decode.mjs writes assets to disk itself. The added fig-decoder and fig-paths tests are the test port from Pulp 9fa7e5cb recorded in fig-decode.json. Nothing to port. Evidence, Pulp main b0ee92d21944d5c956603afd1108b575e50c1302 (full clone): [absent] `git -C <pulp> grep -c -F -e 'decodeFigSource' b0ee92d21944 -- tools/import-design core` = 0; [absent] `git -C <pulp> grep -c -F -e 'embeddedAssets' b0ee92d21944 -- tools/import-design core` = 0; [absent] `git -C <pulp> grep -c -F -e 'figFrame' b0ee92d21944 -- tools/import-design core` = 0; [control] `git -C <pulp> grep -c -F -e 'export function unpackFig' b0ee92d21944 -- tools/import-design/fig` = 1. [control] searches show the instrument finds the nearest Pulp counterpart. Classified by the Vellum lead under the owner's one-time delegation of 2026-11-24 (pulp-planning vellum-move/DECISIONS.md); any later resolution overrides it.",
+  "owner": "@vellum-lead",
+  "linked_commits": [
+    "4ce89ce861ea97c0fec0c13b043f833b1dd0617f"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}

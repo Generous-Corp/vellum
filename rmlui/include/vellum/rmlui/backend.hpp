@@ -4,6 +4,7 @@
 #include <vellum/rmlui/export.hpp>
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -90,6 +91,14 @@ class VELLUM_RMLUI_API RenderInterface {
     virtual void begin_frame(std::uint32_t width, std::uint32_t height) = 0;
     virtual void submit(const DrawCommand& command) = 0;
     virtual void end_frame() = 0;
+
+    // Hosts call these around editor attachment and visibility changes. The
+    // default hooks keep existing renderers source-compatible.
+    virtual void on_attach() {}
+    virtual void on_detach() {}
+    virtual void on_visibility_changed(bool) {}
+    virtual void on_idle() {}
+    virtual void on_close() {}
 };
 
 class VELLUM_RMLUI_API LuaInterface {
@@ -244,6 +253,11 @@ class VELLUM_RMLUI_API Backend {
         return last_load_;
     }
     void render();
+    [[nodiscard]] bool needs_render() const noexcept;
+    void on_attach();
+    void on_detach();
+    void on_visibility_changed(bool visible);
+    void on_idle();
     void close();
     [[nodiscard]] bool is_open() const noexcept {
         return open_;
@@ -266,6 +280,7 @@ class VELLUM_RMLUI_API Backend {
     std::uint32_t height_ = 0;
     float density_ratio_ = 1.0f;
     bool open_ = false;
+    std::atomic_bool content_changed_{true};
     Asset document_;
     std::vector<CustomPropertyRegistration> custom_properties_;
     std::vector<ElementInstancerRegistration> element_instancers_;

@@ -15,10 +15,11 @@ const [command, ...rawArguments] = process.argv.slice(2);
 
 try {
     const args = parseArguments(rawArguments);
-    if (!args.project) fail('invalid_arguments', '--project is required');
     if (!args.json) fail('invalid_arguments', '--json is required by the backend protocol');
-    const project = resolve(args.project);
-    await validateProject(project);
+    const standalone = command === 'import' && args.outline;
+    if (!args.project && !standalone) fail('invalid_arguments', '--project is required');
+    const project = args.project ? resolve(args.project) : null;
+    if (project) await validateProject(project);
     const payload = await executeBackendCommand(command, project, args);
     process.stdout.write(stableStringify(payload, { space: 0 }));
 } catch (error) {

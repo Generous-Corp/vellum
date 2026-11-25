@@ -17,18 +17,45 @@
 #import <CoreGraphics/CoreGraphics.h>
 #import <Foundation/Foundation.h>
 #import <ImageIO/ImageIO.h>
+#import <dispatch/dispatch.h>
 
 #include <RmlUi/Core.h>
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <system_error>
+#include <unistd.h>
+#include <utility>
 #include <vector>
 
 using namespace vellum::rmlui;
 using namespace vellum::rmlui::metal_test;
 
 namespace {
+
+class Watchdog final {
+  public:
+    Watchdog() {
+        timer_ = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+                                        dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
+        dispatch_source_set_timer(timer_, dispatch_time(DISPATCH_TIME_NOW, 60 * NSEC_PER_SEC),
+                                  DISPATCH_TIME_FOREVER, 0);
+        dispatch_source_set_event_handler(timer_, ^{
+            std::fprintf(stderr, "watchdog: stuck in %s\n", stage_.load());
+            std::fflush(stderr);
+            _exit(3);
+        });
+        dispatch_resume(timer_);
+    }
+    ~Watchdog() { dispatch_source_cancel(timer_); }
+    void stage(const char* name) { stage_.store(name); }
+
+  private:
+    std::atomic<const char*> stage_{"startup"};
+    dispatch_source_t timer_ = nullptr;
+};
 
 constexpr int kSkip = 77;
 
@@ -53,6 +80,22 @@ bool load_fonts(DirectoryAssets& assets, std::vector<std::string>& storage) {
             return false;
     }
     return true;
+}
+
+bool readable_directory(const char* path) {
+    std::error_code error;
+    return std::filesystem::is_directory(std::filesystem::path(path), error) && !error;
+}
+
+std::pair<std::filesystem::path, std::filesystem::path> asset_roots(int argc, char** argv) {
+    if (argc == 3 && readable_directory(argv[1]) && readable_directory(argv[2]))
+        return {argv[1], argv[2]};
+    NSString* resource_path = [[NSBundle mainBundle] resourcePath];
+    if (resource_path)
+        // The bundle mirrors DirectoryAssets' roots: rmlui/... and fixtures/...
+        return {std::filesystem::path(resource_path.UTF8String) / "rmlui",
+                std::filesystem::path(resource_path.UTF8String) / "fixtures"};
+    return {};
 }
 
 // Premultiplied RGBA8 through ImageIO, top row first.
@@ -87,7 +130,8 @@ bool decode(const std::vector<Rml::byte>& encoded, std::uint32_t& width, std::ui
 }
 
 bool render_metal(id<MTLDevice> device, id<MTLCommandQueue> queue, MetalRenderInterface& renderer,
-                  NativeContext& native, std::vector<std::uint8_t>& pixels) {
+                  NativeContext& native, const char* document, Watchdog& watchdog,
+                  std::vector<std::uint8_t>& pixels) {
     MTLTextureDescriptor* descriptor =
         [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
                                                            width:kWidth
@@ -99,6 +143,9 @@ bool render_metal(id<MTLDevice> device, id<MTLCommandQueue> queue, MetalRenderIn
     if (!target)
         return false;
     for (int pass = 0; pass < 2; ++pass) { // a second pass, after layout settles
+        watchdog.stage("render");
+        std::fprintf(stderr, "progress: render %s Metal pass %d\n", document, pass + 1);
+        std::fflush(stderr);
         id<MTLCommandBuffer> commands = [queue commandBuffer];
         MetalFrameTarget frame;
         frame.command_buffer = commands;
@@ -110,11 +157,15 @@ bool render_metal(id<MTLDevice> device, id<MTLCommandQueue> queue, MetalRenderIn
         native.render();
         renderer.end_frame();
         [commands commit];
+        watchdog.stage("command buffer completion");
         [commands waitUntilCompleted];
         if (commands.status != MTLCommandBufferStatusCompleted)
             return false;
     }
     pixels.assign(static_cast<std::size_t>(kWidth) * kHeight * 4u, 0);
+    watchdog.stage("readback");
+    std::fprintf(stderr, "progress: readback %s Metal\n", document);
+    std::fflush(stderr);
     [target getBytes:pixels.data()
          bytesPerRow:kWidth * 4u
           fromRegion:MTLRegionMake2D(0, 0, kWidth, kHeight)
@@ -122,9 +173,13 @@ bool render_metal(id<MTLDevice> device, id<MTLCommandQueue> queue, MetalRenderIn
     return true;
 }
 
-bool render_cpu(CpuRenderInterface& renderer, NativeContext& native, std::vector<std::uint8_t>& pixels) {
+bool render_cpu(CpuRenderInterface& renderer, NativeContext& native, const char* document,
+                Watchdog& watchdog, std::vector<std::uint8_t>& pixels) {
     pixels.assign(static_cast<std::size_t>(kWidth) * kHeight * 4u, 0);
     for (int pass = 0; pass < 2; ++pass) {
+        watchdog.stage("render");
+        std::fprintf(stderr, "progress: render %s CPU pass %d\n", document, pass + 1);
+        std::fflush(stderr);
         CpuFrameTarget frame;
         frame.rgba = pixels.data();
         frame.width = kWidth;
@@ -149,30 +204,50 @@ bool has_ink(const std::vector<std::uint8_t>& pixels) {
 
 int main(int argc, char** argv) {
     @autoreleasepool {
-        if (argc != 3) {
-            std::fprintf(stderr, "usage: %s <rmlui-source> <fixtures>\n", argv[0]);
+        Watchdog watchdog;
+        if (argc != 1 && argc != 3) {
+            std::fprintf(stderr, "usage: %s [<rmlui-source> <fixtures>]\n", argv[0]);
             return 2;
         }
         if (!NativeContext::fonts_enabled()) {
             std::fprintf(stderr, "the comparison needs VELLUM_RMLUI_FONTS=ON\n");
             return 2;
         }
+        watchdog.stage("Metal device creation");
         id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        std::fprintf(stderr, "progress: Metal device %s\n", device ? "created" : "missing");
+        if (device)
+            std::fprintf(stderr, "progress: Metal device name %s\n", [[device name] UTF8String]);
+        std::fflush(stderr);
         if (!device) {
             std::printf("SKIP: no Metal device on this host\n");
             return kSkip;
         }
         id<MTLCommandQueue> queue = [device newCommandQueue];
+        watchdog.stage("Metal renderer construction");
         MetalRenderInterface metal(device);
+        std::fprintf(stderr, "progress: Metal renderer constructed\n");
+        std::fflush(stderr);
         if (!metal.valid()) {
             std::fprintf(stderr, "the Metal renderer could not build its pipelines\n");
             return 1;
         }
+        watchdog.stage("CPU renderer construction");
         CpuRenderInterface cpu;
+        std::fprintf(stderr, "progress: CPU renderer constructed\n");
+        std::fflush(stderr);
         cpu.set_image_decoder(decode);
 
-        DirectoryAssets assets(argv[1], argv[2]);
+        const auto [rmlui_source, fixtures] = asset_roots(argc, argv);
+        if (rmlui_source.empty() || fixtures.empty()) {
+            std::fprintf(stderr, "asset roots unavailable\n");
+            return 1;
+        }
+        DirectoryAssets assets(rmlui_source, fixtures);
+        watchdog.stage("Native context construction");
         NativeContext keepalive(assets, cpu);
+        std::fprintf(stderr, "progress: Native context constructed\n");
+        std::fflush(stderr);
         std::vector<std::string> font_bytes;
         if (keepalive.open(1, 1) != Status::ok) {
             std::fprintf(stderr, "open failed\n");
@@ -184,6 +259,8 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "fonts failed\n");
                 return 1;
             }
+            std::fprintf(stderr, "progress: fonts loaded\n");
+            std::fflush(stderr);
         }
 
         std::vector<const char*> documents(std::begin(kDocuments), std::end(kDocuments));
@@ -197,13 +274,17 @@ int main(int argc, char** argv) {
             for (int which = 0; which < 2; ++which) {
                 NativeContext native(assets, which == 0 ? static_cast<Rml::RenderInterface&>(metal)
                                                         : static_cast<Rml::RenderInterface&>(cpu));
+                watchdog.stage("context creation");
                 if (native.open(kWidth, kHeight) != Status::ok ||
                     native.load_document(document) != Status::ok) {
                     std::fprintf(stderr, "document failed: %s\n", document);
                     return 1;
                 }
-                const bool rendered = which == 0 ? render_metal(device, queue, metal, native, frames[0])
-                                                 : render_cpu(cpu, native, frames[1]);
+                std::fprintf(stderr, "progress: document loaded %s\n", document);
+                std::fflush(stderr);
+                const bool rendered = which == 0
+                    ? render_metal(device, queue, metal, native, document, watchdog, frames[0])
+                    : render_cpu(cpu, native, document, watchdog, frames[1]);
                 native.close();
                 if (!rendered) {
                     std::fprintf(stderr, "%s render failed: %s\n", which == 0 ? "Metal" : "CPU", document);
@@ -230,8 +311,18 @@ int main(int argc, char** argv) {
             }
             const auto d = compare_rgba(frames[1], frames[0]);
             const bool ok = within_renderer_tolerance(d);
+            watchdog.stage("comparison");
+            std::fprintf(stderr, "progress: comparison %s %s\n", document, ok ? "ok" : "outside tolerance");
+            std::fflush(stderr);
             std::printf("%-60s mean=%.3f within=%.4f %s\n", document, d.mean, d.within,
                         ok ? "ok" : "OUTSIDE TOLERANCE");
+#if defined(VELLUM_RMLUI_IOS_METAL_WRONG_EXPECTED_PIXEL)
+            if (frames[0][0] != 255u) {
+                std::fprintf(stderr, "negative control: expected pixel 255, got %u\n",
+                             static_cast<unsigned>(frames[0][0]));
+                return 1;
+            }
+#endif
             if (kControl) {
                 if (translucent(document) && !ok)
                     control_tripped = true;

@@ -176,7 +176,9 @@ struct TextMeasureOptions final {
 
 /// Skia Graphite rendering on a Dawn device.
 ///
-/// `native_surface_handle` is a CAMetalLayer on macOS. Passing nullptr creates
+/// `native_surface_handle` is platform-specific. It is a CAMetalLayer on macOS,
+/// an HWND on Windows, an ANativeWindow on Android, or a pointer to X11NativeHandle
+/// on Linux. Passing nullptr creates
 /// an offscreen GPU target for deterministic capture. A requested native
 /// surface never silently falls back to the offscreen target.
 ///
@@ -209,6 +211,10 @@ public:
         std::uint32_t width = 800;
         std::uint32_t height = 600;
         float scale = 1.0F;
+        struct X11NativeHandle final {
+            void* display = nullptr;
+            unsigned long window = 0;
+        };
         void* native_surface_handle = nullptr;
         bool vsync = true;
         /// Optional override for packaged font assets. An empty value resolves

@@ -406,7 +406,7 @@ PULP_API_READER_GIT_CALLS = {
 # backslash continuation inside a word, a glued `os.system` argument, a
 # value written to a file for a later step), so any change to the reader is
 # a reviewed change to this digest. The checks below only explain a failure.
-PULP_API_READER_SHA256 = "bfccaa48622f4d96b8d733aa150886792172c1d2ca7efe1faee5fb42134ed725"
+PULP_API_READER_SHA256 = "ed364eefd9665266bbcd8ce4e72d72b4aa7be2032822affd1df13b5b716632e7"
 # The reader reshapes the GitHub responses it fetched through this script, so
 # the script is part of the reader: it is pinned byte for byte like the step
 # and must carry no transport of its own (every read stays a gh call above).
@@ -1139,13 +1139,17 @@ class RunnerPolicyTests(unittest.TestCase):
         # pinned builder's chrome/mNNN asset, so none reaches curl as an option
         # or a different path; the shell regex is a second fence on the URL.
         self.assertIn("[[ \"$url\" =~ ^https://github\\.com/danielraffel/skia-builder/"
-                      "releases/download/chrome/m[0-9]+/", step)
+                      "releases/download/chrome/m[0-9]+(-attested\\.[0-9]+)?/", step)
         source = json.loads((ROOT / "gpu-runtime/renderer-lock.json").read_text(encoding="utf-8"))
         probes = {
             "repository option": ("builder", "repository", "-K/etc/passwd"),
             "foreign repository": ("builder", "repository", "https://github.com/evil/skia-builder"),
             "milestone traversal": (None, "milestone", "../../evil"),
             "milestone suffix": (None, "milestone", "chrome/m158/../x"),
+            "release traversal": ("asset", "release", "chrome/m158/../x"),
+            "release of another milestone": ("asset", "release", "chrome/m999-attested.1"),
+            "release option": ("asset", "release", "-K/etc/passwd"),
+            "release suffix": ("asset", "release", "chrome/m158-attested.2/../x"),
             "asset option": ("asset", "asset", "-o/tmp/x"),
             "asset path": ("asset", "asset", "../evil.zip"),
             "uppercase digest": ("asset", "sha256", source["platforms"]["macos-arm64"]["sha256"].upper()),
@@ -1163,6 +1167,64 @@ class RunnerPolicyTests(unittest.TestCase):
                                        capture_output=True, text=True, check=False)
                 self.assertNotEqual(probe.returncode, 0, f"{label} reached curl: {probe.stdout}")
                 self.assertEqual(probe.stdout, "")
+
+    def test_locked_gpu_archive_reader_follows_the_macos_rows_release(self) -> None:
+        gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
+        step = gpu.split("- name: Download and verify the locked Skia and Dawn archive", 1)[1]
+        reader = step.split("<<'PY'\n", 1)[1].split("\n          PY\n", 1)[0]
+        reader = "\n".join(line.removeprefix("          ") for line in reader.splitlines())
+        source = json.loads((ROOT / "gpu-runtime/renderer-lock.json").read_text(encoding="utf-8"))
+        for release, expected in ((None, source["milestone"]),
+                                  ("chrome/m158-attested.2", "chrome/m158-attested.2"),
+                                  (source["milestone"], source["milestone"])):
+            with self.subTest(release=release), tempfile.TemporaryDirectory() as temporary:
+                lock = json.loads(json.dumps(source))
+                row = lock["platforms"]["macos-arm64"]
+                row.pop("release", None)
+                if release is not None:
+                    row["release"] = release
+                path = Path(temporary) / "gpu-runtime/renderer-lock.json"
+                path.parent.mkdir()
+                path.write_text(json.dumps(lock), encoding="utf-8")
+                run = subprocess.run([sys.executable, "-I", "-c", reader], cwd=temporary,
+                                     capture_output=True, text=True, check=True)
+                self.assertIn(f"/releases/download/{expected}/{row['asset']} ", run.stdout)
+
+    def test_release_workflows_accept_the_renderer_records_attested_release(self) -> None:
+        """provenance.yml and sdk-release.yml build builder URLs from the record's tag."""
+        marker = "python3 -I - "
+        cases = (("provenance.yml", "provenance/third-party-lock.json"),
+                 ("sdk-release.yml", None))
+        record = {"state": "builder-attested",
+                  "artifact": {"repository": "https://github.com/danielraffel/skia-builder",
+                               "name": "skia-build-mac-universal-gpu-release.zip"},
+                  "legal_inventory": {"manifest": {"name": "m.json"}},
+                  "build_identity": {"toolchain_receipt": {"name": "t.json"}},
+                  "build_provenance": {"bundle": {"name": "b.json"}}}
+        for workflow, lock_path in cases:
+            text = (WORKFLOWS / workflow).read_text(encoding="utf-8")
+            heredocs = [part.split("\n          PY\n", 1)[0] for part in re.split(r"<<'PY'[^\n]*\n", text)[1:]]
+            readers = ["\n".join(line.removeprefix("          ") for line in body.splitlines())
+                       for body in heredocs if "the renderer record does not name" in body]
+            self.assertEqual(len(readers), 1, workflow)
+            for tag, ok in (("chrome/m158", True), ("chrome/m158-attested.2", True),
+                            ("chrome/m158-attested", False), ("chrome/m158/../x", False),
+                            ("chrome/m158-attested.2/../x", False), ("latest", False)):
+                with self.subTest(workflow=workflow, tag=tag), tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp)
+                    rec = json.loads(json.dumps(record))
+                    rec["artifact"]["release_tag"] = tag
+                    (root / "provenance").mkdir()
+                    (root / "provenance/renderer-attestation.json").write_text(json.dumps(rec))
+                    (root / "provenance/third-party-lock.json").write_text(json.dumps(
+                        {"runtime_toolchain_dependencies": {"renderer": {"release_eligibility": "eligible"}}}))
+                    (root / "renderer-attestation.json").write_text(json.dumps(rec))
+                    argv = [sys.executable, "-I", "-"] + ([str(root)] if lock_path is None else [])
+                    run = subprocess.run(argv, input=readers[0], cwd=root, capture_output=True, text=True)
+                    self.assertEqual(run.returncode == 0, ok, run.stderr)
+                    if ok:
+                        self.assertIn(f"/releases/download/{tag}/skia-build-mac-universal-gpu-release.zip",
+                                      run.stdout)
 
     def test_locked_gpu_archive_step_runs_under_the_runner_shell(self) -> None:
         # Run the step's own `run:` text the way Actions does (bash with

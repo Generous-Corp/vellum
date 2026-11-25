@@ -48,7 +48,8 @@ The Canvas2D proof shell reports `VELLUM_WEB_GRADIENT_NOT_EXPRESSIBLE` for
 each version 8 gradient and gradient stroke it cannot draw before drawing its
 base colour.
 
-Vector assets use schema version 9. A `vector` node holds a compiled vector
+Vector assets use scene schema version 9 and DesignIR schema version 6
+(`DESIGN_IR_VECTOR_ASSET_VERSION`). A `vector` node holds a compiled vector
 asset: a display list of groups (transform, clip, opacity) and paths whose
 fills and strokes carry colours or gradients, which the Skia renderer and the
 Canvas2D shell both draw. DesignIR carries it as a `vector` node with
@@ -56,6 +57,22 @@ Canvas2D shell both draw. DesignIR carries it as a `vector` node with
 primitive and the native materializer refuse an asset the native renderer
 would refuse; DesignIR checks versions and field gating, not the asset's
 contents.
+
+Vector assets can come from SVG. `importSvgAsset` in `@vellum/design-ir`
+turns a sanitized SVG into a canonical subtree of path and group nodes when
+it can, so colours bound through `colorTokens` keep following their tokens,
+every element keeps a stable identity, and a change redraws only its node.
+An asset over its node or path-data budget, or one using what only the
+compiled form carries (user-space or transformed gradients, focal radial
+gradients, diagonal linear gradients, coincident stops), becomes one
+`vector` node holding a compiled display list that the Skia renderer and
+the Canvas2D shell both draw. Nothing is rasterized: what only a rasterizer
+draws (text, images, patterns, filters, markers) is dropped as a loss. Every
+dropped or approximated feature is a loss in the DesignIR `lossReport`.
+Document types, entities, scripts, event handlers, external or data
+references, reference cycles, expansion past 50,000 nodes or 262,144 path
+commands and points, and numbers beyond one million are refused before any
+lowering.
 
 A DesignIR document is written at the oldest schema version that carries every
 field it uses: version 1 without any of the later fields, version 2 for the
@@ -83,7 +100,7 @@ Its authorship and exact blobs remain auditable in Git history and immutable
 
 The following is the exact published, immutable `v0.1.6` tagged-release flow
 from `Generous-Corp/vellum`. `v0.1.6` is the current published release; the
-source tree on `main` identifies as `0.2.2`, the next release, and is
+source tree on `main` identifies as `0.2.3`, the next release, and is
 unreleased. The name `v0.1.7` is retired and is never reused: it was published
 only on a deleted incubation repository (see
 [`provenance/retired-release-tags.json`](provenance/retired-release-tags.json)).
@@ -303,7 +320,7 @@ python3 scripts/build_sdk_artifact.py \
   --node-provenance /path/to/node-provenance.json \
   --output-dir dist --json
 ./scripts/install.sh \
-  --archive dist/vellum-sdk-0.2.2-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.2.3-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS
 
 app_dir="$(mktemp -d)/palette-board"
@@ -408,10 +425,10 @@ python3 scripts/build_sdk_artifact.py \
   --node-provenance /path/to/node-provenance.json \
   --output-dir dist --json
 python3 scripts/verify_sdk_artifact.py \
-  --archive dist/vellum-sdk-0.2.2-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.2.3-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS --json
 ./scripts/install.sh \
-  --archive dist/vellum-sdk-0.2.2-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.2.3-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS
 ```
 
@@ -503,12 +520,12 @@ proves the imported design is embedded in the application bundle, exercises
 build/run/test/capture/package, and builds/tests a sterile CMake consumer
 without a Vellum or Pulp checkout.
 
-An exact release is consumed without a moving `latest` pointer. Once `v0.2.2`
+An exact release is consumed without a moving `latest` pointer. Once `v0.2.3`
 is published, the checkout installer installs it with:
 
 <!-- readme-exec: id=version-install-only manual=subset-of-release-quick-start -->
 ```sh
-./scripts/install.sh --version 0.2.2
+./scripts/install.sh --version 0.2.3
 ```
 
 The release `SHA256SUMS` covers the SDK archive, `install.sh`, and

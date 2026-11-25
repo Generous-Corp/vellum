@@ -1,0 +1,25 @@
+# Normalize the NDK identity used by Vellum's Android canary and closure lane.
+function(vellum_android_platform_configure)
+    if(NOT ANDROID)
+        message(FATAL_ERROR "Vellum Android platform requires the NDK toolchain")
+    endif()
+    if(NOT CMAKE_ANDROID_ARCH_ABI)
+        message(FATAL_ERROR "CMAKE_ANDROID_ARCH_ABI is required")
+    endif()
+    if(NOT CMAKE_ANDROID_ARCH_ABI IN_LIST _vellum_android_abis)
+        message(FATAL_ERROR
+            "unsupported Android ABI '${CMAKE_ANDROID_ARCH_ABI}', expected arm64-v8a or x86_64")
+    endif()
+    if(NOT ANDROID_PLATFORM MATCHES "^android-[0-9]+$")
+        message(FATAL_ERROR "ANDROID_PLATFORM must be android-N, got '${ANDROID_PLATFORM}'")
+    endif()
+    string(REGEX REPLACE "^android-" "" VELLUM_ANDROID_API_LEVEL "${ANDROID_PLATFORM}")
+    if(VELLUM_ANDROID_API_LEVEL LESS 26)
+        message(FATAL_ERROR "Android API ${VELLUM_ANDROID_API_LEVEL} is below Vellum's API 26 floor")
+    endif()
+    set(VELLUM_ANDROID_PLATFORM_KEY
+        "android-${CMAKE_ANDROID_ARCH_ABI}" PARENT_SCOPE)
+    set(VELLUM_ANDROID_API_LEVEL "${VELLUM_ANDROID_API_LEVEL}" PARENT_SCOPE)
+endfunction()
+
+set(_vellum_android_abis arm64-v8a x86_64)

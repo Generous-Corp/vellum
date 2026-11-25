@@ -100,12 +100,22 @@ target_compile_definitions(gpu-runtime-bootstrap PRIVATE
     GPU_RUNTIME_VERSION="${PROJECT_VERSION}")
 target_link_libraries(gpu-runtime-bootstrap PUBLIC VellumGpuRuntime::DeviceApi)
 
-if(APPLE)
-    set(_gpu_runtime_platform macos-arm64)
-else()
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/VellumSkiaDawnPlatform.cmake")
+vellum_skia_dawn_platform_key("${CMAKE_SYSTEM_NAME}" "${CMAKE_SYSTEM_PROCESSOR}"
+    "${ANDROID_ABI}" _gpu_runtime_platform QUIET)
+gpu_runtime_renderer_lock_has_platform("${_gpu_runtime_platform}" _gpu_runtime_platform_locked)
+if(NOT _gpu_runtime_platform_locked)
     set(_gpu_runtime_platform "")
 endif()
 set(GPU_RUNTIME_HAS_DEVICE OFF)
+# The installed package config checks the shipped Dawn library against this
+# platform's row of the lock, under this file name.
+set(GPU_RUNTIME_PLATFORM "${_gpu_runtime_platform}")
+if(_gpu_runtime_platform MATCHES "^windows-")
+    set(GPU_RUNTIME_DAWN_FILE "dawn_combined.lib")
+else()
+    set(GPU_RUNTIME_DAWN_FILE "libdawn_combined.a")
+endif()
 if(_gpu_runtime_platform)
     include("${CMAKE_CURRENT_LIST_DIR}/cmake/GpuRuntimeDawn.cmake")
     set(_gpu_runtime_dawn_args PLATFORM ${_gpu_runtime_platform}
@@ -116,11 +126,12 @@ if(_gpu_runtime_platform)
     gpu_runtime_find_dawn(${_gpu_runtime_dawn_args})
     set(GPU_RUNTIME_HAS_DEVICE ${GPU_RUNTIME_HAS_DAWN})
 elseif(GPU_RUNTIME_REQUIRE_DEVICE)
-    message(FATAL_ERROR "gpu-runtime: the device library is macOS-only for now")
+    message(FATAL_ERROR "gpu-runtime: the locked device library is unavailable for "
+        "${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR}/${ANDROID_ABI}")
 endif()
 
 if(GPU_RUNTIME_HAS_DEVICE)
-    add_library(gpu-runtime-device STATIC
+    set(_gpu_runtime_device_sources
         src/dawn_native_bootstrap.cpp
         src/gpu_compute.cpp
         src/gpu_diagnostics.cpp
@@ -129,6 +140,7 @@ if(GPU_RUNTIME_HAS_DEVICE)
         src/gpu_surface_dawn.cpp
         src/host_hooks.cpp
         src/render_observer.cpp)
+    add_library(gpu-runtime-device STATIC ${_gpu_runtime_device_sources})
     if(APPLE AND NOT IOS)
         target_sources(gpu-runtime-device PRIVATE src/metal_surface_mac.mm)
     elseif(IOS)
@@ -159,6 +171,47 @@ if(GPU_RUNTIME_HAS_DEVICE)
     if(APPLE)
         target_link_libraries(gpu-runtime-device PRIVATE
             "-framework Cocoa" "-framework Metal" "-framework QuartzCore")
+    elseif(ANDROID)
+        target_link_libraries(gpu-runtime-device PRIVATE android log)
+    endif()
+
+    # The installed provider is the one image that intentionally exposes the
+    # gpu_runtime surface ABI. Keep the standalone static archive hidden so
+    # plug-ins retain their private runtime copy. The pinned headers carry no
+    # export attributes, so this variant compiles with default visibility and
+    # the provider's Mach-O export allowlist (cmake/skia_dawn_provider.exports)
+    # is what limits the image to the gpu_runtime and Vellum namespaces.
+    if(GPU_RUNTIME_BUILD_PROVIDER)
+        add_library(gpu-runtime-device-provider STATIC ${_gpu_runtime_device_sources})
+        add_library(VellumGpuRuntime::DeviceProvider ALIAS gpu-runtime-device-provider)
+        set_target_properties(gpu-runtime-device-provider PROPERTIES
+            OUTPUT_NAME gpu-runtime-device-provider
+            CXX_VISIBILITY_PRESET default
+            OBJCXX_VISIBILITY_PRESET default
+            VISIBILITY_INLINES_HIDDEN OFF
+            POSITION_INDEPENDENT_CODE ON)
+        if(APPLE AND NOT IOS)
+            target_sources(gpu-runtime-device-provider PRIVATE src/metal_surface_mac.mm)
+        elseif(IOS)
+            target_sources(gpu-runtime-device-provider PRIVATE src/metal_surface_ios.mm)
+        endif()
+        target_include_directories(gpu-runtime-device-provider PRIVATE src)
+        target_compile_definitions(gpu-runtime-device-provider PRIVATE
+            GPU_RUNTIME_HAS_DAWN=1
+            GPU_RUNTIME_SKIA_MILESTONE=${GPU_RUNTIME_SKIA_MILESTONE})
+        if(GPU_RUNTIME_HOST_OWNS_DAWN_PROCS)
+            target_compile_definitions(gpu-runtime-device-provider PRIVATE
+                GPU_RUNTIME_HOST_OWNS_DAWN_PROCS=1)
+        endif()
+        target_link_libraries(gpu-runtime-device-provider
+            PUBLIC VellumGpuRuntime::DeviceApi VellumGpuRuntime::Bootstrap
+            PRIVATE VellumGpuRuntime::Dawn)
+        if(APPLE)
+            target_link_libraries(gpu-runtime-device-provider PRIVATE
+                "-framework Cocoa" "-framework Metal" "-framework QuartzCore")
+        elseif(ANDROID)
+            target_link_libraries(gpu-runtime-device-provider PRIVATE android log)
+        endif()
     endif()
 
     add_library(gpu-runtime-skia-log-bridge STATIC src/skia_log_bridge.cpp)
@@ -171,9 +224,16 @@ if(GPU_RUNTIME_HAS_DEVICE)
         POSITION_INDEPENDENT_CODE ON)
     # Skia's headers only; the image that registers the bridge links Skia.
     target_include_directories(gpu-runtime-skia-log-bridge PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/include"
         "${GPU_RUNTIME_DAWN_DIR}/build/include")
     target_compile_definitions(gpu-runtime-skia-log-bridge PRIVATE SK_RELEASE)
-    target_link_libraries(gpu-runtime-skia-log-bridge PUBLIC VellumGpuRuntime::Device)
+    # Keep the installed package contract: consumers that link only the
+    # bridge receive the Device implementation and its public API headers.
+    # In-tree mirror consumers use DeviceApi while the mirror closure filters
+    # the hidden Device archive from the exported provider.
+    target_link_libraries(gpu-runtime-skia-log-bridge INTERFACE
+        $<BUILD_INTERFACE:VellumGpuRuntime::DeviceApi>
+        $<INSTALL_INTERFACE:VellumGpuRuntime::Device>)
 endif()
 
 if(GPU_RUNTIME_BUILD_TESTS)

@@ -612,6 +612,9 @@ class VerifyExtractionTests(unittest.TestCase):
             "authoring/design_pipeline/design_pipeline.cpp",
             "authoring/design_pipeline/include/vellum/authoring/design_pipeline.hpp",
             "authoring/design_pipeline/tests/deep/nested/golden_test.cpp",
+            "rmlui/plugin_view/plugin_view.cpp",
+            "rmlui/plugin_view/include/vellum/rmlui/plugin_view.hpp",
+            "rmlui/plugin_view/tests/plugin_view_test.cpp",
         }
         refused = {
             "authoring/x.hpp",
@@ -621,6 +624,11 @@ class VerifyExtractionTests(unittest.TestCase):
             "authoring/design_pipeline_evil/foo.hpp",
             "authoring/design_pipelines/foo.hpp",
             "authoring/src/design_pipeline/foo.hpp",
+            "rmlui/plugin_view.hpp",
+            "rmlui/plugin_view_evil/foo.hpp",
+            "rmlui/other/plugin_view/foo.hpp",
+            "rmlui/plugin_views/foo.hpp",
+            "rmlui/src/plugin_view/foo.hpp",
         }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -634,7 +642,7 @@ class VerifyExtractionTests(unittest.TestCase):
 
     def test_renamed_mirror_exemptions_are_pinned(self) -> None:
         # Any change to what the rule skips must show up as an edit here.
-        self.assertEqual(verify_extraction.RENAMED_MIRROR_EXEMPT_PREFIXES, ("authoring/design_pipeline/",))
+        self.assertEqual(verify_extraction.RENAMED_MIRROR_EXEMPT_PREFIXES, ("authoring/design_pipeline/", "rmlui/plugin_view/"))
         self.assertEqual(verify_extraction.FRAMEWORK_TEST_ROOT, "tools/framework-tests/")
         self.assertEqual(verify_extraction.RENAMED_MIRROR_EXEMPT_PATHS, {
             "tools/mirror/consumer/cross_image_main.cpp",
@@ -642,6 +650,9 @@ class VerifyExtractionTests(unittest.TestCase):
             "tools/mirror/consumer/direct_main.cpp",
             "tools/mirror/consumer/main.cpp",
             "tools/mirror/consumer/plugin_view_host_main.mm",
+            "tools/mirror/consumer/native-gpu-editor/editor.cpp",
+            "tools/mirror/consumer/native-gpu-editor/gpu_runtime.cpp",
+            "tools/mirror/consumer/native-gpu-editor/negative_editor.cpp",
             "tools/mirror/consumer/runtime_image_census_main.cpp",
             "tools/mirror/consumer/threejs_v8_main.cpp",
             "tools/mirror/consumer/v8_main.cpp",
@@ -3533,10 +3544,13 @@ class RendererPinTests(unittest.TestCase):
         (self.root / "provenance/mirror/receipts").mkdir(parents=True)
         lock = json.loads((MODULE_PATH.parents[2] / "provenance/third-party-lock.json").read_text())
         (self.root / "provenance/third-party-lock.json").write_text(json.dumps(lock))
+        (self.root / "gpu-runtime").mkdir()
+        (self.root / "gpu-runtime/renderer-lock.json").write_bytes(
+            (MODULE_PATH.parents[2] / "gpu-runtime/renderer-lock.json").read_bytes())
         renderer = lock["runtime_toolchain_dependencies"]["renderer"]
         artifact, identities = renderer["artifact"], renderer["source_identities"]
         self.matching_pin = {
-            "skia_branch": artifact["release_tag"],
+            "skia_branch": json.loads((self.root / "gpu-runtime/renderer-lock.json").read_text())["milestone"],
             "skia_commit": identities["skia"]["commit"],
             "built_dawn": identities["dawn"]["commit"],
             "skia_builder_ref": identities["builder"]["commit"],
@@ -3567,6 +3581,175 @@ class RendererPinTests(unittest.TestCase):
         errors, rows = verify_extraction.renderer_pin_errors(self.root, self.pulp, [receipt])
         self.assertEqual(errors, [])
         self.assertTrue(rows[0]["matches_lock"])
+
+    def bound_pulp_commit(self, block_overrides: dict | None = None, on_main: bool = True) -> str:
+        """Commit Pulp's vellum_mirror_renderer block for the lock and bind the lock to it."""
+        lock = json.loads((self.root / "provenance/third-party-lock.json").read_text())
+        renderer = lock["runtime_toolchain_dependencies"]["renderer"]
+        block = {
+            "url": renderer["artifact"]["url"],
+            "sha256": renderer["artifact"]["sha256"],
+            "libdawn_combined_sha256": next(
+                a["sha256"] for a in renderer["archives"] if a["name"] == "libdawn_combined.a"),
+            "skia_builder_ref": renderer["source_identities"]["builder"]["commit"],
+            "built_dawn": renderer["source_identities"]["dawn"]["commit"],
+        }
+        block.update(block_overrides or {})
+        manifest_path = self.pulp / "tools/deps/manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["dependencies"][1]["vellum_mirror_renderer"] = block
+        manifest_path.write_text(json.dumps(manifest))
+        git = ["git", "-C", str(self.pulp), "-c", "user.name=t", "-c", "user.email=t@t"]
+        subprocess.run(git + ["commit", "-q", "-am", "block"], check=True)
+        commit = subprocess.run(git + ["rev-parse", "HEAD"], check=True, capture_output=True,
+                                text=True).stdout.strip()
+        if on_main:
+            subprocess.run(git + ["update-ref", "refs/remotes/origin/main", commit], check=True)
+        self.bind(commit)
+        return commit
+
+    def bind(self, commit: object) -> None:
+        path = self.root / "gpu-runtime/renderer-lock.json"
+        renderer_lock = json.loads(path.read_text())
+        renderer_lock[verify_extraction.RENDERER_BINDING_KEY] = {"pulp_commit": commit}
+        path.write_text(json.dumps(renderer_lock))
+
+    def older_pin_receipt(self, **pin_overrides: object) -> str:
+        """A receipt from a commit whose builder and archive predate the lock's."""
+        pin = json.loads(json.dumps(self.matching_pin))
+        pin["skia_builder_ref"] = "9" * 40
+        pin["release_assets"]["mac-universal"] = {"url": "https://example.invalid/old.zip", "sha256": "8" * 64}
+        pin.update(pin_overrides)
+        return self.receipt(self.pulp_commit(pin))
+
+    def move_lock_past_the_prior_pin(self) -> None:
+        """Point the lock at an attested release, as a repin does."""
+        path = self.root / "provenance/third-party-lock.json"
+        lock = json.loads(path.read_text())
+        renderer = lock["runtime_toolchain_dependencies"]["renderer"]
+        renderer["artifact"].update(
+            sha256="6" * 64, url="https://github.com/danielraffel/skia-builder/releases/download/"
+            "chrome/m158-attested.2/skia-build-mac-universal-gpu-release.zip")
+        renderer["source_identities"]["builder"]["commit"] = "5" * 40
+        path.write_text(json.dumps(lock))
+
+    def prior_pin_receipt(self, **overrides: object) -> str:
+        pin = json.loads(json.dumps(self.matching_pin))
+        prior = verify_extraction.PRIOR_RENDERER_PIN
+        pin["skia_builder_ref"] = prior["skia_builder_ref"]
+        pin["release_assets"]["mac-universal"] = {"url": prior["archive_url"],
+                                                  "sha256": prior["archive_sha256"]}
+        for key, value in overrides.items():
+            if key == "archive_sha256":
+                pin["release_assets"]["mac-universal"]["sha256"] = value
+            elif key == "archive_url":
+                pin["release_assets"]["mac-universal"]["url"] = value
+            else:
+                pin[key] = value
+        return self.receipt(self.pulp_commit(pin))
+
+    def test_the_single_prior_renderer_pin_is_accepted_after_a_repin(self) -> None:
+        self.move_lock_past_the_prior_pin()
+        errors, rows = verify_extraction.renderer_pin_errors(
+            self.root, self.pulp, [self.prior_pin_receipt()])
+        self.assertEqual(errors, [])
+        self.assertTrue(rows[0]["matches_lock"])
+
+    def test_another_historical_renderer_asset_is_refused(self) -> None:
+        self.move_lock_past_the_prior_pin()
+        for label, overrides in (
+                ("another archive", {"archive_sha256": "4" * 64}),
+                ("another url", {"archive_url": "https://example.invalid/old.zip"}),
+                ("another builder", {"skia_builder_ref": "3" * 40}),
+                ("another milestone", {"skia_branch": "chrome/m157"}),
+                ("another skia", {"skia_commit": "2" * 40}),
+                ("another dawn", {"built_dawn": "1" * 40})):
+            with self.subTest(label=label):
+                errors, rows = verify_extraction.renderer_pin_errors(
+                    self.root, self.pulp, [self.prior_pin_receipt(**overrides)])
+                self.assertTrue(errors, label)
+                self.assertFalse(rows[0]["matches_lock"])
+
+    def test_the_prior_pin_is_all_or_nothing(self) -> None:
+        """A receipt matching only part of the prior triple is a different pin."""
+        self.move_lock_past_the_prior_pin()
+        prior = verify_extraction.PRIOR_RENDERER_PIN
+        half = {"skia_builder_ref": "5" * 40}  # the lock's builder with the prior archive
+        errors, _ = verify_extraction.renderer_pin_errors(
+            self.root, self.pulp, [self.prior_pin_receipt(**half)])
+        self.assertTrue(errors)
+        self.assertEqual(set(prior), {"archive_sha256", "archive_url", "skia_builder_ref"})
+
+    def test_an_unbound_older_builder_and_archive_is_refused(self) -> None:
+        errors, rows = verify_extraction.renderer_pin_errors(self.root, self.pulp, [self.older_pin_receipt()])
+        self.assertFalse(rows[0]["matches_lock"])
+        self.assertIn("skia_builder_ref", errors[0])
+
+    def test_a_lock_bound_to_pulps_mirror_renderer_block_passes(self) -> None:
+        receipt = self.older_pin_receipt()
+        self.bound_pulp_commit()
+        errors, rows = verify_extraction.renderer_pin_errors(self.root, self.pulp, [receipt])
+        self.assertEqual(errors, [])
+        self.assertTrue(rows[0]["matches_lock"])
+
+    def test_a_binding_with_a_wrong_archive_digest_is_refused(self) -> None:
+        receipt = self.older_pin_receipt()
+        self.bound_pulp_commit({"sha256": "7" * 64})
+        errors, rows = verify_extraction.renderer_pin_errors(self.root, self.pulp, [receipt])
+        self.assertEqual(rows, [])
+        self.assertIn("differs from the lock in sha256", errors[0])
+
+    def test_a_binding_commit_not_on_pulp_main_is_refused(self) -> None:
+        receipt = self.older_pin_receipt()
+        self.bound_pulp_commit(on_main=False)
+        git = ["git", "-C", str(self.pulp), "-c", "user.name=t", "-c", "user.email=t@t"]
+        subprocess.run(git + ["update-ref", "refs/remotes/origin/main", "HEAD~1"], check=True)
+        errors, _ = verify_extraction.renderer_pin_errors(self.root, self.pulp, [receipt])
+        self.assertIn("is not on the checked-out Pulp main", errors[0])
+
+    def test_a_binding_does_not_excuse_a_changed_skia_or_dawn(self) -> None:
+        for key in ("skia_commit", "built_dawn"):
+            with self.subTest(key=key):
+                receipt = self.older_pin_receipt(**{key: "6" * 40})
+                self.bound_pulp_commit()
+                errors, _ = verify_extraction.renderer_pin_errors(self.root, self.pulp, [receipt])
+                self.assertIn(key, errors[0])
+
+    def test_a_binding_does_not_excuse_another_milestone(self) -> None:
+        receipt = self.older_pin_receipt(skia_branch="chrome/m157")
+        self.bound_pulp_commit()
+        errors, _ = verify_extraction.renderer_pin_errors(self.root, self.pulp, [receipt])
+        self.assertIn("skia_branch", errors[0])
+
+    def test_a_malformed_bound_manifest_is_a_clean_error(self) -> None:
+        receipt = self.older_pin_receipt()
+        self.bound_pulp_commit()
+        git = ["git", "-C", str(self.pulp), "-c", "user.name=t", "-c", "user.email=t@t"]
+        for body in ('{"dependencies": null}', "[]", '{"dependencies": [5, null]}'):
+            with self.subTest(body=body):
+                (self.pulp / "tools/deps/manifest.json").write_text(body)
+                subprocess.run(git + ["commit", "-q", "-am", "bad"], check=True)
+                commit = subprocess.run(git + ["rev-parse", "HEAD"], check=True, capture_output=True,
+                                        text=True).stdout.strip()
+                subprocess.run(git + ["update-ref", "refs/remotes/origin/main", commit], check=True)
+                self.bind(commit)
+                errors, rows = verify_extraction.renderer_pin_errors(self.root, self.pulp, [receipt])
+                self.assertEqual(rows, [])
+                self.assertTrue(errors and "pulp_binding" in errors[0], errors)
+
+    def test_a_malformed_binding_is_refused(self) -> None:
+        receipt = self.older_pin_receipt()
+        for bad in ("abc", "A" * 40, None, 5):
+            with self.subTest(bad=bad):
+                self.bind(bad)
+                errors, _ = verify_extraction.renderer_pin_errors(self.root, self.pulp, [receipt])
+                self.assertIn("must be exactly", errors[0])
+
+    def test_an_unreadable_renderer_lock_is_a_clean_error(self) -> None:
+        (self.root / "gpu-runtime/renderer-lock.json").write_text("{}")
+        errors, rows = verify_extraction.renderer_pin_errors(self.root, self.pulp, [self.receipt("a" * 40)])
+        self.assertIn("cannot read the milestone", errors[0])
+        self.assertEqual(rows, [])
 
     def test_export_against_another_milestone_fails(self) -> None:
         # The case this check exists for: an export from a Pulp commit that

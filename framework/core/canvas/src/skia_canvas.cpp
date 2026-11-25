@@ -106,6 +106,7 @@ static SkPaint make_solid_fill_paint(Color c) {
     paint.setColor4f(to_sk_color4f(c));
     paint.setStyle(SkPaint::kFill_Style);
     paint.setAntiAlias(true);
+    paint.setDither(false);
     return paint;
 }
 
@@ -115,6 +116,7 @@ SkPaint make_stroke_paint(Color c, float width) {
     paint.setStyle(SkPaint::kStroke_Style);
     paint.setStrokeWidth(width);
     paint.setAntiAlias(true);
+    paint.setDither(false);
     return paint;
 }
 
@@ -511,6 +513,11 @@ SkPaint SkiaCanvas::current_fill_paint() const {
         skia_gradient::set_paint_shader(paint, gradient_shader_);
     } else {
         paint.setColor4f(to_sk_color4f(fill_color_));
+        // Pulp's legacy solid-color path keeps translucent overlays
+        // undithered. Set this explicitly because Graphite surface defaults
+        // are backend-owned, while CSS gradients retain their own dither
+        // setting through set_paint_shader().
+        paint.setDither(false);
     }
     apply_shadow_filter(paint);
     apply_filter(paint);
@@ -841,7 +848,10 @@ void SkiaCanvas::set_line_dash(const float* intervals, int count, float phase) {
 }
 
 void SkiaCanvas::set_font(const std::string& family, float size) {
-    font_family_ = family;
+    // Widgets name their default face "system". That is a widget alias for the
+    // platform UI font, not a CSS family, so it is resolved here, ahead of the
+    // CSS generic table, which leaves a literal `system` family alone.
+    font_family_ = family == "system" ? std::string("system-ui") : family;
     // Same reasoning as set_line_width: an unusable size must not reach the
     // glyph-to-path stroker.
     if (usable_text_geometry(size))

@@ -1,0 +1,89 @@
+{
+  "schema": "vellum.rmlui-renderers.v1",
+  "renderers": [
+    {
+      "id": "vellum",
+      "kind": "vellum",
+      "graphics_api": "Skia/Dawn",
+      "platforms": ["macos", "ios", "windows", "linux", "android"],
+      "cmake": {"option": "VELLUM_RMLUI_VELLUM_RENDERER", "target": "VellumRmlUi::VellumRenderer"},
+      "status": {"macos": "planned", "ios": "planned", "windows": "planned", "linux": "planned", "android": "planned"}
+    },
+    {
+      "id": "metal",
+      "kind": "vellum",
+      "graphics_api": "Metal",
+      "platforms": ["macos", "ios"],
+      "cmake": {"option": "VELLUM_RMLUI_METAL", "target": "VellumRmlUi::Metal"},
+      "status": {"macos": "tested", "ios": "tested"}
+    },
+    {
+      "id": "cpu",
+      "kind": "vellum",
+      "graphics_api": "CPU",
+      "platforms": ["macos", "ios", "windows", "linux", "android"],
+      "cmake": {"option": "VELLUM_RMLUI_CPU", "target": "VellumRmlUi::Cpu"},
+      "status": {"macos": "tested", "ios": "planned", "windows": "tested", "linux": "tested", "android": "planned"}
+    },
+    {
+      "id": "dx11",
+      "kind": "upstream-mit",
+      "graphics_api": "DirectX 11",
+      "platforms": ["windows"],
+      "cmake": {"option": "RMLUI_BACKEND=Win32_DX11"},
+      "status": {"windows": "planned"}
+    },
+    {
+      "id": "dx12",
+      "kind": "upstream-mit",
+      "graphics_api": "DirectX 12",
+      "platforms": ["windows"],
+      "cmake": {"option": "RMLUI_BACKEND=Win32_DX12"},
+      "status": {"windows": "planned"}
+    },
+    {
+      "id": "gl2",
+      "kind": "upstream-mit",
+      "graphics_api": "OpenGL 2",
+      "platforms": ["windows", "linux"],
+      "cmake": {"option": "RMLUI_BACKEND=Win32_GL2 or X11_GL2"},
+      "status": {"windows": "planned", "linux": "planned"}
+    },
+    {
+      "id": "gl3",
+      "kind": "upstream-mit",
+      "graphics_api": "OpenGL 3 / GLES3",
+      "platforms": ["windows", "linux", "android"],
+      "cmake": {"option": "RMLUI_BACKEND=GLFW_GL3 or Wayland_GL3"},
+      "status": {"windows": "planned", "linux": "planned", "android": "planned"}
+    },
+    {
+      "id": "vk",
+      "kind": "upstream-mit",
+      "graphics_api": "Vulkan",
+      "platforms": ["windows", "linux", "android"],
+      "cmake": {"option": "RMLUI_BACKEND=Win32_VK or SDL_VK"},
+      "status": {"windows": "planned", "linux": "planned", "android": "planned"}
+    },
+    {
+      "id": "sdl",
+      "kind": "upstream-mit",
+      "graphics_api": "SDL renderer",
+      "platforms": ["windows", "linux", "android"],
+      "cmake": {"option": "RMLUI_BACKEND=SDL_SDLrenderer"},
+      "status": {"windows": "planned", "linux": "planned", "android": "planned"}
+    },
+    {
+      "id": "sdl_gpu",
+      "kind": "upstream-mit",
+      "graphics_api": "SDL GPU",
+      "platforms": ["windows", "linux", "android"],
+      "cmake": {"option": "RMLUI_BACKEND=SDL_GPU"},
+      "status": {"windows": "planned", "linux": "planned", "android": "planned"}
+    }
+  ],
+  "community": {
+    "url": "https://github.com/mikke89/RmlUi/discussions/186",
+    "note": "Third-party integrations (engines, bgfx, WebGPU and others) are not vetted or packaged by Vellum; check each project's license before use."
+  }
+}

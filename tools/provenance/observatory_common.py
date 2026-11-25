@@ -98,6 +98,12 @@ REQUIRED_BUDGETS = {
     "maximum_repeated_generic_fixes",
     "maximum_framework_effort_percent",
 }
+# Budgets a ledger may leave out. Each one's absence keeps the stricter
+# behaviour the budgets had before it existed, so an older tree, which a
+# release dry run or a stale-report check may still load, judges as it did.
+OPTIONAL_BUDGETS = {
+    "repeated_generic_fix_window_days",
+}
 
 
 class ObservatoryError(RuntimeError):
@@ -172,11 +178,13 @@ def load_budgets(path: Path) -> dict[str, int]:
             raise ObservatoryError(f"unsupported observatory budget syntax: {line!r}")
         values[match.group(1)] = int(match.group(2))
     missing = REQUIRED_BUDGETS - set(values)
-    unknown = set(values) - REQUIRED_BUDGETS
+    unknown = set(values) - REQUIRED_BUDGETS - OPTIONAL_BUDGETS
     if missing or unknown:
         raise ObservatoryError(
             f"observatory budget keys differ: missing={sorted(missing)} unknown={sorted(unknown)}"
         )
+    if values.get("repeated_generic_fix_window_days", 1) < 1:
+        raise ObservatoryError("repeated_generic_fix_window_days must be at least 1")
     return values
 
 

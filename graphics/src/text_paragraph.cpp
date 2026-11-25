@@ -7,7 +7,17 @@
 #include "include/core/SkPaint.h"
 #include "include/core/SkString.h"
 #include "include/core/SkTypeface.h"
+#if defined(__APPLE__)
 #include "include/ports/SkFontMgr_mac_ct.h"
+#elif defined(_WIN32)
+#include "include/ports/SkFontMgr_directwrite.h"
+#elif defined(__ANDROID__)
+#include "include/ports/SkFontMgr_android.h"
+#include "include/ports/SkFontScanner_FreeType.h"
+#elif defined(__linux__)
+#include "include/ports/SkFontMgr_fontconfig.h"
+#include "include/ports/SkFontScanner_FreeType.h"
+#endif
 #include "modules/skparagraph/include/FontCollection.h"
 #include "modules/skparagraph/include/ParagraphBuilder.h"
 #include "modules/skparagraph/include/ParagraphStyle.h"
@@ -15,7 +25,9 @@
 #include "modules/skparagraph/include/TypefaceFontProvider.h"
 #include "modules/skunicode/include/SkUnicode_icu.h"
 
+#if !defined(_WIN32)
 #include <dlfcn.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -36,6 +48,7 @@ void set_error(std::string* destination, std::string message) {
 
 std::filesystem::path font_directory(std::string_view requested) {
     if (!requested.empty()) return std::filesystem::path(requested);
+#if !defined(_WIN32)
     Dl_info info{};
     if (dladdr(reinterpret_cast<const void*>(&font_directory), &info) != 0 &&
         info.dli_fname != nullptr) {
@@ -50,6 +63,11 @@ std::filesystem::path font_directory(std::string_view requested) {
             VELLUM_BUILD_DATADIR_FROM_PROVIDER_DIR / "vellum" / "fonts";
         if (std::filesystem::is_directory(build_tree)) return build_tree;
     }
+#else
+    const auto installed = std::filesystem::current_path() /
+        VELLUM_DATADIR_FROM_LIBDIR / "vellum" / "fonts";
+    if (std::filesystem::is_directory(installed)) return installed;
+#endif
     return {};
 }
 
@@ -102,7 +120,19 @@ const sk_sp<SkUnicode>& text_unicode() {
 // holds `text_mutex`.
 PackagedFontSet* packaged_fonts(const std::filesystem::path& directory,
                                 std::string* error) {
-    static const sk_sp<SkFontMgr> manager = SkFontMgr_New_CoreText(nullptr);
+    static const sk_sp<SkFontMgr> manager = [] {
+#if defined(__APPLE__)
+        return SkFontMgr_New_CoreText(nullptr);
+#elif defined(_WIN32)
+        return SkFontMgr_New_DirectWrite();
+#elif defined(__ANDROID__)
+        return SkFontMgr_New_Android(nullptr, SkFontScanner_Make_FreeType());
+#elif defined(__linux__)
+        return SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
+#else
+        return sk_sp<SkFontMgr>{};
+#endif
+    }();
     static std::unordered_map<std::string, PackagedFontSet> font_cache;
     if (!manager || directory.empty() || !std::filesystem::is_directory(directory)) {
         set_error(error, "Vellum packaged font directory is unavailable: " + directory.string());

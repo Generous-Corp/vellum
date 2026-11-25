@@ -29,7 +29,6 @@
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -92,52 +91,55 @@ bool read_file(const std::filesystem::path& path, std::string& output) {
     return true;
 }
 
-class BundleImages final {
-public:
-    explicit BundleImages(std::filesystem::path bundle)
-        : directory_(bundle += ".images") {}
-
-    void resolve(vellum::graphics::Scene& scene) {
-        std::unordered_set<std::string_view> seen;
-        for (const auto& asset : scene.images) {
-            if (asset) seen.insert(asset->content_hash);
-        }
-        resolve_node(scene.root, scene, seen);
+bool load_bundle_images(const std::filesystem::path& bundle,
+                        vellum::authoring::JsApplicationOptions& options, std::string& error) {
+    auto sidecar = bundle;
+    sidecar += ".images.json";
+    std::error_code filesystem_error;
+    const auto size = std::filesystem::file_size(sidecar, filesystem_error);
+    if (filesystem_error == std::errc::no_such_file_or_directory) return true;
+    if (filesystem_error || size > 96U * 1024U * 1024U) {
+        error = "could not read native bundle images within the encoded size limit";
+        return false;
     }
-
-private:
-    std::shared_ptr<const vellum::graphics::ImageAsset> read(std::string_view hash) const {
-        using namespace vellum::graphics;
-        if (!is_content_hash(hash)) return nullptr;
-        const auto path = directory_ / (std::string(hash.substr(7)) + ".png");
-        std::error_code error;
-        if (!std::filesystem::is_directory(std::filesystem::symlink_status(directory_, error)) ||
-            !std::filesystem::is_regular_file(std::filesystem::symlink_status(path, error))) {
-            return nullptr;
-        }
-        std::ifstream input(path, std::ios::binary | std::ios::ate);
-        const auto size = input.tellg();
-        if (size <= 0 || size > static_cast<std::streamoff>(kMaxEncodedImageBytes)) return nullptr;
-        std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
-        input.seekg(0);
-        if (!input.read(reinterpret_cast<char*>(bytes.data()), bytes.size())) return nullptr;
-        return SkiaDawnSurface::decode_image_asset(bytes, hash);
+    NSString* path = [NSString stringWithUTF8String:sidecar.c_str()];
+    NSData* data = [NSData dataWithContentsOfFile:path];
+    id catalog = data == nil ? nil
+        : [NSJSONSerialization JSONObjectWithData:data options:0 error:nullptr];
+    if (![catalog isKindOfClass:NSDictionary.class]) {
+        error = "native bundle image catalog must be a JSON object";
+        return false;
     }
-
-    void resolve_node(const vellum::graphics::SceneNode& node, vellum::graphics::Scene& scene,
-                      std::unordered_set<std::string_view>& seen) {
-        if (node.image && seen.insert(node.image->content_hash).second) {
-            const auto& hash = node.image->content_hash;
-            auto [entry, inserted] = cache_.try_emplace(hash);
-            if (inserted) entry->second = read(hash);
-            if (entry->second) scene.images.push_back(entry->second);
+    NSDictionary* images = static_cast<NSDictionary*>(catalog);
+    std::size_t decoded_bytes = 0;
+    for (NSString* name in [images.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
+        id encoded = images[name];
+        NSData* bytes = [encoded isKindOfClass:NSString.class]
+            ? [[NSData alloc] initWithBase64EncodedString:encoded options:0] : nil;
+        if (bytes == nil) {
+            error = "native bundle image is not base64";
+            return false;
         }
-        for (const auto& child : node.children) resolve_node(child, scene, seen);
+        const std::span<const std::uint8_t> input{
+            static_cast<const std::uint8_t*>(bytes.bytes), bytes.length};
+        const auto dimensions = vellum::graphics::png_header_dimensions(input);
+        if (!dimensions || !vellum::graphics::image_dimensions_fit(
+                dimensions->width, dimensions->height) ||
+            (decoded_bytes += std::size_t{dimensions->width} * dimensions->height * 4U) >
+                vellum::graphics::kMaxImageBytes) {
+            error = "native bundle image exceeds the decoded size limit or has an invalid header";
+            return false;
+        }
+        if (!vellum::graphics::normalize_content_hash(name.UTF8String)) {
+            error = "native bundle image key must be a SHA-256 content hash";
+            return false;
+        }
+        auto asset = SkiaDawnSurface::decode_image_asset(input, name.UTF8String, &error);
+        if (!asset) return false;
+        options.images.push_back(std::move(asset));
     }
-
-    const std::filesystem::path directory_;
-    std::unordered_map<std::string, std::shared_ptr<const vellum::graphics::ImageAsset>> cache_;
-};
+    return true;
+}
 
 CAMetalLayer* make_metal_layer(std::uint32_t width, std::uint32_t height, float scale) {
     CAMetalLayer* layer = [CAMetalLayer layer];
@@ -256,7 +258,8 @@ struct FrameInfo final {
 // Renders the scene on the GPU, checks it has content, and writes a PNG when
 // `png_path` is non-empty.
 bool capture_frame(const RenderedApplication& rendered,
-                   const std::filesystem::path& png_path, FrameInfo& frame,
+                   const std::filesystem::path& png_path,
+                   std::uint32_t scale, FrameInfo& frame,
                    std::string* error) {
     static bool bootstrapped = false;
     if (!bootstrapped) {
@@ -266,7 +269,7 @@ bool capture_frame(const RenderedApplication& rendered,
     auto surface = SkiaDawnSurface::create(
         {.width = static_cast<std::uint32_t>(rendered.scene.width),
          .height = static_cast<std::uint32_t>(rendered.scene.height),
-         .scale = 1.0F},
+         .scale = static_cast<float>(scale)},
         error);
     if (!surface || !validate_gpu(*surface, false, error) ||
         !surface->render(rendered.scene, error)) {
@@ -315,17 +318,15 @@ bool advance_clock(JsApplication& application, std::uint64_t milliseconds,
     return true;
 }
 
-int run_headless(const Options& options, std::string_view bundle) {
+int run_headless(const Options& options, std::string_view bundle,
+                 const vellum::authoring::JsApplicationOptions& application_options) {
     @autoreleasepool {
         std::string error;
-        BundleImages images(options.bundle);
         ComponentRegistry components;
         if (!load_components(options.components, components, &error)) {
             std::cerr << error << '\n';
             return 1;
         }
-        vellum::authoring::JsApplicationOptions application_options;
-        application_options.manual_clock = options.manual_clock;
         auto application = JsApplication::create(
             bundle, application_options, &error);
         RenderedApplication rendered;
@@ -350,7 +351,6 @@ int run_headless(const Options& options, std::string_view bundle) {
             std::cerr << error << '\n';
             return 1;
         }
-        images.resolve(rendered.scene);
         for (const auto& step : options.steps) {
             bool succeeded = false;
             std::string pending_capture;
@@ -468,12 +468,12 @@ int run_headless(const Options& options, std::string_view bundle) {
                 std::cerr << error << '\n';
                 return 1;
             }
-            images.resolve(rendered.scene);
             if (!pending_capture.empty()) {
                 FrameInfo step_frame;
                 const auto directory = options.capture_dir.empty()
                     ? std::filesystem::path(".") : options.capture_dir;
                 if (!capture_frame(rendered, directory / (pending_capture + ".png"),
+                                   options.capture_scale,
                                    step_frame, &error)) {
                     std::cerr << error << '\n';
                     return 1;
@@ -497,7 +497,7 @@ int run_headless(const Options& options, std::string_view bundle) {
             return 1;
         }
         FrameInfo frame;
-        if (!capture_frame(rendered, options.capture, frame, &error)) {
+        if (!capture_frame(rendered, options.capture, options.capture_scale, frame, &error)) {
             std::cerr << error << '\n';
             return 1;
         }
@@ -536,6 +536,7 @@ std::filesystem::path packaged_state_path() {
 }
 
 std::vector<ComponentModuleSpec> interactive_component_specs;
+vellum::authoring::JsApplicationOptions interactive_application_options;
 
 using vellum::graphics::PointerEvent;
 using vellum::graphics::PointerModifiers;
@@ -590,7 +591,6 @@ std::unordered_set<std::string> interactive_nodes(
 @interface VellumApplicationView : NSView <NSTextInputClient> {
 @private
     std::unique_ptr<JsApplication> _application;
-    std::unique_ptr<BundleImages> _images;
     std::unique_ptr<ComponentRegistry> _components;
     RenderedApplication _rendered;
     std::unique_ptr<SkiaDawnSurface> _surface;
@@ -610,7 +610,6 @@ std::unordered_set<std::string> interactive_nodes(
 }
 - (instancetype)initWithFrame:(NSRect)frame
                        bundle:(const std::string&)bundle
-                   bundlePath:(const std::filesystem::path&)bundlePath
                    components:(const std::vector<ComponentModuleSpec>&)components
               persistencePath:(const std::filesystem::path&)persistencePath;
 @end
@@ -618,15 +617,13 @@ std::unordered_set<std::string> interactive_nodes(
 @implementation VellumApplicationView
 - (instancetype)initWithFrame:(NSRect)frame
                        bundle:(const std::string&)bundle
-                   bundlePath:(const std::filesystem::path&)bundlePath
                    components:(const std::vector<ComponentModuleSpec>&)components
               persistencePath:(const std::filesystem::path&)persistencePath {
     self = [super initWithFrame:frame];
     if (self) {
         std::string error;
-        _images = std::make_unique<BundleImages>(bundlePath);
         _components = std::make_unique<ComponentRegistry>();
-        _application = JsApplication::create(bundle, &error);
+        _application = JsApplication::create(bundle, interactive_application_options, &error);
         if (!load_components(components, *_components, &error) || !_application ||
             !_application->render(_rendered, &error)) {
             NSLog(@"Vellum application initialization failed: %s", error.c_str());
@@ -663,7 +660,6 @@ std::unordered_set<std::string> interactive_nodes(
             NSLog(@"Vellum custom component expansion failed: %s", error.c_str());
             return nil;
         }
-        _images->resolve(_rendered.scene);
         self.wantsLayer = YES;
         self.layer = make_metal_layer(
             static_cast<std::uint32_t>(frame.size.width),
@@ -777,7 +773,6 @@ std::unordered_set<std::string> interactive_nodes(
 
 - (BOOL)finishMutation:(std::string*)error {
     if (!_components->expand(_rendered.scene, error)) return NO;
-    _images->resolve(_rendered.scene);
     if (!persist_state(*_application, _persistencePath, error)) return NO;
     [self requestFrame];
     _accessibility->sync(_rendered.accessibility_nodes);
@@ -1240,7 +1235,6 @@ std::unordered_set<std::string> interactive_nodes(
 @interface VellumApplicationDelegate : NSObject <NSApplicationDelegate>
 @property(nonatomic, strong) NSWindow* window;
 @property(nonatomic, copy) NSData* bundleData;
-@property(nonatomic, copy) NSString* bundlePath;
 @end
 
 @implementation VellumApplicationDelegate
@@ -1250,7 +1244,7 @@ std::unordered_set<std::string> interactive_nodes(
         static_cast<const char*>(self.bundleData.bytes), self.bundleData.length);
     std::string error;
     ComponentRegistry components;
-    auto probe = JsApplication::create(bundle, &error);
+    auto probe = JsApplication::create(bundle, interactive_application_options, &error);
     RenderedApplication rendered;
     if (!load_components(interactive_component_specs, components, &error) ||
         !probe || !probe->render(rendered, &error) ||
@@ -1272,7 +1266,6 @@ std::unordered_set<std::string> interactive_nodes(
     self.window.contentView = [[VellumApplicationView alloc]
         initWithFrame:frame
                bundle:bundle
-           bundlePath:std::filesystem::path(self.bundlePath.fileSystemRepresentation)
            components:interactive_component_specs
       persistencePath:persistence_path];
     if (self.window.contentView == nil) {
@@ -1304,20 +1297,24 @@ int main(int argc, const char* argv[]) {
         std::cerr << "could not read application bundle: " << options.bundle << '\n';
         return 2;
     }
+    vellum::authoring::JsApplicationOptions application_options{.manual_clock = options.manual_clock};
+    std::string error;
+    if (!load_bundle_images(options.bundle, application_options, error)) {
+        std::cerr << error << '\n';
+        return 2;
+    }
     if (options.no_window || options.manual_clock || !options.dump_tree.empty() ||
         !options.capture.empty() || !options.steps.empty() ||
         !options.state_file.empty()) {
-        return run_headless(options, bundle);
+        return run_headless(options, bundle, application_options);
     }
     interactive_component_specs = options.components;
+    interactive_application_options = std::move(application_options);
     @autoreleasepool {
         NSApplication* application = NSApplication.sharedApplication;
         application.activationPolicy = NSApplicationActivationPolicyRegular;
         VellumApplicationDelegate* delegate = [[VellumApplicationDelegate alloc] init];
         delegate.bundleData = [NSData dataWithBytes:bundle.data() length:bundle.size()];
-        delegate.bundlePath = [[NSFileManager defaultManager]
-            stringWithFileSystemRepresentation:options.bundle.c_str()
-                                        length:options.bundle.native().size()];
         application.delegate = delegate;
         [application run];
     }

@@ -1316,8 +1316,11 @@ export function materializeFrame(scene, frame, ctx) {
       parentStackMode === 'HORIZONTAL' || parentStackMode === 'VERTICAL';
     const parentIsAutoLayout = parentIsFlex || parentStackMode === 'GRID';
     const optedOut = node.stackPositioning === 'ABSOLUTE';
-    if (parent && node.transform && (!parentIsAutoLayout || optedOut)) {
-      const t = node.transform;
+    // The retained host can replay solved positions at the design viewport.
+    // Keep the original flex contract for consumers that can reflow it.
+    if (parent && ((node.transform && (!parentIsAutoLayout || optedOut)) ||
+        (ctx.solvedLayout && parentIsAutoLayout))) {
+      const t = localTransform(node);
       const x = t.m02;
       const y = t.m12;
       if (typeof x === 'number' && typeof y === 'number') {

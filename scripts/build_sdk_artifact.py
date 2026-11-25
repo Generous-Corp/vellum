@@ -29,8 +29,17 @@ import tempfile
 from typing import Iterable
 
 
-REPO = Path(__file__).resolve().parents[1]
-FRAMEWORK_VERSION = "0.2.2"
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from install_core import (  # noqa: E402
+    InstallError, NATIVE_HOST_FILES, NATIVE_HOST_IMAGES, RUNTIME_IMAGES_MANIFEST, runtime_images,
+)
+
+
+REPO = SCRIPT_DIR.parent
+FRAMEWORK_VERSION = "0.2.3"
 CLI_VERSION = FRAMEWORK_VERSION
 CLI_API = 1
 METADATA_SCHEMA = "vellum.sdk-artifact.v1"
@@ -40,12 +49,6 @@ NATIVE_COMMANDS = ("build", "run", "test", "capture", "package")
 WEB_COMMANDS = ("build", "run", "test", "capture", "package")
 NODE_PROVENANCE_SCHEMA = "vellum.node-runtime-provenance.v1"
 DESIGN_IR_PAYLOAD_ENTRIES = ("LICENSE.md", "README.md", "bin", "package.json", "schema", "src")
-MIRROR_PACKAGE_FILES = (
-    "mirror/lib/cmake/VellumMirror/VellumMirrorTargets.cmake",
-    "mirror/lib/libvellum-mirror-foundation.dylib",
-    "mirror/lib/libvellum-mirror-canvas.dylib",
-    "mirror/lib/libvellum-mirror-state-core.dylib",
-)
 # The RmlUi editor package a native SDK carries: VellumRmlUi::Core (which links
 # RmlUi privately), SoftRenderer, and VellumRenderer on Vellum's GPU renderer,
 # with RmlUi's licence because Core redistributes it.
@@ -68,21 +71,8 @@ RMLUI_UPSTREAM_PATTERNS = (
 # The mirror's CMake package, and the targets in it that SDK consumers link:
 # an editor built on the mirror links MirrorView_core.
 MIRROR_CMAKE_PACKAGE = "mirror/lib/cmake/VellumMirror"
+MIRROR_PACKAGE_FILES = (f"{MIRROR_CMAKE_PACKAGE}/VellumMirrorTargets.cmake",)
 MIRROR_REQUIRED_TARGETS = ("MirrorView_core",)
-# The native host and the libraries it loads at launch. The installer keeps
-# the same list under the payload's "sdk/" prefix.
-NATIVE_HOST_FILES = (
-    "bin/vellum-app-host",
-    "lib/libvellum-authoring.dylib",
-    "lib/libvellum-gpu.dylib",
-    "lib/libvellum-skia-dawn-provider.dylib",
-    "mirror/lib/libvellum-mirror-foundation.dylib",
-    "mirror/lib/libvellum-mirror-state-core.dylib",
-)
-# The runtime check skips NATIVE_HOST_FILES' mirror entries because the mirror
-# check covers them; that holds only while they are a subset of its list.
-if not {path for path in NATIVE_HOST_FILES if path.startswith("mirror/")} <= set(MIRROR_PACKAGE_FILES):
-    raise RuntimeError("NATIVE_HOST_FILES names a mirror library MIRROR_PACKAGE_FILES does not")
 UI_PAYLOAD_ENTRIES = (
     "LICENSE.md", "README.md", "package.json", "package-lock.json", "scripts", "src", "test",
 )
@@ -277,6 +267,14 @@ def prepare_ui_payload(repo: Path, payload: Path) -> None:
             )
 
 
+def installed_runtime_images(install_tree: Path, *, required: bool = False) -> dict[str, str]:
+    manifest = install_tree / RUNTIME_IMAGES_MANIFEST
+    try:
+        return runtime_images(manifest.read_bytes() if required or manifest.exists() else None)
+    except (OSError, InstallError) as error:
+        raise ArtifactError(f"cannot read SDK runtime image manifest: {error}") from error
+
+
 def derive_capabilities(payload: Path, install_tree: Path) -> dict[str, object]:
     cmake_sdk = (install_tree / "lib/cmake/Vellum/VellumConfig.cmake").is_file()
     gpu_renderer = installed_cmake_target(install_tree, "Gpu")
@@ -292,7 +290,10 @@ def derive_capabilities(payload: Path, install_tree: Path) -> dict[str, object]:
     native_backend = all((payload / name).is_file() for name in (
         "vellum_native_backend.py", "vellum_png.py", "vellum_scenario.py",
     ))
-    native_host = all((install_tree / path).is_file() for path in NATIVE_HOST_FILES)
+    images = installed_runtime_images(install_tree)
+    native_host = not missing_package_files(install_tree, (
+        *NATIVE_HOST_FILES, *(images[name] for name in NATIVE_HOST_IMAGES),
+    ))
     node_runtime = (
         any((payload / name).is_file() for name in ("node/bin/node", "node/bin/node.exe"))
         and (payload / "node/LICENSE").is_file()
@@ -523,10 +524,10 @@ def canonicalize_macho_temp_root(path: Path) -> None:
 
 
 def normalize_macho_executable(path: Path, commit: str, target: str) -> None:
-    """Give the installed host a deterministic launchable UUID and ad-hoc signature."""
+    """Give an installed executable a deterministic UUID and ad-hoc signature."""
 
     identity = bytearray(hashlib.sha256(
-        f"vellum-app-host\0{commit}\0{target}".encode("utf-8")
+        f"{path.name}\0{commit}\0{target}".encode("utf-8")
     ).digest()[:16])
     identity[6] = (identity[6] & 0x0F) | 0x50
     identity[8] = (identity[8] & 0x3F) | 0x80
@@ -537,7 +538,7 @@ def normalize_macho_executable(path: Path, commit: str, target: str) -> None:
     canonicalize_macho_temp_root(path)
     run([
         codesign, "--force", "--sign", "-", "--identifier",
-        "org.generous.vellum.app-host", str(path),
+        f"org.generous.vellum.{path.name.removeprefix('vellum-')}", str(path),
     ])
     run([codesign, "--verify", "--strict", str(path)])
 
@@ -689,6 +690,7 @@ def copy_payload(
 ) -> dict[str, object]:
     shutil.copy2(repo / "cli/vellum_cli.py", payload / "vellum_cli.py")
     shutil.copy2(repo / "cli/vellum_illustrator.py", payload / "vellum_illustrator.py")
+    shutil.copy2(repo / "cli/vellum_import_assets.py", payload / "vellum_import_assets.py")
     shutil.copy2(repo / "cli/vellum_dev.py", payload / "vellum_dev.py")
     shutil.copy2(repo / "cli/vellum_backend.py", payload / "vellum_backend.py")
     shutil.copy2(repo / "cli/vellum_manifest.py", payload / "vellum_manifest.py")
@@ -849,18 +851,22 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             normalize_static_archive(archive)
         if skia_archive and target == "darwin-arm64":
             normalize_macho_dylibs(install_tree, commit, target)
-            normalize_macho_executable(install_tree / "bin/vellum-app-host", commit, target)
-        if skia_archive and not (
-            installed_cmake_target(install_tree, "Gpu") and
-            installed_cmake_target(install_tree, "Authoring") and
-            # The mirror libraries are checked against MIRROR_PACKAGE_FILES below.
-            all((install_tree / path).is_file() for path in NATIVE_HOST_FILES if not path.startswith("mirror/"))
-        ):
-            raise ArtifactError(
-                "--skia-archive build did not install the complete native application runtime"
-            )
-        if skia_archive and not all((install_tree / path).is_file() for path in MIRROR_PACKAGE_FILES):
-            raise ArtifactError("--skia-archive build did not install the landed mirror's units")
+            for name in ("vellum-app-host", "vellum-source-adapter"):
+                normalize_macho_executable(install_tree / "bin" / name, commit, target)
+        if skia_archive:
+            images = installed_runtime_images(install_tree, required=True)
+            if not (
+                installed_cmake_target(install_tree, "Gpu") and
+                installed_cmake_target(install_tree, "Authoring") and
+                not missing_package_files(install_tree, (*NATIVE_HOST_FILES, images["provider"]))
+            ):
+                raise ArtifactError(
+                    "--skia-archive build did not install the complete native application runtime"
+                )
+            if missing_package_files(install_tree, (
+                *MIRROR_PACKAGE_FILES, *(path for name, path in images.items() if name != "provider"),
+            )):
+                raise ArtifactError("--skia-archive build did not install the landed mirror's units")
         if skia_archive and (missing := missing_mirror_targets(install_tree)):
             raise ArtifactError(
                 "--skia-archive build did not export the mirror's " + ", ".join(missing)

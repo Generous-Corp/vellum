@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 import os
 import subprocess
@@ -11,7 +13,9 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import release_dry_run as dry  # noqa: E402
@@ -614,6 +618,106 @@ class Target(unittest.TestCase):
         self.assertEqual(dry.reconciled_target(history.root, again), again)
 
 
+class ObservatoryHealth(unittest.TestCase):
+    """The dry run signs only a commit whose ledger its tag's provenance run would pass."""
+
+    def setUp(self) -> None:
+        sys.path.append(str(ROOT / "tools/provenance"))
+        import test_observatory as tob  # noqa: PLC0415
+        self.tob = tob
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        top = Path(temporary.name)
+        self.pulp, self.vellum, self.root = top / "pulp", top / "vellum", top / "state"
+        pulp_base, self.pulp_head = tob.init_repo(self.pulp, "core/render/render.cpp")
+        self.vellum_base, _ = tob.init_repo(self.vellum, "graphics/render.cpp")
+        tob.make_state(self.root, pulp_base, self.vellum_base)
+        tob.run(self.root, "git", "init", "-q", "-b", "main")
+        tob.run(self.root, "git", "config", "user.email", "observatory@example.invalid")
+        tob.run(self.root, "git", "config", "user.name", "Observatory Test")
+        self.discovered = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(minutes=1)
+
+    def ledger(self, mapped: int, *, committed_after: timedelta, resolve: str | None = None) -> str:
+        """A reconciled ledger with `mapped` observations, committed `committed_after` discovery.
+
+        Each observation stays pending, or with `resolve` is classified with that
+        disposition a minute after its discovery.
+        """
+        for index in range(mapped - 1):
+            self.tob.write(self.pulp / "core/render/render.cpp", f"int value = {index + 100};\n")
+            self.pulp_head = self.tob.commit_all(self.pulp, f"pulp change {index}")
+        self.tob.observatory.reconcile(
+            root=self.root, pulp_repo=self.pulp, vellum_repo=self.vellum,
+            pulp_target=self.pulp_head, vellum_target=self.vellum_base,
+            now_text=self.discovered.strftime("%Y-%m-%dT%H:%M:%SZ"), write=True)
+        if resolve is not None:
+            events = self.root / "provenance/pulp-observatory/events"
+            for path in sorted(events.glob("*.yaml")):
+                observation = json.loads(path.read_text())
+                self.tob.write_json(events / f"resolution-{observation['event_id']}.yaml", {
+                    "schema_version": 1, "event_id": f"resolution-{observation['event_id']}",
+                    "kind": "resolution",
+                    "created_at": (self.discovered + timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "resolves": observation["event_id"], "disposition": resolve,
+                    "rationale": "Classified.", "owner": "@danielraffel",
+                    "linked_commits": [observation["source_commit"]], "linked_pull_requests": [],
+                    "contract_tests": observation["contract_tests"],
+                    "shared_contract_release_blocker": False, "effort_minutes": 5,
+                })
+        stamp = (self.discovered + committed_after).strftime("%Y-%m-%dT%H:%M:%SZ")
+        subprocess.run(["git", "-C", str(self.root), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(self.root), "commit", "-q", "-m", "reconciled ledger"], check=True,
+                       env={**os.environ, "GIT_COMMITTER_DATE": stamp, "GIT_AUTHOR_DATE": stamp})
+        return self.tob.run(self.root, "git", "rev-parse", "HEAD")
+
+    def test_a_healthy_ledger_passes(self) -> None:
+        self.assertEqual(dry.observatory_problems(self.root, self.ledger(1, committed_after=timedelta(hours=1))), [])
+
+    def test_a_ledger_over_the_pending_budget_is_refused(self) -> None:
+        problems = dry.observatory_problems(self.root, self.ledger(21, committed_after=timedelta(hours=1)))
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("pending-event-count-exceeded", problems[0])
+
+    def test_a_ledger_overdue_at_its_commit_time_is_refused(self) -> None:
+        problems = dry.observatory_problems(self.root, self.ledger(1, committed_after=timedelta(days=30)))
+        self.assertEqual(sorted(problem.split()[0] for problem in problems),
+                         ["overdue-event-count-exceeded", "pending-event-age-exceeded"])
+
+    def test_a_burst_of_repeated_generic_fixes_is_refused(self) -> None:
+        problems = dry.observatory_problems(
+            self.root, self.ledger(3, committed_after=timedelta(hours=1), resolve="port-required"))
+        self.assertEqual([problem.split()[0] for problem in problems],
+                         ["repeated-generic-fix-threshold-exceeded"])
+
+    def test_repeated_generic_fixes_older_than_the_window_pass(self) -> None:
+        self.assertEqual(dry.observatory_problems(
+            self.root, self.ledger(3, committed_after=timedelta(days=15), resolve="port-required")), [])
+
+    def test_a_tree_without_a_ledger_is_refused(self) -> None:
+        bare = self.root.parent / "bare"
+        self.tob.init_repo(bare, "README.md")
+        problems = dry.observatory_problems(bare, self.tob.run(bare, "git", "rev-parse", "HEAD"))
+        self.assertEqual(len(problems), 1)
+        self.assertIn("cannot be judged", problems[0])
+
+    def test_plan_refuses_an_unhealthy_commit_before_naming_a_tag(self) -> None:
+        head = dry.rr.git(ROOT, "rev-parse", "HEAD")
+        args = ["plan", "--head", head, "--run-id", "41", "--attempt", "1"]
+        with mock.patch.object(dry, "reconciled_target", return_value=head):
+            for problems, code in ((["pending-event-count-exceeded"], 1), ([], 0)):
+                with self.subTest(problems=problems), \
+                        mock.patch.object(dry, "observatory_problems", return_value=problems) as judged, \
+                        contextlib.redirect_stdout(io.StringIO()) as out, \
+                        contextlib.redirect_stderr(io.StringIO()) as err:
+                    self.assertEqual(dry.main(args), code)
+                    judged.assert_called_once_with(dry.ROOT, head)
+                    if code:
+                        self.assertEqual(out.getvalue(), "")
+                        self.assertIn("unhealthy", err.getvalue())
+                    else:
+                        self.assertIn(f"commit={head}", out.getvalue())
+
+
 class Wiring(unittest.TestCase):
     def test_the_dry_run_tag_is_signed_only_by_hand_on_main_and_never_frozen(self) -> None:
         text = (WORKFLOWS / "release-tag.yml").read_text()
@@ -645,7 +749,8 @@ class Wiring(unittest.TestCase):
         self.assertEqual(gpu.count("startsWith(github.ref, 'refs/tags/') && "
                                    "!startsWith(github.ref, 'refs/tags/authority/')"), 2)
         provenance = (WORKFLOWS / "provenance.yml").read_text()
-        self.assertIn('release_readiness+=(--release-tag "${BASH_REMATCH[1]}")', provenance)
+        self.assertIn('release_readiness+=(--release-tag "${BASH_REMATCH[1]}" --dry-run-tag "$GITHUB_REF_NAME")',
+                      provenance)
 
 
 if __name__ == "__main__":

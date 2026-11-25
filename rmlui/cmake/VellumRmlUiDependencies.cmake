@@ -86,7 +86,8 @@ function(vellum_rmlui_fetch_dependencies)
     # text no longer comes out up to 5 % wider at small sizes. Upstream has the
     # same code; retire it only if upstream takes an equivalent change.
     set(_vellum_rmlui_patches
-        "${CMAKE_CURRENT_LIST_DIR}/patches/rmlui-fractional-glyph-advances.patch")
+        "${CMAKE_CURRENT_LIST_DIR}/patches/rmlui-fractional-glyph-advances.patch"
+        "${CMAKE_CURRENT_LIST_DIR}/patches/rmlui-content-changed.patch")
     FetchContent_Declare(vellum_rmlui_rmlui
         GIT_REPOSITORY https://github.com/mikke89/RmlUi.git
         GIT_TAG "${VELLUM_RMLUI_RMLUI_COMMIT}"

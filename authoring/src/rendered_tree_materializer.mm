@@ -108,10 +108,19 @@ bool style_key_consumed(std::string_view type, std::string_view key, const Style
         return key == "backgroundColor" || key == "borderRadius" ||
                contains(kCornerRadiusKeys, key);
     }
-    if (key == "padding" || key == "direction") return use.lays_out_children;
-    if (key == "gap") return type == "stack" && use.lays_out_children;
+    if (key == "padding" || key == "direction" || key == "display" ||
+        key == "wrap" || key == "align" || key == "alignContent" || key == "justify") {
+        return use.lays_out_children;
+    }
+    if (key == "gap" || key == "rowGap" || key == "columnGap") {
+        return type == "stack" && use.lays_out_children;
+    }
+    if (key == "flexGrow" || key == "alignSelf" || key == "gridColumn" || key == "gridRow" ||
+        key == "gridTemplateColumns" || key == "gridTemplateRows") {
+        return use.lays_out_children;
+    }
     if (key == "backgroundGradient" || key == "backgroundLinearGradient" ||
-        key == "backgroundGradients" || key == "boxShadow") return true;
+        key == "backgroundGradients" || key == "boxShadow" || key == "border") return true;
     if (!text) {
         for (std::size_t side = 0; side < kBorderWidths.size(); ++side) {
             if (key == kBorderWidths[side].UTF8String || key == kBorderColors[side].UTF8String) {
@@ -450,11 +459,17 @@ bool parse_box_shadow(
     std::string* error) {
     id raw = style[@"boxShadow"];
     if (raw == nil) return true;
-    if (![raw isKindOfClass:NSDictionary.class]) {
-        set_error(error, "boxShadow must be an object");
+    NSArray* layers = [raw isKindOfClass:NSArray.class] ? raw : @[raw];
+    if (layers.count == 0U || layers.count > 8U) {
+        set_error(error, "boxShadow must contain between 1 and 8 shadows");
         return false;
     }
-    NSDictionary* source = raw;
+    for (id layer : layers) {
+      if (![layer isKindOfClass:NSDictionary.class]) {
+        set_error(error, "boxShadow entries must be objects");
+        return false;
+      }
+      NSDictionary* source = layer;
     const auto color = parse_color(source[@"color"]);
     if (!color) {
         set_error(error, "boxShadow requires a color");
@@ -475,7 +490,32 @@ bool parse_box_shadow(
         set_error(error, "boxShadow blurRadius and spreadRadius must be non-negative");
         return false;
     }
-    output.push_back(shadow);
+      output.push_back(shadow);
+    }
+    return true;
+}
+
+bool parse_border(NSDictionary* style, float& width, vellum::graphics::Color& color,
+                  std::string* error) {
+    id raw = style[@"border"];
+    if (raw == nil) return true;
+    if (![raw isKindOfClass:NSDictionary.class]) {
+        set_error(error, "border must be an object");
+        return false;
+    }
+    NSDictionary* source = raw;
+    if (source[@"style"] != nil && (![source[@"style"] isKindOfClass:NSString.class] ||
+        ![source[@"style"] isEqualToString:@"solid"])) {
+        set_error(error, "border.style must be solid");
+        return false;
+    }
+    if (!number_field(source, @"width", 0.0F, width, "border.width", error) || width < 0.0F) {
+        set_error(error, "border.width must be non-negative");
+        return false;
+    }
+    const auto parsed = parse_color(source[@"color"]);
+    if (!parsed) { set_error(error, "border requires a color"); return false; }
+    color = *parsed;
     return true;
 }
 
@@ -1474,7 +1514,9 @@ bool parse_vector_paint(id raw, vellum::graphics::VectorPaint& output, const std
     return true;
 }
 
-// A compiled vector asset: one display list drawn by a single node.
+// A compiled vector asset: one display list drawn by a single node, as the
+// DesignIR SVG importer emits it for an asset over its budgets or one that
+// uses features only the compiled form carries.
 bool materialize_vector(
     NSDictionary* source, const std::string& identity, MaterializeContext& context,
     vellum::graphics::SceneNode& output, std::string* error) {
@@ -2349,6 +2391,158 @@ bool append_box_border(
     };
     const auto [x0, x1] = inset(width, left, right);
     const auto [y0, y1] = inset(height, top, bottom);
+    // Partition the rounded border ring by side.  A straight-sided polygon
+    // clipped to the outer rounded box leaves the curved corner sections
+    // outside the polygon (and therefore unpainted) when side colours differ.
+    // Give each side the corresponding outer and inner contour, splitting
+    // every corner at the border-width-weighted bisector so the four paths
+    // meet without gaps or area overlap.
+    if (x1 > x0 && y1 > y0) {
+        const float inner_width = x1 - x0;
+        const float inner_height = y1 - y0;
+        // CSS keeps each inner corner's centre aligned with the outer corner;
+        // horizontal and vertical insets therefore produce an elliptical arc.
+        std::array<float, 4> inner_rx{
+            std::max(0.0F, radii.top_left - left),
+            std::max(0.0F, radii.top_right - right),
+            std::max(0.0F, radii.bottom_right - right),
+            std::max(0.0F, radii.bottom_left - left),
+        };
+        std::array<float, 4> inner_ry{
+            std::max(0.0F, radii.top_left - top),
+            std::max(0.0F, radii.top_right - top),
+            std::max(0.0F, radii.bottom_right - bottom),
+            std::max(0.0F, radii.bottom_left - bottom),
+        };
+        const float inner_scale_x = std::min({
+            scale_for(inner_width, inner_rx[0] + inner_rx[1]),
+            scale_for(inner_width, inner_rx[3] + inner_rx[2]),
+        });
+        const float inner_scale_y = std::min({
+            scale_for(inner_height, inner_ry[0] + inner_ry[3]),
+            scale_for(inner_height, inner_ry[1] + inner_ry[2]),
+        });
+        for (float& radius : inner_rx) radius *= inner_scale_x;
+        for (float& radius : inner_ry) radius *= inner_scale_y;
+
+        const auto append_arc = [](PathGeometry& path, float radius_x, float radius_y,
+                                   float end_x, float end_y, bool clockwise) {
+            if (radius_x > 0.0F && radius_y > 0.0F) {
+                path.verbs.push_back(PathVerb::arc);
+                path.values.insert(path.values.end(), {radius_x, radius_y, 0, 0,
+                                                       clockwise ? 1.0F : 0.0F, end_x, end_y});
+            } else {
+                path.verbs.push_back(PathVerb::line);
+                path.values.insert(path.values.end(), {end_x, end_y});
+            }
+        };
+        const auto make_side = [&](std::size_t side) {
+            PathGeometry path;
+            const auto unit = [](float first, float second) {
+                const float length = std::hypot(first, second);
+                return length > 0.0F ? std::pair{first / length, second / length}
+                                    : std::pair{0.70710678118F, 0.70710678118F};
+            };
+            const auto [utlx, utly] = unit(top, left);
+            const auto [utrx, utry] = unit(top, right);
+            const auto [ubrx, ubry] = unit(bottom, right);
+            const auto [ublx, ubly] = unit(bottom, left);
+            const float otlx = radii.top_left * utlx, otly = radii.top_left * utly;
+            const float otrx = radii.top_right * utrx, otry = radii.top_right * utry;
+            const float obrx = radii.bottom_right * ubrx, obry = radii.bottom_right * ubry;
+            const float oblx = radii.bottom_left * ublx, obly = radii.bottom_left * ubly;
+            const float itlx = inner_rx[0] * utlx, itly = inner_ry[0] * utly;
+            const float itrx = inner_rx[1] * utrx, itry = inner_ry[1] * utry;
+            const float ibrx = inner_rx[2] * ubrx, ibry = inner_ry[2] * ubry;
+            const float iblx = inner_rx[3] * ublx, ibly = inner_ry[3] * ubly;
+            const float inner_tl_split_x = x0 + inner_rx[0] - itlx;
+            const float inner_tl_split_y = y0 + inner_ry[0] - itly;
+            const float inner_tr_split_x = x1 - inner_rx[1] + itrx;
+            const float inner_tr_split_y = y0 + inner_ry[1] - itry;
+            const float inner_br_split_x = x1 - inner_rx[2] + ibrx;
+            const float inner_br_split_y = y1 - inner_ry[2] + ibry;
+            const float inner_bl_split_x = x0 + inner_rx[3] - iblx;
+            const float inner_bl_split_y = y1 - inner_ry[3] + ibly;
+            const auto move = [&](float x, float y) {
+                path.verbs.push_back(PathVerb::move);
+                path.values.insert(path.values.end(), {x, y});
+            };
+            const auto line = [&](float x, float y) {
+                path.verbs.push_back(PathVerb::line);
+                path.values.insert(path.values.end(), {x, y});
+            };
+            const auto close = [&] { path.verbs.push_back(PathVerb::close); };
+            switch (side) {
+            case 0: // top: top sectors of the top corners
+                move(radii.top_left - otlx, radii.top_left - otly);
+                append_arc(path, radii.top_left, radii.top_left, radii.top_left, 0.0F, true);
+                line(width - radii.top_right, 0.0F);
+                append_arc(path, radii.top_right, radii.top_right, width - radii.top_right + otrx,
+                           radii.top_right - otry, true);
+                line(inner_tr_split_x, inner_tr_split_y);
+                append_arc(path, inner_rx[1], inner_ry[1], x1 - inner_rx[1], y0, false);
+                line(x0 + inner_rx[0], y0);
+                append_arc(path, inner_rx[0], inner_ry[0], inner_tl_split_x,
+                           inner_tl_split_y, false);
+                line(radii.top_left - otlx, radii.top_left - otly);
+                close();
+                break;
+            case 1: // right: right sectors of the right corners
+                move(width - radii.top_right + otrx, radii.top_right - otry);
+                append_arc(path, radii.top_right, radii.top_right, width, radii.top_right, true);
+                line(width, height - radii.bottom_right);
+                append_arc(path, radii.bottom_right, radii.bottom_right,
+                           width - radii.bottom_right + obrx,
+                           height - radii.bottom_right + obry, true);
+                line(inner_br_split_x, inner_br_split_y);
+                append_arc(path, inner_rx[2], inner_ry[2], x1, y1 - inner_ry[2], false);
+                line(x1, y0 + inner_ry[1]);
+                append_arc(path, inner_rx[1], inner_ry[1], inner_tr_split_x,
+                           inner_tr_split_y, false);
+                line(width - radii.top_right + otrx, radii.top_right - otry);
+                close();
+                break;
+            case 2: // bottom: bottom sectors of the bottom corners
+                move(width - radii.bottom_right + obrx, height - radii.bottom_right + obry);
+                append_arc(path, radii.bottom_right, radii.bottom_right,
+                           width - radii.bottom_right, height, true);
+                line(radii.bottom_left, height);
+                append_arc(path, radii.bottom_left, radii.bottom_left,
+                           radii.bottom_left - oblx,
+                           height - radii.bottom_left + obly, true);
+                line(inner_bl_split_x, inner_bl_split_y);
+                append_arc(path, inner_rx[3], inner_ry[3], x0 + inner_rx[3], y1, false);
+                line(x1 - inner_rx[2], y1);
+                append_arc(path, inner_rx[2], inner_ry[2], inner_br_split_x,
+                           inner_br_split_y, false);
+                line(width - radii.bottom_right + obrx, height - radii.bottom_right + obry);
+                close();
+                break;
+            case 3: // left: left sectors of the left corners
+                move(radii.bottom_left - oblx, height - radii.bottom_left + obly);
+                append_arc(path, radii.bottom_left, radii.bottom_left,
+                           0.0F, height - radii.bottom_left, true);
+                line(0.0F, radii.top_left);
+                append_arc(path, radii.top_left, radii.top_left, radii.top_left - otlx,
+                           radii.top_left - otly, true);
+                line(inner_tl_split_x, inner_tl_split_y);
+                append_arc(path, inner_rx[0], inner_ry[0], x0, y0 + inner_ry[0], false);
+                line(x0, y1 - inner_ry[3]);
+                append_arc(path, inner_rx[3], inner_ry[3], inner_bl_split_x,
+                           inner_bl_split_y, false);
+                line(radii.bottom_left - oblx, height - radii.bottom_left + obly);
+                close();
+                break;
+            }
+            return path;
+        };
+        for (std::size_t side = 0; side < widths.size(); ++side) {
+            if (widths[side] == 0.0F || colors[side].alpha == 0.0F) continue;
+            if (!append(side, make_side(side), true)) return false;
+        }
+        return true;
+    }
+
     const std::array<std::array<float, 8>, 4> sides{{
         {0, 0, width, 0, x1, y0, x0, y0},
         {width, 0, width, height, x1, y1, x1, y0},
@@ -2468,6 +2662,7 @@ bool materialize_node(
         .value_or(vellum::graphics::Color::rgba(0.0F, 0.0F, 0.0F, 0.0F));
     if (!parse_linear_gradient(style, output.fill_gradients, error) ||
         !parse_box_shadow(style, output.box_shadows, error) ||
+        !parse_border(style, output.border_width, output.border_color, error) ||
         !parse_corner_radii(style, output.corner_radius, output.corner_radii, error) ||
         !parse_opacity(style, output.opacity, error)) {
         return false;
@@ -2736,6 +2931,9 @@ bool materialize_node(
     const bool horizontal = [style[@"direction"] isEqual:@"horizontal"];
     const float padding = std::max(0.0F, number_or(style, @"padding", 0.0F));
     const float gap = std::max(0.0F, number_or(style, @"gap", 0.0F));
+    const bool wrap = is_stack && [style[@"wrap"] boolValue];
+    const float cross_gap = std::max(0.0F, number_or(
+        style, horizontal ? @"rowGap" : @"columnGap", 0.0F));
     if ([type isEqualToString:@"button"]) {
         const std::string label_text = direct_text(source);
         if (!label_text.empty()) {
@@ -2790,6 +2988,8 @@ bool materialize_node(
         }
     }
     float cursor = padding;
+    float cross_cursor = padding;
+    float line_extent = 0.0F;
     for (id child_value in children) {
         if (![child_value isKindOfClass:NSDictionary.class]) {
             set_error(error, "authoring node children must be retained-tree objects");
@@ -2821,6 +3021,19 @@ bool materialize_node(
             child_style, @"height", default_height(child_type, child_style, child));
         float x = number_or(child_style, @"x", is_stack && horizontal ? cursor : padding);
         float y = number_or(child_style, @"y", is_stack && !horizontal ? cursor : padding);
+        if (wrap && horizontal && x + width > proposed.width - padding && cursor > padding) {
+            cursor = padding;
+            cross_cursor += line_extent + cross_gap;
+            line_extent = 0.0F;
+            x = cursor;
+            y = cross_cursor;
+        } else if (wrap && !horizontal && y + height > proposed.height - padding && cursor > padding) {
+            cursor = padding;
+            cross_cursor += line_extent + cross_gap;
+            line_extent = 0.0F;
+            y = cursor;
+            x = cross_cursor;
+        }
         if (width <= 0.0F && horizontal) width = std::max(0.0F, proposed.width - cursor - padding);
         if (height <= 0.0F && !horizontal) height = std::max(0.0F, proposed.height - cursor - padding);
         vellum::graphics::SceneNode child_output;
@@ -2831,7 +3044,10 @@ bool materialize_node(
             return false;
         }
         output.children.push_back(std::move(child_output));
-        if (is_stack) cursor += (horizontal ? width : height) + gap;
+        if (is_stack) {
+            cursor += (horizontal ? width : height) + gap;
+            line_extent = std::max(line_extent, horizontal ? height : width);
+        }
     }
     return parse_tracks(source[@"tracks"], identity, output, error);
 }

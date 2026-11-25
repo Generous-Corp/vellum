@@ -316,7 +316,7 @@ jobs:
               record = json.load(open("provenance/renderer-attestation.json"))
               artifact = record["artifact"]
               tag = artifact.get("release_tag")
-              if artifact.get("repository") != builder or not re.fullmatch(r"chrome/m[0-9]+", str(tag)):
+              if artifact.get("repository") != builder or not re.fullmatch(r"chrome/m[0-9]+(-attested\.[0-9]+)?", str(tag)):
                   sys.exit("the renderer record does not name a danielraffel/skia-builder chrome/mNNN release")
               for flag, name in (("archive", artifact.get("name")),
                                  ("legal-manifest", record["legal_inventory"]["manifest"]["name"]),
@@ -531,16 +531,18 @@ jobs:
           release_readiness=()
           repository_evidence=(--repository "$GITHUB_REPOSITORY")
           # live-open-pr-audit-scope: begin
-          # The live open-PR overlap audit asks whether a release is cut while
-          # unaccepted work overlapping the expansion is open. It is judged on
-          # release and release dry-run tags only. Every other run (a pull
-          # request, the merge queue, a main push, an authority tag) defers
-          # it: there it would only mirror which pull request is open.
+          # A release tag's run judges the open-PR snapshot (and release-bump
+          # evidence) signed into its attestation at selection: no live read,
+          # and nothing deferred. The pre-tag replay uses the live path to
+          # create the snapshot that the release later signs. A release dry run
+          # has no selection snapshot, so its own tag run judges a live one.
+          # Every other run (a branch or main push, a pull request, the merge
+          # queue, an authority tag) defers the audit, as it did before.
           live_open_pr_audit=false
-          if [[ "$GITHUB_REF" == refs/tags/v[0-9]* || "$GITHUB_REF" == refs/tags/dry-run/* ]]; then
+          if [[ "${VELLUM_PRETAG_REPLAY:-}" == 1 || "$GITHUB_REF" == refs/tags/dry-run/* ]]; then
             live_open_pr_audit=true
           fi
-          if [[ "$live_open_pr_audit" != true ]]; then
+          if [[ "$live_open_pr_audit" != true && "$GITHUB_REF" != refs/tags/v[0-9]* ]]; then
             repository_evidence+=(--defer-live-open-pr-audit)
           fi
           # live-open-pr-audit-scope: end
@@ -551,7 +553,7 @@ jobs:
             release_readiness+=(--release-readiness)
             # A dry run is judged as the release it rehearses: v<version>.
             if [[ "$GITHUB_REF_NAME" =~ ^dry-run/(v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))/[1-9][0-9]*-[1-9][0-9]*$ ]]; then
-              release_readiness+=(--release-tag "${BASH_REMATCH[1]}")
+              release_readiness+=(--release-tag "${BASH_REMATCH[1]}" --dry-run-tag "$GITHUB_REF_NAME")
             elif [[ "$GITHUB_REF" == refs/tags/dry-run/* ]]; then
               echo "::error::$GITHUB_REF_NAME is not a well-formed release dry-run tag"
               exit 1
@@ -1128,6 +1130,7 @@ jobs:
             observatory_pending_event_scope=introduced
           fi
           python3 -I tools/provenance/test_deadline_warning.py
+          python3 -I tools/provenance/test_deadline_warning_gate.py
           python3 -I tools/provenance/test_observatory.py
           python3 -I tools/provenance/test_observatory_mirror_import.py
           python3 -I tools/provenance/test_receiver.py

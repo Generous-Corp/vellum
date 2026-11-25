@@ -855,7 +855,129 @@ python3 -I scripts/pretag_checks.py --tag "$TAG" --commit "$GITHUB_SHA"'''),
 set -euo pipefail
 printf 'tag=%s\n' "$TAG" >> "$GITHUB_OUTPUT"'''),
         },
-    ]],
+    ],
+    [{'workflow': {'on': {'push': {'branches': ['main'], 'paths': ['provenance/pulp-observatory/cursor.json']},
+                          'schedule': [{'cron': '17 9 * * 1'}],
+                          'workflow_dispatch': ''},
+                   'permissions': {'contents': 'read', 'checks': 'read', 'statuses': 'read'},
+                   'concurrency': {'group': "${{ github.event_name == 'push' && 'release-tag' || 'release-dry-run' }}",
+                                   'cancel-in-progress': 'false'}},
+      'job': {'if': "github.event_name == 'push'",
+              'runs-on': 'ubuntu-latest',
+              'permissions': {'actions': 'read', 'checks': 'read', 'contents': 'read', 'pull-requests': 'read'},
+              'outputs': {'tag': '${{ steps.release.outputs.tag }}'}}},
+     {'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+      'with': {'ref': '${{ github.sha }}', 'fetch-depth': '0', 'persist-credentials': 'false'}},
+     {'id': 'select',
+      'run': 'set -euo pipefail\n'
+             'test "$GITHUB_REPOSITORY" = Generous-Corp/vellum\n'
+             'test "$GITHUB_REF" = refs/heads/main\n'
+             'if ! python3 -I scripts/release_request.py select --commit "$GITHUB_SHA" --remote origin \\\n'
+             '  > "$RUNNER_TEMP/selection.txt" 2> "$RUNNER_TEMP/selection-reason.txt"; then\n'
+             '  echo "::error::$(cat "$RUNNER_TEMP/selection-reason.txt")"\n'
+             '  exit 1\n'
+             'fi\n'
+             'cat "$RUNNER_TEMP/selection.txt" >> "$GITHUB_OUTPUT"\n'
+             'reason="$(cat "$RUNNER_TEMP/selection-reason.txt")"\n'
+             'echo "::notice::$reason"\n'
+             'printf \'%s\\n\' "$reason" >> "$GITHUB_STEP_SUMMARY"'},
+     {'if': "steps.select.outputs.tag != ''",
+      'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+      'with': {'repository': 'Generous-Corp/pulp',
+               'ref': 'main',
+               'path': '.exact-boundary-pulp',
+               'fetch-depth': '0',
+               'persist-credentials': 'false'}},
+     {'if': "steps.select.outputs.tag != ''",
+      'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+      'with': {'repository': 'Generous-Corp/pulp',
+               'ref': '${{ steps.select.outputs.pulp-cursor }}',
+               'path': '.observatory-pulp',
+               'fetch-depth': '0',
+               'persist-credentials': 'false'}},
+     {'if': "steps.select.outputs.tag != ''",
+      'env': {'GH_TOKEN': '${{ github.token }}', 'TAG': '${{ steps.select.outputs.tag }}'},
+      'run': 'set -euo pipefail\n'
+             'python3 -I scripts/pretag_checks.py --tag "$TAG" --commit "$GITHUB_SHA" \\\n'
+             '  --snapshot-output "$RUNNER_TEMP/open-pr-snapshot.json"'},
+     {'if': "steps.select.outputs.tag != ''",
+      'uses': 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a',
+      'with': {'name': 'release-open-pr-snapshot',
+               'path': '${{ runner.temp }}/open-pr-snapshot.json',
+               'if-no-files-found': 'error',
+               'retention-days': '1'}},
+     {'id': 'release',
+      'if': "steps.select.outputs.tag != ''",
+      'env': {'TAG': '${{ steps.select.outputs.tag }}'},
+      'run': 'set -euo pipefail\nprintf \'tag=%s\\n\' "$TAG" >> "$GITHUB_OUTPUT"'}],
+[{'workflow': {'on': {'push': {'branches': ['main'], 'paths': ['provenance/pulp-observatory/cursor.json']},
+                       'schedule': [{'cron': '17 9 * * 1'}],
+                       'workflow_dispatch': ''},
+                'permissions': {'contents': 'read', 'checks': 'read', 'statuses': 'read'},
+                'concurrency': {'group': "${{ github.event_name == 'push' && 'release-tag' || 'release-dry-run' }}",
+                                'cancel-in-progress': 'false'}},
+   'job': {'if': "github.event_name == 'push'",
+           'runs-on': 'ubuntu-latest',
+           'permissions': {'actions': 'read', 'checks': 'read', 'contents': 'read', 'pull-requests': 'read'},
+           'outputs': {'tag': '${{ steps.release.outputs.tag }}',
+                       'snapshot-sha256': '${{ steps.snapshot.outputs.sha256 }}'}}},
+  {'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+   'with': {'ref': '${{ github.sha }}', 'fetch-depth': '0', 'persist-credentials': 'false'}},
+  {'id': 'select',
+   'run': 'set -euo pipefail\n'
+          'test "$GITHUB_REPOSITORY" = Generous-Corp/vellum\n'
+          'test "$GITHUB_REF" = refs/heads/main\n'
+          'if ! python3 -I scripts/release_request.py select --commit "$GITHUB_SHA" --remote origin \\\n'
+          '  > "$RUNNER_TEMP/selection.txt" 2> "$RUNNER_TEMP/selection-reason.txt"; then\n'
+          '  echo "::error::$(cat "$RUNNER_TEMP/selection-reason.txt")"\n'
+          '  exit 1\n'
+          'fi\n'
+          'cat "$RUNNER_TEMP/selection.txt" >> "$GITHUB_OUTPUT"\n'
+          'reason="$(cat "$RUNNER_TEMP/selection-reason.txt")"\n'
+          'echo "::notice::$reason"\n'
+          'printf \'%s\\n\' "$reason" >> "$GITHUB_STEP_SUMMARY"'},
+  {'if': "steps.select.outputs.tag != ''",
+   'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+   'with': {'repository': 'Generous-Corp/pulp',
+            'ref': 'main',
+            'path': '.exact-boundary-pulp',
+            'fetch-depth': '0',
+            'persist-credentials': 'false'}},
+  {'if': "steps.select.outputs.tag != ''",
+   'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+   'with': {'repository': 'Generous-Corp/pulp',
+            'ref': '${{ steps.select.outputs.pulp-cursor }}',
+            'path': '.observatory-pulp',
+            'fetch-depth': '0',
+            'persist-credentials': 'false'}},
+  {'if': "steps.select.outputs.tag != ''",
+   'env': {'GH_TOKEN': '${{ github.token }}', 'TAG': '${{ steps.select.outputs.tag }}'},
+   'run': 'set -euo pipefail\n'
+          'python3 -I scripts/pretag_checks.py --tag "$TAG" --commit "$GITHUB_SHA" \\\n'
+          '  --snapshot-output "$RUNNER_TEMP/open-pr-snapshot.json" \\\n'
+          '  --release-bump-output "$RUNNER_TEMP/release-bump-evidence.json" \\\n'
+          '  --pretag-replay'},
+  {'if': "steps.select.outputs.tag != ''",
+   'run': 'set -euo pipefail\n'
+          'mkdir -p "$RUNNER_TEMP/release-snapshot"\n'
+          'cp "$RUNNER_TEMP/open-pr-snapshot.json" "$RUNNER_TEMP/release-snapshot/open-pr-snapshot.json"\n'
+          'cp "$RUNNER_TEMP/release-bump-evidence.json" "$RUNNER_TEMP/release-snapshot/release-bump-evidence.json"'},
+  {'id': 'snapshot',
+   'if': "steps.select.outputs.tag != ''",
+   'run': 'set -euo pipefail\n'
+          'sha256sum "$RUNNER_TEMP/release-snapshot/open-pr-snapshot.json" | awk \'{print "sha256=" $1}\' >> '
+          '"$GITHUB_OUTPUT"'},
+  {'if': "steps.select.outputs.tag != ''",
+   'uses': 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a',
+   'with': {'name': 'release-open-pr-snapshot',
+            'path': '${{ runner.temp }}/release-snapshot',
+            'if-no-files-found': 'error',
+            'retention-days': '1'}},
+  {'id': 'release',
+   'if': "steps.select.outputs.tag != ''",
+   'env': {'TAG': '${{ steps.select.outputs.tag }}'},
+   'run': 'set -euo pipefail\nprintf \'tag=%s\\n\' "$TAG" >> "$GITHUB_OUTPUT"'}],
+    ],
     ('release-tag.yml', 'release-policy-check'): [[
         {
             'workflow': {
@@ -1162,7 +1284,364 @@ for attempt in 1 2 3 4 5; do
 done
 echo "signed, pushed and froze $TAG at $OBJECT" >> "$GITHUB_STEP_SUMMARY"'''),
         },
-    ]],
+    ],
+    [{'workflow': {'on': {'push': {'branches': ['main'], 'paths': ['provenance/pulp-observatory/cursor.json']},
+                          'schedule': [{'cron': '17 9 * * 1'}],
+                          'workflow_dispatch': ''},
+                   'permissions': {'contents': 'read', 'checks': 'read', 'statuses': 'read'},
+                   'concurrency': {'group': "${{ github.event_name == 'push' && 'release-tag' || 'release-dry-run' }}",
+                                   'cancel-in-progress': 'false'}},
+      'job': {'needs': ['select-release-commit', 'release-policy-check'],
+              'if': "needs.select-release-commit.outputs.tag != ''",
+              'runs-on': 'ubuntu-latest',
+              'environment': 'release'}},
+     {'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+      'with': {'ref': '${{ github.sha }}', 'fetch-depth': '0', 'persist-credentials': 'false'}},
+     {'uses': 'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c',
+      'with': {'name': 'release-open-pr-snapshot', 'path': '${{ runner.temp }}'}},
+     {'id': 'app-token',
+      'uses': 'actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3',
+      'with': {'app-id': '${{ vars.RELEASE_APP_ID }}', 'private-key': '${{ secrets.RELEASE_APP_PRIVATE_KEY }}'}},
+     {'env': {'GH_TOKEN': '${{ steps.app-token.outputs.token }}'},
+      'run': 'set -euo pipefail\n'
+             'timeout 120 gh api "repos/$GITHUB_REPOSITORY/branches/main/protection/required_status_checks" \\\n'
+             '  > "$RUNNER_TEMP/required-checks.json"\n'
+             'timeout 120 gh api "repos/$GITHUB_REPOSITORY/rules/branches/main" > "$RUNNER_TEMP/branch-rules.json"\n'
+             'timeout 120 gh api "repos/$GITHUB_REPOSITORY/immutable-releases" > "$RUNNER_TEMP/immutable-releases.json"\n'
+             '# gh api exits non-zero on any non-2xx answer; a 2xx body of the wrong\n'
+             '# shape (another token, another endpoint) fails here, not in the decision.\n'
+             'jq -e \'type == "object" and (.contexts | type == "array")\' "$RUNNER_TEMP/required-checks.json" > '
+             '/dev/null\n'
+             'jq -e \'type == "array"\' "$RUNNER_TEMP/branch-rules.json" > /dev/null\n'
+             'jq -e \'type == "object" and (.enabled | type == "boolean")\' "$RUNNER_TEMP/immutable-releases.json" > '
+             '/dev/null\n'
+             'date -u +%Y-%m-%dT%H:%M:%SZ > "$RUNNER_TEMP/immutable-releases-read-at.txt"'},
+     {'env': {'GH_TOKEN': '${{ github.token }}', 'SELECTED_TAG': '${{ needs.select-release-commit.outputs.tag }}'},
+      'run': 'set -euo pipefail\n'
+             'test "$GITHUB_REPOSITORY" = Generous-Corp/vellum\n'
+             'test "$GITHUB_REF" = refs/heads/main\n'
+             '# Decide again in this job, and require the same answer: the commit\n'
+             "# must still be the version's reconcile and the tag must still be absent.\n"
+             'python3 -I scripts/release_request.py select --commit "$GITHUB_SHA" --remote origin \\\n'
+             '  > "$RUNNER_TEMP/selection.txt"\n'
+             'test "$(sed -n \'s/^tag=//p\' "$RUNNER_TEMP/selection.txt")" = "$SELECTED_TAG"\n'
+             "# The push that landed the reconcile starts main's required checks again\n"
+             '# on this commit. While the newest run of any required check is still\n'
+             '# running (gpu-macos takes about 45 minutes), wait rather than read it\n'
+             '# as unmet. A transient API failure is retried, not fatal.\n'
+             '# Both reads share one function, kept in a file the later step sources.\n'
+             '# Each gh api call has its own timeout so one hung call cannot outlive\n'
+             "# the loop's deadline; a timeout takes the same retry and failure path.\n"
+             'cat > "$RUNNER_TEMP/fetch_results.sh" <<\'FETCH\'\n'
+             'fetch_results() {\n'
+             '  local attempt\n'
+             '  for attempt in 1 2 3; do\n'
+             '    if timeout 120 gh api --method GET --paginate --slurp \\\n'
+             '      "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" \\\n'
+             '      -f filter=all > "$RUNNER_TEMP/check-runs.json"; then\n'
+             '      break\n'
+             '    fi\n'
+             '    [ "$attempt" = 3 ] && exit 1\n'
+             '    sleep $((attempt * 20))\n'
+             '  done\n'
+             '  # release-path-review and framework-trusted-verify are commit\n'
+             "  # statuses, not check runs; main's rules accept either.\n"
+             '  for attempt in 1 2 3; do\n'
+             '    if timeout 120 gh api --method GET --paginate --slurp \\\n'
+             '      "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/statuses?per_page=100" \\\n'
+             '      > "$RUNNER_TEMP/statuses.json"; then\n'
+             '      break\n'
+             '    fi\n'
+             '    [ "$attempt" = 3 ] && exit 1\n'
+             '    sleep $((attempt * 20))\n'
+             '  done\n'
+             '}\n'
+             'FETCH\n'
+             '. "$RUNNER_TEMP/fetch_results.sh"\n'
+             'deadline=$((SECONDS + 6000))\n'
+             'while :; do\n'
+             '  fetch_results\n'
+             '  running="$(python3 -I scripts/release_request.py pending --commit "$GITHUB_SHA" \\\n'
+             '    --branch-rules "$RUNNER_TEMP/branch-rules.json" --check-runs "$RUNNER_TEMP/check-runs.json" \\\n'
+             '    --statuses "$RUNNER_TEMP/statuses.json" \\\n'
+             '    --protection "$RUNNER_TEMP/required-checks.json")"\n'
+             '  [ -z "$running" ] && break\n'
+             '  if [ "$SECONDS" -ge "$deadline" ]; then\n'
+             '    echo "::error::required checks still running after 100 minutes: $running"\n'
+             '    exit 1\n'
+             '  fi\n'
+             '  echo "waiting for: $(printf \'%s\' "$running" | paste -sd, -)"\n'
+             '  sleep 60\n'
+             'done'},
+     {'id': 'push-token',
+      'uses': 'actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3',
+      'with': {'app-id': '${{ vars.RELEASE_APP_ID }}', 'private-key': '${{ secrets.RELEASE_APP_PRIVATE_KEY }}'}},
+     {'env': {'GH_TOKEN': '${{ steps.push-token.outputs.token }}'},
+      'run': 'set -euo pipefail\n'
+             'timeout 120 gh api "repos/$GITHUB_REPOSITORY/branches/main/protection/required_status_checks" \\\n'
+             '  > "$RUNNER_TEMP/required-checks.json"\n'
+             'timeout 120 gh api "repos/$GITHUB_REPOSITORY/rules/branches/main" > "$RUNNER_TEMP/branch-rules.json"\n'
+             'timeout 120 gh api "repos/$GITHUB_REPOSITORY/immutable-releases" > "$RUNNER_TEMP/immutable-releases.json"\n'
+             '# gh api exits non-zero on any non-2xx answer; a 2xx body of the wrong\n'
+             '# shape (another token, another endpoint) fails here, not in the decision.\n'
+             'jq -e \'type == "object" and (.contexts | type == "array")\' "$RUNNER_TEMP/required-checks.json" > '
+             '/dev/null\n'
+             'jq -e \'type == "array"\' "$RUNNER_TEMP/branch-rules.json" > /dev/null\n'
+             'jq -e \'type == "object" and (.enabled | type == "boolean")\' "$RUNNER_TEMP/immutable-releases.json" > '
+             '/dev/null\n'
+             'date -u +%Y-%m-%dT%H:%M:%SZ > "$RUNNER_TEMP/immutable-releases-read-at.txt"'},
+     {'id': 'decision',
+      'env': {'GH_TOKEN': '${{ github.token }}', 'SELECTED_TAG': '${{ needs.select-release-commit.outputs.tag }}'},
+      'run': 'set -euo pipefail\n'
+             "# Read the check runs and statuses again: the wait loop's snapshot can be\n"
+             '# minutes old, and the verdict must come from results read just before it.\n'
+             '. "$RUNNER_TEMP/fetch_results.sh"\n'
+             'fetch_results\n'
+             'tag="$(python3 -I scripts/release_request.py check --commit "$GITHUB_SHA" --remote origin \\\n'
+             '  --branch-rules "$RUNNER_TEMP/branch-rules.json" --check-runs "$RUNNER_TEMP/check-runs.json" \\\n'
+             '  --statuses "$RUNNER_TEMP/statuses.json" \\\n'
+             '  --protection "$RUNNER_TEMP/required-checks.json" \\\n'
+             '  --immutable-releases "$RUNNER_TEMP/immutable-releases.json" \\\n'
+             '  --immutable-read-at "$(cat "$RUNNER_TEMP/immutable-releases-read-at.txt")")"\n'
+             'test "$tag" = "$SELECTED_TAG"\n'
+             'python3 -I scripts/check_release_policy.py signer >> "$GITHUB_OUTPUT"\n'
+             'version="${tag#v}"\n'
+             'python3 -I scripts/release_request.py freeze --tag "$tag" > "$RUNNER_TEMP/freeze.json"\n'
+             'python3 -I scripts/release_request.py attestation --commit "$GITHUB_SHA" \\\n'
+             '  --attested-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --tag "$tag" \\\n'
+             '  --open-pr-snapshot-json "$RUNNER_TEMP/open-pr-snapshot.json" \\\n'
+             '  > "$RUNNER_TEMP/promotion-attestation.json"\n'
+             'printf \'tag=%s\\nversion=%s\\n\' "$tag" "$version" >> "$GITHUB_OUTPUT"'},
+     {'id': 'sign',
+      'env': {'RELEASE_TAG_SIGNING_KEY': '${{ secrets.RELEASE_TAG_SIGNING_KEY }}',
+              'TAG': '${{ steps.decision.outputs.tag }}',
+              'PRINCIPAL': '${{ steps.decision.outputs.principal }}'},
+      'run': 'set -euo pipefail\n'
+             'test -n "$RELEASE_TAG_SIGNING_KEY"\n'
+             'key="$RUNNER_TEMP/release-signing-key"\n'
+             'trap \'rm -f "$key"\' EXIT\n'
+             '(umask 077 && printf \'%s\\n\' "$RELEASE_TAG_SIGNING_KEY" > "$key")\n'
+             '# The signed message is the promotion attestation: provenance.yml\n'
+             '# parses it from the tag and the release-readiness gate verifies it.\n'
+             'git -c gpg.format=ssh -c user.signingkey="$key" \\\n'
+             '  -c user.name="Vellum release" -c user.email="$PRINCIPAL" \\\n'
+             '  tag -s -F "$RUNNER_TEMP/promotion-attestation.json" "$TAG" "$GITHUB_SHA"\n'
+             'printf \'object=%s\\n\' "$(git rev-parse "refs/tags/$TAG")" >> "$GITHUB_OUTPUT"'},
+     {'env': {'TAG': '${{ steps.decision.outputs.tag }}',
+              'OBJECT': '${{ steps.sign.outputs.object }}',
+              'PRINCIPAL': '${{ steps.decision.outputs.principal }}',
+              'FINGERPRINT': '${{ steps.decision.outputs.fingerprint }}'},
+      'run': 'set -euo pipefail\n'
+             'python3 -I scripts/verify_release_tag.py --repo . --repository "$GITHUB_REPOSITORY" \\\n'
+             '  --tag-name "$TAG" --tag-object-sha "$OBJECT" --source-commit "$GITHUB_SHA" \\\n'
+             '  --allowed-signers provenance/release-signers.allowed_signers \\\n'
+             '  --expected-principal "$PRINCIPAL" --expected-fingerprint "$FINGERPRINT" \\\n'
+             '  --output "$RUNNER_TEMP/release-trust.json"'},
+     {'env': {'GH_TOKEN': '${{ steps.push-token.outputs.token }}',
+              'TAG': '${{ steps.decision.outputs.tag }}',
+              'OBJECT': '${{ steps.sign.outputs.object }}'},
+      'run': 'set -euo pipefail\n'
+             'git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf \'x-access-token:%s\' "$GH_TOKEN" '
+             '| base64 -w0)" \\\n'
+             '  push "https://github.com/$GITHUB_REPOSITORY" "refs/tags/$TAG:refs/tags/$TAG"\n'
+             'test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)" = "$OBJECT"\n'
+             '# The tag is already pushed, so a transient API failure here must not\n'
+             '# leave it unfrozen: retry, and if every attempt fails, say exactly how\n'
+             '# to apply the same ruleset by hand.\n'
+             'for attempt in 1 2 3 4 5; do\n'
+             '  if gh api --method POST "repos/$GITHUB_REPOSITORY/rulesets" --input "$RUNNER_TEMP/freeze.json" > '
+             '/dev/null; then\n'
+             '    break\n'
+             '  fi\n'
+             '  if [ "$attempt" = 5 ]; then\n'
+             '    echo "::error::$TAG is pushed but not frozen. Apply this ruleset as the owner:"\n'
+             '    cat "$RUNNER_TEMP/freeze.json"\n'
+             '    exit 1\n'
+             '  fi\n'
+             '  sleep $((attempt * 20))\n'
+             'done\n'
+             'echo "signed, pushed and froze $TAG at $OBJECT" >> "$GITHUB_STEP_SUMMARY"'}],
+[{'workflow': {'on': {'push': {'branches': ['main'], 'paths': ['provenance/pulp-observatory/cursor.json']},
+                       'schedule': [{'cron': '17 9 * * 1'}],
+                       'workflow_dispatch': ''},
+                'permissions': {'contents': 'read', 'checks': 'read', 'statuses': 'read'},
+                'concurrency': {'group': "${{ github.event_name == 'push' && 'release-tag' || 'release-dry-run' }}",
+                                'cancel-in-progress': 'false'}},
+   'job': {'needs': ['select-release-commit', 'release-policy-check'],
+           'if': "needs.select-release-commit.outputs.tag != ''",
+           'runs-on': 'ubuntu-latest',
+           'environment': 'release'}},
+  {'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+   'with': {'ref': '${{ github.sha }}', 'fetch-depth': '0', 'persist-credentials': 'false'}},
+  {'uses': 'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c',
+   'with': {'name': 'release-open-pr-snapshot', 'path': '${{ runner.temp }}/release-snapshot'}},
+  {'id': 'app-token',
+   'uses': 'actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3',
+   'with': {'app-id': '${{ vars.RELEASE_APP_ID }}', 'private-key': '${{ secrets.RELEASE_APP_PRIVATE_KEY }}'}},
+  {'env': {'GH_TOKEN': '${{ steps.app-token.outputs.token }}'},
+   'run': 'set -euo pipefail\n'
+          'timeout 120 gh api "repos/$GITHUB_REPOSITORY/branches/main/protection/required_status_checks" \\\n'
+          '  > "$RUNNER_TEMP/required-checks.json"\n'
+          'timeout 120 gh api "repos/$GITHUB_REPOSITORY/rules/branches/main" > "$RUNNER_TEMP/branch-rules.json"\n'
+          'timeout 120 gh api "repos/$GITHUB_REPOSITORY/immutable-releases" > "$RUNNER_TEMP/immutable-releases.json"\n'
+          '# gh api exits non-zero on any non-2xx answer; a 2xx body of the wrong\n'
+          '# shape (another token, another endpoint) fails here, not in the decision.\n'
+          'jq -e \'type == "object" and (.contexts | type == "array")\' "$RUNNER_TEMP/required-checks.json" > '
+          '/dev/null\n'
+          'jq -e \'type == "array"\' "$RUNNER_TEMP/branch-rules.json" > /dev/null\n'
+          'jq -e \'type == "object" and (.enabled | type == "boolean")\' "$RUNNER_TEMP/immutable-releases.json" > '
+          '/dev/null\n'
+          'date -u +%Y-%m-%dT%H:%M:%SZ > "$RUNNER_TEMP/immutable-releases-read-at.txt"'},
+  {'env': {'GH_TOKEN': '${{ github.token }}', 'SELECTED_TAG': '${{ needs.select-release-commit.outputs.tag }}'},
+   'run': 'set -euo pipefail\n'
+          'test "$GITHUB_REPOSITORY" = Generous-Corp/vellum\n'
+          'test "$GITHUB_REF" = refs/heads/main\n'
+          '# Decide again in this job, and require the same answer: the commit\n'
+          "# must still be the version's reconcile and the tag must still be absent.\n"
+          'python3 -I scripts/release_request.py select --commit "$GITHUB_SHA" --remote origin \\\n'
+          '  > "$RUNNER_TEMP/selection.txt"\n'
+          'test "$(sed -n \'s/^tag=//p\' "$RUNNER_TEMP/selection.txt")" = "$SELECTED_TAG"\n'
+          "# The push that landed the reconcile starts main's required checks again\n"
+          '# on this commit. While the newest run of any required check is still\n'
+          '# running (gpu-macos takes about 45 minutes), wait rather than read it\n'
+          '# as unmet. A transient API failure is retried, not fatal.\n'
+          '# Both reads share one function, kept in a file the later step sources.\n'
+          '# Each gh api call has its own timeout so one hung call cannot outlive\n'
+          "# the loop's deadline; a timeout takes the same retry and failure path.\n"
+          'cat > "$RUNNER_TEMP/fetch_results.sh" <<\'FETCH\'\n'
+          'fetch_results() {\n'
+          '  local attempt\n'
+          '  for attempt in 1 2 3; do\n'
+          '    if timeout 120 gh api --method GET --paginate --slurp \\\n'
+          '      "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" \\\n'
+          '      -f filter=all > "$RUNNER_TEMP/check-runs.json"; then\n'
+          '      break\n'
+          '    fi\n'
+          '    [ "$attempt" = 3 ] && exit 1\n'
+          '    sleep $((attempt * 20))\n'
+          '  done\n'
+          '  # release-path-review and framework-trusted-verify are commit\n'
+          "  # statuses, not check runs; main's rules accept either.\n"
+          '  for attempt in 1 2 3; do\n'
+          '    if timeout 120 gh api --method GET --paginate --slurp \\\n'
+          '      "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/statuses?per_page=100" \\\n'
+          '      > "$RUNNER_TEMP/statuses.json"; then\n'
+          '      break\n'
+          '    fi\n'
+          '    [ "$attempt" = 3 ] && exit 1\n'
+          '    sleep $((attempt * 20))\n'
+          '  done\n'
+          '}\n'
+          'FETCH\n'
+          '. "$RUNNER_TEMP/fetch_results.sh"\n'
+          'deadline=$((SECONDS + 6000))\n'
+          'while :; do\n'
+          '  fetch_results\n'
+          '  running="$(python3 -I scripts/release_request.py pending --commit "$GITHUB_SHA" \\\n'
+          '    --branch-rules "$RUNNER_TEMP/branch-rules.json" --check-runs "$RUNNER_TEMP/check-runs.json" \\\n'
+          '    --statuses "$RUNNER_TEMP/statuses.json" \\\n'
+          '    --protection "$RUNNER_TEMP/required-checks.json")"\n'
+          '  [ -z "$running" ] && break\n'
+          '  if [ "$SECONDS" -ge "$deadline" ]; then\n'
+          '    echo "::error::required checks still running after 100 minutes: $running"\n'
+          '    exit 1\n'
+          '  fi\n'
+          '  echo "waiting for: $(printf \'%s\' "$running" | paste -sd, -)"\n'
+          '  sleep 60\n'
+          'done'},
+  {'id': 'push-token',
+   'uses': 'actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3',
+   'with': {'app-id': '${{ vars.RELEASE_APP_ID }}', 'private-key': '${{ secrets.RELEASE_APP_PRIVATE_KEY }}'}},
+  {'env': {'GH_TOKEN': '${{ steps.push-token.outputs.token }}'},
+   'run': 'set -euo pipefail\n'
+          'timeout 120 gh api "repos/$GITHUB_REPOSITORY/branches/main/protection/required_status_checks" \\\n'
+          '  > "$RUNNER_TEMP/required-checks.json"\n'
+          'timeout 120 gh api "repos/$GITHUB_REPOSITORY/rules/branches/main" > "$RUNNER_TEMP/branch-rules.json"\n'
+          'timeout 120 gh api "repos/$GITHUB_REPOSITORY/immutable-releases" > "$RUNNER_TEMP/immutable-releases.json"\n'
+          '# gh api exits non-zero on any non-2xx answer; a 2xx body of the wrong\n'
+          '# shape (another token, another endpoint) fails here, not in the decision.\n'
+          'jq -e \'type == "object" and (.contexts | type == "array")\' "$RUNNER_TEMP/required-checks.json" > '
+          '/dev/null\n'
+          'jq -e \'type == "array"\' "$RUNNER_TEMP/branch-rules.json" > /dev/null\n'
+          'jq -e \'type == "object" and (.enabled | type == "boolean")\' "$RUNNER_TEMP/immutable-releases.json" > '
+          '/dev/null\n'
+          'date -u +%Y-%m-%dT%H:%M:%SZ > "$RUNNER_TEMP/immutable-releases-read-at.txt"'},
+  {'id': 'decision',
+   'env': {'GH_TOKEN': '${{ github.token }}', 'SELECTED_TAG': '${{ needs.select-release-commit.outputs.tag }}'},
+   'run': 'set -euo pipefail\n'
+          "# Read the check runs and statuses again: the wait loop's snapshot can be\n"
+          '# minutes old, and the verdict must come from results read just before it.\n'
+          '. "$RUNNER_TEMP/fetch_results.sh"\n'
+          'fetch_results\n'
+          'tag="$(python3 -I scripts/release_request.py check --commit "$GITHUB_SHA" --remote origin \\\n'
+          '  --branch-rules "$RUNNER_TEMP/branch-rules.json" --check-runs "$RUNNER_TEMP/check-runs.json" \\\n'
+          '  --statuses "$RUNNER_TEMP/statuses.json" \\\n'
+          '  --protection "$RUNNER_TEMP/required-checks.json" \\\n'
+          '  --immutable-releases "$RUNNER_TEMP/immutable-releases.json" \\\n'
+          '  --immutable-read-at "$(cat "$RUNNER_TEMP/immutable-releases-read-at.txt")")"\n'
+          'test "$tag" = "$SELECTED_TAG"\n'
+          'python3 -I scripts/check_release_policy.py signer >> "$GITHUB_OUTPUT"\n'
+          'version="${tag#v}"\n'
+          'python3 -I scripts/release_request.py freeze --tag "$tag" > "$RUNNER_TEMP/freeze.json"\n'
+          'python3 -I scripts/release_request.py attestation --commit "$GITHUB_SHA" \\\n'
+          '  --attested-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --tag "$tag" \\\n'
+          '  --open-pr-snapshot-json "$RUNNER_TEMP/release-snapshot/open-pr-snapshot.json" \\\n'
+          '  --release-bump-evidence-json "$RUNNER_TEMP/release-snapshot/release-bump-evidence.json" \\\n'
+          '  > "$RUNNER_TEMP/promotion-attestation.json"\n'
+          'printf \'tag=%s\\nversion=%s\\n\' "$tag" "$version" >> "$GITHUB_OUTPUT"'},
+  {'id': 'sign',
+   'env': {'RELEASE_TAG_SIGNING_KEY': '${{ secrets.RELEASE_TAG_SIGNING_KEY }}',
+           'TAG': '${{ steps.decision.outputs.tag }}',
+           'SNAPSHOT_SHA256': '${{ needs.select-release-commit.outputs.snapshot-sha256 }}',
+           'PRINCIPAL': '${{ steps.decision.outputs.principal }}'},
+   'run': 'set -euo pipefail\n'
+          'test -n "$RELEASE_TAG_SIGNING_KEY"\n'
+          'test "$(sha256sum "$RUNNER_TEMP/release-snapshot/open-pr-snapshot.json" | awk \'{print $1}\')" = '
+          '"$SNAPSHOT_SHA256"\n'
+          'key="$RUNNER_TEMP/release-signing-key"\n'
+          'trap \'rm -f "$key"\' EXIT\n'
+          '(umask 077 && printf \'%s\\n\' "$RELEASE_TAG_SIGNING_KEY" > "$key")\n'
+          '# The signed message is the promotion attestation: provenance.yml\n'
+          '# parses it from the tag and the release-readiness gate verifies it.\n'
+          'git -c gpg.format=ssh -c user.signingkey="$key" \\\n'
+          '  -c user.name="Vellum release" -c user.email="$PRINCIPAL" \\\n'
+          '  tag -s -F "$RUNNER_TEMP/promotion-attestation.json" "$TAG" "$GITHUB_SHA"\n'
+          'printf \'object=%s\\n\' "$(git rev-parse "refs/tags/$TAG")" >> "$GITHUB_OUTPUT"'},
+  {'env': {'TAG': '${{ steps.decision.outputs.tag }}',
+           'OBJECT': '${{ steps.sign.outputs.object }}',
+           'PRINCIPAL': '${{ steps.decision.outputs.principal }}',
+           'FINGERPRINT': '${{ steps.decision.outputs.fingerprint }}'},
+   'run': 'set -euo pipefail\n'
+          'python3 -I scripts/verify_release_tag.py --repo . --repository "$GITHUB_REPOSITORY" \\\n'
+          '  --tag-name "$TAG" --tag-object-sha "$OBJECT" --source-commit "$GITHUB_SHA" \\\n'
+          '  --allowed-signers provenance/release-signers.allowed_signers \\\n'
+          '  --expected-principal "$PRINCIPAL" --expected-fingerprint "$FINGERPRINT" \\\n'
+          '  --output "$RUNNER_TEMP/release-trust.json"'},
+  {'env': {'GH_TOKEN': '${{ steps.push-token.outputs.token }}',
+           'TAG': '${{ steps.decision.outputs.tag }}',
+           'OBJECT': '${{ steps.sign.outputs.object }}'},
+   'run': 'set -euo pipefail\n'
+          'git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf \'x-access-token:%s\' '
+          '"$GH_TOKEN" | base64 -w0)" \\\n'
+          '  push "https://github.com/$GITHUB_REPOSITORY" "refs/tags/$TAG:refs/tags/$TAG"\n'
+          'test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)" = "$OBJECT"\n'
+          '# The tag is already pushed, so a transient API failure here must not\n'
+          '# leave it unfrozen: retry, and if every attempt fails, say exactly how\n'
+          '# to apply the same ruleset by hand.\n'
+          'for attempt in 1 2 3 4 5; do\n'
+          '  if gh api --method POST "repos/$GITHUB_REPOSITORY/rulesets" --input "$RUNNER_TEMP/freeze.json" > '
+          '/dev/null; then\n'
+          '    break\n'
+          '  fi\n'
+          '  if [ "$attempt" = 5 ]; then\n'
+          '    echo "::error::$TAG is pushed but not frozen. Apply this ruleset as the owner:"\n'
+          '    cat "$RUNNER_TEMP/freeze.json"\n'
+          '    exit 1\n'
+          '  fi\n'
+          '  sleep $((attempt * 20))\n'
+          'done\n'
+          'echo "signed, pushed and froze $TAG at $OBJECT" >> "$GITHUB_STEP_SUMMARY"'}],
+    ],
     ('release-tag.yml', 'dry-run-gate'): [[
         {
             'workflow': {
@@ -1449,7 +1928,95 @@ git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-ac
 test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)" = "$OBJECT"
 echo "pushed the dry-run tag $TAG at $OBJECT; sdk-release deletes it and its draft" >> "$GITHUB_STEP_SUMMARY"'''),
         },
-    ]],
+    ],
+[{'workflow': {'on': {'push': {'branches': ['main'], 'paths': ['provenance/pulp-observatory/cursor.json']},
+                       'schedule': [{'cron': '17 9 * * 1'}],
+                       'workflow_dispatch': ''},
+                'permissions': {'contents': 'read', 'checks': 'read', 'statuses': 'read'},
+                'concurrency': {'group': "${{ github.event_name == 'push' && 'release-tag' || 'release-dry-run' }}",
+                                'cancel-in-progress': 'false'}},
+   'job': {'needs': ['dry-run-gate', 'dry-run-policy-check'],
+           'if': "needs.dry-run-gate.outputs.run == 'true'",
+           'runs-on': 'ubuntu-latest',
+           'environment': 'release'}},
+  {'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+   'with': {'ref': '${{ github.sha }}', 'fetch-depth': '0', 'persist-credentials': 'false'}},
+  {'id': 'dry-run',
+   'env': {'POLICY_COMMIT': '${{ needs.dry-run-policy-check.outputs.commit }}'},
+   'run': 'set -euo pipefail\n'
+          'test "$GITHUB_REPOSITORY" = Generous-Corp/vellum\n'
+          'test "$GITHUB_REF" = refs/heads/main\n'
+          'python3 -I scripts/release_dry_run.py plan --head "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" \\\n'
+          '  --attempt "$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/dry-run.txt"\n'
+          'commit="$(sed -n \'s/^commit=//p\' "$RUNNER_TEMP/dry-run.txt")"\n'
+          'tag="$(sed -n \'s/^tag=//p\' "$RUNNER_TEMP/dry-run.txt")"\n'
+          'identity="$(sed -n \'s/^identity=//p\' "$RUNNER_TEMP/dry-run.txt")"\n'
+          '[[ "$commit" =~ ^[0-9a-f]{40}$ ]]\n'
+          '[[ "$tag" =~ ^dry-run/(v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*))/[1-9][0-9]*-[1-9][0-9]*$ ]]\n'
+          'test "$identity" = "${BASH_REMATCH[1]}"\n'
+          "# The tagged commit's own release scripts decide, as on a release.\n"
+          '# release-policy-check judged this commit with the YAML parser; it must\n'
+          '# be the commit this job plans.\n'
+          'test "$commit" = "$POLICY_COMMIT"\n'
+          'git checkout --quiet --detach "$commit"\n'
+          'python3 -I scripts/check_release_policy.py signer >> "$GITHUB_OUTPUT"\n'
+          'python3 -I scripts/pretag_checks.py --tag "$identity" --commit "$commit" \\\n'
+          '  --snapshot-output "$RUNNER_TEMP/release-snapshot/open-pr-snapshot.json" \\\n'
+          '  --release-bump-output "$RUNNER_TEMP/release-snapshot/release-bump-evidence.json" \\\n'
+          '  --pretag-replay\n'
+          "# The signed message wraps v<version>'s attestation under its own\n"
+          "# schema with the dry-run tag's name, so it can never pass for a release.\n"
+          'python3 -I scripts/release_request.py attestation --commit "$commit" \\\n'
+          '  --attested-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --tag "$identity" --dry-run-tag "$tag" \\\n'
+          '  --open-pr-snapshot-json "$RUNNER_TEMP/release-snapshot/open-pr-snapshot.json" \\\n'
+          '  --release-bump-evidence-json "$RUNNER_TEMP/release-snapshot/release-bump-evidence.json" \\\n'
+          '  > "$RUNNER_TEMP/promotion-attestation.json"\n'
+          'printf \'commit=%s\\ntag=%s\\n\' "$commit" "$tag" >> "$GITHUB_OUTPUT"\n'
+          'echo "dry run: $tag on $commit (release identity $identity)" >> "$GITHUB_STEP_SUMMARY"'},
+  {'id': 'sign',
+   'env': {'RELEASE_TAG_SIGNING_KEY': '${{ secrets.RELEASE_TAG_SIGNING_KEY }}',
+           'TAG': '${{ steps.dry-run.outputs.tag }}',
+           'COMMIT': '${{ steps.dry-run.outputs.commit }}',
+           'PRINCIPAL': '${{ steps.dry-run.outputs.principal }}'},
+   'run': 'set -euo pipefail\n'
+          'test -n "$RELEASE_TAG_SIGNING_KEY"\n'
+          'case "$TAG" in dry-run/v*) ;; *) exit 1 ;; esac\n'
+          'key="$RUNNER_TEMP/release-signing-key"\n'
+          'trap \'rm -f "$key"\' EXIT\n'
+          '(umask 077 && printf \'%s\\n\' "$RELEASE_TAG_SIGNING_KEY" > "$key")\n'
+          'git -c gpg.format=ssh -c user.signingkey="$key" \\\n'
+          '  -c user.name="Vellum release" -c user.email="$PRINCIPAL" \\\n'
+          '  tag -s -F "$RUNNER_TEMP/promotion-attestation.json" "$TAG" "$COMMIT"\n'
+          'printf \'object=%s\\n\' "$(git rev-parse "refs/tags/$TAG")" >> "$GITHUB_OUTPUT"'},
+  {'env': {'TAG': '${{ steps.dry-run.outputs.tag }}',
+           'COMMIT': '${{ steps.dry-run.outputs.commit }}',
+           'OBJECT': '${{ steps.sign.outputs.object }}',
+           'PRINCIPAL': '${{ steps.dry-run.outputs.principal }}',
+           'FINGERPRINT': '${{ steps.dry-run.outputs.fingerprint }}'},
+   'run': 'set -euo pipefail\n'
+          'python3 -I scripts/verify_release_tag.py --repo . --repository "$GITHUB_REPOSITORY" \\\n'
+          '  --tag-name "$TAG" --tag-object-sha "$OBJECT" --source-commit "$COMMIT" \\\n'
+          '  --allowed-signers provenance/release-signers.allowed_signers \\\n'
+          '  --expected-principal "$PRINCIPAL" --expected-fingerprint "$FINGERPRINT" \\\n'
+          '  --output "$RUNNER_TEMP/dry-run-trust.json"'},
+  {'id': 'push-token',
+   'uses': 'actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3',
+   'with': {'app-id': '${{ vars.RELEASE_APP_ID }}',
+            'private-key': '${{ secrets.RELEASE_APP_PRIVATE_KEY }}',
+            'owner': 'Generous-Corp',
+            'repositories': 'vellum',
+            'permission-contents': 'write'}},
+  {'env': {'GH_TOKEN': '${{ steps.push-token.outputs.token }}',
+           'TAG': '${{ steps.dry-run.outputs.tag }}',
+           'OBJECT': '${{ steps.sign.outputs.object }}'},
+   'run': 'set -euo pipefail\n'
+          'case "$TAG" in dry-run/v*) ;; *) echo "::error::$TAG is not a dry-run tag"; exit 1 ;; esac\n'
+          'git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf \'x-access-token:%s\' '
+          '"$GH_TOKEN" | base64 -w0)" \\\n'
+          '  push "https://github.com/$GITHUB_REPOSITORY" "refs/tags/$TAG:refs/tags/$TAG"\n'
+          'test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)" = "$OBJECT"\n'
+          'echo "pushed the dry-run tag $TAG at $OBJECT; sdk-release deletes it and its draft" >> '
+          '"$GITHUB_STEP_SUMMARY"'}]],
     ('release-policy.yml', 'release-policy'): [[
         {
             'workflow': {

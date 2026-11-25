@@ -48,8 +48,9 @@ public:
             publish_gpu_surface(gpu_.get(), GpuSurfaceState::ready);
             gpu_ready_ = true;
         } else {
-            gpu_.reset(); skia_.reset();
-            publish_gpu_surface(nullptr, GpuSurfaceState::unavailable);
+            invalidate_gpu_surface();
+            skia_.reset();
+            gpu_.reset();
         }
     }
     ~MacPluginViewHost() override {
@@ -58,6 +59,7 @@ public:
         view_.pointTransform = nil;
         [view_ prepareForTeardown];
         view_.rootView = nullptr;
+        invalidate_gpu_surface();
         skia_.reset();
         gpu_.reset();
         [view_ removeFromSuperview];
@@ -108,6 +110,7 @@ public:
     bool is_gpu_backed() const override { return gpu_ready_; }
     render::GpuSurface* gpu_surface() const override { return gpu_.get(); }
     bool present_first_frame() override { return paint(); }
+    std::size_t presented_frame_count() const override { return presented_frame_count_; }
     std::vector<uint8_t> capture_back_buffer_png() override {
         if (!gpu_ready_ || !gpu_->begin_frame()) return {};
         auto* c = skia_->begin_frame();
@@ -120,14 +123,17 @@ public:
         return render::HeadlessSurface::encode_png(rgba);
     }
     bool paint() {
+        if (!root_presentation_allowed()) return false;
         if (!gpu_ready_ || !gpu_->begin_frame()) return false;
         auto* c = skia_->begin_frame();
         if (!c) { gpu_->end_frame(); return false; }
         paint_scene(*c);
         const auto outcome = skia_->end_frame();
         gpu_->end_frame();
+        const bool reached = render::frame_reached_output(outcome);
+        if (reached) ++presented_frame_count_;
         clear_pending_dirty();
-        return render::frame_reached_output(outcome);
+        return reached;
     }
     void handle_backing_change() {
         resize_surfaces();
@@ -148,6 +154,8 @@ private:
     void paint_scene(canvas::Canvas& canvas) {
         canvas.set_fill_color(canvas::Color::hex(background_rgb_));
         canvas.fill_rect(0, 0, size_.width, size_.height);
+
+        if (!root_presentation_allowed()) return;
 
         float sx, sy, tx, ty;
         if (!design_viewport_transform(sx, sy, tx, ty)) {
@@ -172,6 +180,7 @@ private:
     float design_height_ = 0.0f;
     bool design_top_align_ = false;
     std::unique_ptr<render::GpuSurface> gpu_; std::unique_ptr<render::SkiaSurface> skia_;
+    std::size_t presented_frame_count_ = 0;
 };
 
 Class host_class() {

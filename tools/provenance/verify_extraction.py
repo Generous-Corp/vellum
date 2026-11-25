@@ -148,6 +148,9 @@ RENAMED_MIRROR_EXEMPT_PREFIXES: tuple[str, ...] = (
     # matches the folder and everything below it, never a sibling whose name
     # merely starts the same way.
     "authoring/design_pipeline/",
+    # The RmlUi PluginView entry point wraps the mirrored view unit, so it
+    # names that unit's headers and namespace.
+    "rmlui/plugin_view/",
 )
 # The framework units' behavior tests include and call the units by their
 # names, so the renamed-mirror rule does not read them. A test only consumes:
@@ -232,6 +235,9 @@ RENAMED_MIRROR_EXEMPT_PATHS = {
     "tools/mirror/consumer/direct_main.cpp",
     "tools/mirror/consumer/main.cpp",
     "tools/mirror/consumer/plugin_view_host_main.mm",
+    "tools/mirror/consumer/native-gpu-editor/editor.cpp",
+    "tools/mirror/consumer/native-gpu-editor/gpu_runtime.cpp",
+    "tools/mirror/consumer/native-gpu-editor/negative_editor.cpp",
     "tools/mirror/consumer/runtime_image_census_main.cpp",
     "tools/mirror/consumer/threejs_v8_main.cpp",
     "tools/mirror/consumer/v8_main.cpp",
@@ -946,6 +952,21 @@ def mirror_edge_findings(root: Path, table: dict | None = None, prefix: str = MI
 
 PULP_DEPENDENCY_MANIFEST = "tools/deps/manifest.json"
 RENDERER_ASSET_KEY = "mac-universal"
+# The one renderer pin a Pulp export receipt may still carry after Vellum's lock
+# moved to the attested release of the same milestone: Pulp's own determinism
+# pin names the bare chrome/m158 asset and its builder. It is accepted only as
+# this exact triple, and only for these three fields; every other field, and
+# any other asset, builder or URL, is judged against the lock as before.
+PRIOR_RENDERER_PIN = {
+    "archive_sha256": "dca73c0eee5b0f6d129fe357d0754f7165c6b436051e0de947aeedd3e1bde250",
+    "archive_url": "https://github.com/danielraffel/skia-builder/releases/download/chrome/m158/"
+                   "skia-build-mac-universal-gpu-release.zip",
+    "skia_builder_ref": "312f05e24a5d5a45d4a3e70ca70ff3ccff1b4d97",
+}
+RENDERER_LOCK = "gpu-runtime/renderer-lock.json"
+# The one record that binds Vellum's renderer lock to Pulp's own statement of
+# the mirror renderer: {"pulp_commit": <40 hex>} under this key of the lock.
+RENDERER_BINDING_KEY = "pulp_binding"
 
 
 def current_mirror_receipts(
@@ -1006,11 +1027,16 @@ def renderer_pin_errors(
     exported under; it keeps its identity, origin and blob checks.
     """
     lock = json.loads((root / "provenance/third-party-lock.json").read_text(encoding="utf-8"))
+    try:
+        renderer_lock = json.loads((root / RENDERER_LOCK).read_text(encoding="utf-8"))
+        milestone = renderer_lock["milestone"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return [f"cannot read the milestone from {RENDERER_LOCK}: {exc}"], []
     renderer = lock["runtime_toolchain_dependencies"]["renderer"]
     artifact = renderer["artifact"]
     identities = renderer["source_identities"]
     expected = {
-        "skia_branch": artifact["release_tag"],
+        "skia_branch": milestone,
         "skia_commit": identities["skia"]["commit"],
         "built_dawn": identities["dawn"]["commit"],
         "skia_builder_ref": identities["builder"]["commit"],
@@ -1019,6 +1045,16 @@ def renderer_pin_errors(
     }
     errors: list[str] = []
     rows: list[dict[str, object]] = []
+    # With a binding record, the builder and archive of the lock are proved
+    # against Pulp's vellum_mirror_renderer block at the bound commit instead
+    # of against the exported commit's own pin, which predates them.
+    binding = renderer_lock.get(RENDERER_BINDING_KEY)
+    bound_keys: tuple[str, ...] = ()
+    if binding is not None:
+        binding_errors = renderer_binding_errors(pulp_root, binding, renderer)
+        if binding_errors:
+            return binding_errors, []
+        bound_keys = ("skia_builder_ref", "archive_url", "archive_sha256")
     for receipt_path in receipts:
         receipt = json.loads((root / receipt_path).read_text(encoding="utf-8"))
         pulp_sha = receipt.get("pulp_sha")
@@ -1038,13 +1074,67 @@ def renderer_pin_errors(
         asset = (pin.get("release_assets") or {}).get(RENDERER_ASSET_KEY) or {}
         actual = {key: pin.get(key) for key in ("skia_branch", "skia_commit", "built_dawn", "skia_builder_ref")}
         actual.update(archive_url=asset.get("url"), archive_sha256=asset.get("sha256"))
-        mismatched = sorted(key for key in expected if actual[key] != expected[key])
+        mismatched = sorted(key for key in expected if key not in bound_keys and actual[key] != expected[key])
+        # A receipt whose archive, URL and builder are all the prior pin is the
+        # superseded renderer, not a different one. Partial matches are not.
+        if (all(actual[key] == value for key, value in PRIOR_RENDERER_PIN.items())
+                and set(mismatched) <= set(PRIOR_RENDERER_PIN)):
+            mismatched = []
         rows.append({"receipt": receipt_path, "pulp_sha": pulp_sha, "matches_lock": not mismatched})
         if mismatched:
             errors.append(
                 f"{label}: Pulp's renderer pin differs from third-party-lock.json in "
                 + ", ".join(f"{key} ({actual[key]} != {expected[key]})" for key in mismatched))
     return errors, rows
+
+
+def renderer_binding_errors(
+    pulp_root: Path, binding: object, renderer: dict
+) -> list[str]:
+    """Prove Vellum's renderer lock against Pulp's vellum_mirror_renderer block.
+
+    The binding names one Pulp commit. It must be on the checked-out Pulp main,
+    and the block Pulp records there must equal what Vellum's lock names: the
+    archive URL and digest, libdawn's digest, the builder and Dawn commits.
+    The block is read from the Pulp checkout, never from text in Vellum.
+    """
+    where = f"{RENDERER_LOCK} {RENDERER_BINDING_KEY}"
+    commit = binding.get("pulp_commit") if isinstance(binding, dict) else None
+    if (not isinstance(binding, dict) or set(binding) != {"pulp_commit"}
+            or not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit)):
+        return [f"{where} must be exactly {{\"pulp_commit\": <40 lowercase hex>}}"]
+    try:
+        main = git(pulp_root, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main")
+    except subprocess.CalledProcessError:
+        return [f"{where}: Pulp checkout {pulp_root} has no refs/remotes/origin/main"]
+    if subprocess.run(["git", "merge-base", "--is-ancestor", commit, main], cwd=pulp_root,
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+        return [f"{where}: Pulp commit {commit} is not on the checked-out Pulp main"]
+    try:
+        manifest = json.loads(git(pulp_root, "show", f"{commit}:{PULP_DEPENDENCY_MANIFEST}"))
+        dependencies = manifest.get("dependencies") if isinstance(manifest, dict) else None
+        if not isinstance(dependencies, list):
+            raise ValueError("dependencies is not a list")
+        blocks = [d["vellum_mirror_renderer"] for d in dependencies
+                  if isinstance(d, dict) and isinstance(d.get("vellum_mirror_renderer"), dict)]
+    except (subprocess.CalledProcessError, ValueError, AttributeError, TypeError) as exc:
+        return [f"{where}: cannot read Pulp's {PULP_DEPENDENCY_MANIFEST} at {commit}: {exc}"]
+    if len(blocks) != 1:
+        return [f"{where}: expected one vellum_mirror_renderer block at {commit}, found {len(blocks)}"]
+    block = blocks[0]
+    artifact, identities = renderer["artifact"], renderer["source_identities"]
+    libdawn = next((a.get("sha256") for a in renderer.get("archives", [])
+                    if isinstance(a, dict) and a.get("name") == "libdawn_combined.a"), None)
+    wanted = {
+        "url": artifact["url"],
+        "sha256": artifact["sha256"],
+        "libdawn_combined_sha256": libdawn,
+        "skia_builder_ref": identities["builder"]["commit"],
+        "built_dawn": identities["dawn"]["commit"],
+    }
+    differing = sorted(key for key in wanted if block.get(key) != wanted[key])
+    return [f"{where}: Pulp's vellum_mirror_renderer at {commit} differs from the lock in "
+            + ", ".join(f"{key} ({block.get(key)} != {wanted[key]})" for key in differing)] if differing else []
 
 
 def mirror_renderer_pin_check(

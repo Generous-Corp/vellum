@@ -1306,6 +1306,18 @@ class RunAllowlist(unittest.TestCase):
         self.workflows = {name: (ROOT / policy.WORKFLOWS / name).read_text(encoding="utf-8")
                           for name in policy.RELEASE_WORKFLOWS}
 
+    def test_snapshot_handoff_sequences_are_allowlisted(self) -> None:
+        select = policy.RUN_ALLOWLIST[(policy.SIGNING_WORKFLOW, "select-release-commit")]
+        sign = policy.RUN_ALLOWLIST[(policy.SIGNING_WORKFLOW, "sign-release-tag")]
+        self.assertTrue(any(
+            "--snapshot-output \"$RUNNER_TEMP/open-pr-snapshot.json\"" in step.get("run", "")
+            for variant in select for step in variant
+        ))
+        self.assertTrue(any(
+            "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" in step.get("uses", "")
+            for variant in sign for step in variant
+        ))
+
     def judged(self, name: str, old: str, new: str) -> list[str]:
         text = self.workflows[name]
         self.assertEqual(text.count(old), 1, old)
@@ -1313,6 +1325,11 @@ class RunAllowlist(unittest.TestCase):
 
     def assert_unsupported(self, problems: list[str]) -> None:
         self.assertTrue(any(UNSUPPORTED in problem for problem in problems), problems)
+
+    def test_snapshot_handoff_actions_are_commit_pinned(self) -> None:
+        workflow = self.workflows[policy.SIGNING_WORKFLOW]
+        self.assertIn("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", workflow)
+        self.assertIn("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", workflow)
 
     def test_the_real_release_workflows_are_allowlisted(self) -> None:
         for name, text in self.workflows.items():

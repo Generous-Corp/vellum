@@ -23,7 +23,7 @@ import tarfile
 import tempfile
 import threading
 import time
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 from urllib.parse import quote, unquote_to_bytes
 
 from vellum_dev import build_input_digest, staleness, write_source_digest
@@ -62,6 +62,7 @@ MAX_CAPTURE_NODES = 8192
 MAX_CAPTURE_ASSETS = 128
 MAX_CAPTURE_ASSET_BYTES = 8 * 1024 * 1024
 MAX_CAPTURE_ATTRIBUTE_BYTES = 64 * 1024
+MAX_CAPTURE_GRADIENTS = 8
 
 
 
@@ -435,6 +436,15 @@ def ensure_build(context: dict[str, Any], sdk: Path, no_build: bool = False) -> 
     return build_app(context, sdk)
 
 
+SANDBOX_ENV = "CODEX_SANDBOX"
+
+
+def sandboxed_without_window_server(environ: Mapping[str, str] | None = None) -> bool:
+    """True inside an agent sandbox (Codex seatbelt) that cannot reach the window server."""
+    env = os.environ if environ is None else environ
+    return bool(env.get(SANDBOX_ENV))
+
+
 def chrome_path() -> str:
     # A pinned browser is named through the environment, the same way the
     # web/tests harnesses accept it. Reject an override that does not resolve
@@ -459,6 +469,15 @@ def chrome_path() -> str:
     chrome = shutil.which("google-chrome")
     application = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
     if not chrome and application.is_file():
+        if sandboxed_without_window_server():
+            # The installed app registers with the window server even when
+            # headless. A sandbox denies that, so it aborts at launch and
+            # macOS files a crash report for the user's own browser.
+            raise BackendFailure(
+                "The installed Google Chrome cannot start inside a sandbox; name a pinned "
+                "headless browser with VELLUM_CHROME_PATH",
+                status="prerequisite_missing", exit_code=4,
+            )
         chrome = str(application)
     if not chrome:
         raise BackendFailure("Google Chrome is required for web scenarios", status="prerequisite_missing", exit_code=4)
@@ -876,25 +895,56 @@ def _computed_gradient(layer: str) -> dict[str, Any] | None:
     gradient: dict[str, Any] = {"kind": kind}
     if kind == "linear":
         directions = {"to top": 0, "to right": 90, "to bottom": 180, "to left": 270}
+        if parts[0].startswith("to ") and parts[0] not in directions:
+            return None
         angle = directions.get(parts[0], _computed_length(parts[0], "deg"))
         gradient["angle"] = 180 if angle is None else angle % 360
         if angle is not None:
             parts.pop(0)
     else:
+        preamble = parts[0]
+        shape_part, separator, position_part = preamble.partition(" at ")
+        shape_tokens = shape_part.split()
+        shape_name = None
+        if shape_tokens and shape_tokens[0] in {"circle", "ellipse"}:
+            shape_name = shape_tokens.pop(0)
         percent = rf"({_CSS_NUMBER})%"
-        shape = re.fullmatch(
-            rf"(?:ellipse )?{percent} {percent}(?: at {percent} {percent})?", parts[0])
-        if shape:
-            rx, ry, cx, cy = shape.groups()
-            radii = float(rx) / 100, float(ry) / 100
+        looks_like_preamble = bool(shape_name or separator or (
+            shape_tokens and all(re.fullmatch(percent, value) for value in shape_tokens)))
+        if not looks_like_preamble:
+            # No shape preamble: the first component is the first colour stop.
+            radii = (math.sqrt(0.5), math.sqrt(0.5))
+            center = (0.5, 0.5)
+        elif len(shape_tokens) == 0:
+            radius_values = None
+        elif len(shape_tokens) == 1 and shape_name == "circle":
+            radius_values = (shape_tokens[0], shape_tokens[0])
+        elif len(shape_tokens) == 2:
+            radius_values = (shape_tokens[0], shape_tokens[1])
+        else:
+            return None
+        if not looks_like_preamble:
+            pass
+        elif radius_values is None:
+            # The default centered farthest-corner ellipse.
+            radii = (math.sqrt(0.5), math.sqrt(0.5))
+        else:
+            if not all(re.fullmatch(percent, value) for value in radius_values):
+                return None
+            radii = tuple(float(value[:-1]) / 100 for value in radius_values)
             if not all(math.isfinite(r) and r > 0 for r in radii):
                 return None
-            gradient.update(radiusX=radii[0], radiusY=radii[1],
-                            centerX=float(cx or 50) / 100, centerY=float(cy or 50) / 100)
+        center = (0.5, 0.5)
+        if separator:
+            position = position_part.split()
+            if len(position) != 2 or not all(re.fullmatch(percent, value) for value in position):
+                return None
+            center = tuple(float(value[:-1]) / 100 for value in position)
+        gradient.update(radiusX=radii[0], radiusY=radii[1], centerX=center[0], centerY=center[1])
+        if not looks_like_preamble:
+            gradient["_defaultRadialRadius"] = True
+        if looks_like_preamble:
             parts.pop(0)
-        else:
-            # The default centered farthest-corner ellipse.
-            gradient.update(radiusX=math.sqrt(0.5), radiusY=math.sqrt(0.5))
     if not 2 <= len(parts) <= 64:
         return None
     stops = []
@@ -951,10 +1001,29 @@ def _lower_computed_material(node: dict[str, Any], computed: dict[str, str],
     if box and box[2] > 0 and box[3] > 0:
         # CSS lists the top layer first. Native paints back to front.
         layers = _css_components(computed.get("background-image", "none"))
-        gradients = [gradient for layer in reversed(layers)
-                     if (gradient := _computed_gradient(layer)) is not None]
+        gradients = []
+        for layer in reversed(layers):
+            gradient = _computed_gradient(layer)
+            if gradient is None:
+                if re.match(r"(?:repeating-)?(?:linear|radial|conic)-gradient\(", layer):
+                    raise BackendFailure(
+                        f"unsupported CSS gradient layer: {layer}",
+                        status="unsupported_material", exit_code=4,
+                    )
+                continue
+            if gradient.pop("_defaultRadialRadius", False):
+                raise BackendFailure(
+                    "default radial gradients require an explicit shape or size",
+                    status="unsupported_material", exit_code=4,
+                )
+            gradients.append(gradient)
         if gradients:
-            paint["backgroundGradients"] = gradients[-8:]
+            if len(gradients) > MAX_CAPTURE_GRADIENTS:
+                raise BackendFailure(
+                    f"computed material has more than {MAX_CAPTURE_GRADIENTS} background gradients",
+                    status="unsupported_material", exit_code=4,
+                )
+            paint["backgroundGradients"] = gradients
     for side in ("Top", "Right", "Bottom", "Left"):
         prefix = f"border-{side.lower()}-"
         width = _computed_length(computed.get(prefix + "width", ""))
@@ -965,10 +1034,21 @@ def _lower_computed_material(node: dict[str, Any], computed: dict[str, str],
     radii = {}
     for css, retained in _BOX_CORNERS:
         value = computed.get(f"border-{css}-radius", "")
+        components = value.split()
+        if len(components) > 1:
+            raise BackendFailure(
+                f"elliptical border radius {css} is not supported by the native materializer",
+                status="unsupported_material", exit_code=4,
+            )
         radius = _computed_length(value)
         if radius is None and box:
             percent = _computed_length(value, "%")
             if percent is not None:
+                if not math.isclose(box[2], box[3], rel_tol=0.0, abs_tol=1e-6):
+                    raise BackendFailure(
+                        f"percentage border radius {css} is elliptical on a non-square box",
+                        status="unsupported_material", exit_code=4,
+                    )
                 radius = min(box[2:]) * percent / 100
         if radius and radius > 0:
             radii[f"border{retained}Radius"] = radius

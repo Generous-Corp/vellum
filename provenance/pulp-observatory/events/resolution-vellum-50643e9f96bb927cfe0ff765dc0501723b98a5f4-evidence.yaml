@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-50643e9f96bb927cfe0ff765dc0501723b98a5f4-evidence",
+  "kind": "resolution",
+  "created_at": "2026-11-24T20:42:33Z",
+  "resolves": "vellum-50643e9f96bb927cfe0ff765dc0501723b98a5f4",
+  "disposition": "port-required",
+  "rationale": "Mostly Vellum-native: the solvedLayout option for Vellum's retained host, the Vellum figma-plugin.js mapping of path, image and opacity fields, the vellum-ui bundle and js_application clock. One fix is in a Pulp origin file: toPathData now drops close commands before the first contour, which Pulp's tools/import-design/fig/paths.mjs still emits (a baked outline that starts with Z). Debt to port: skip leading Z commands in Pulp's toPathData. Evidence supplement; the disposition is unchanged. See provenance/pulp-observatory/reports/decoder-evidence.md for immutable implementation links, executable boundary checks and mutation controls at Pulp b0ee92d21944d5c956603afd1108b575e50c1302. The previous event is retained as history; this evidence replaces its identifier-count argument. Corrected literal search: git -C <pulp> grep -c -F -e \"op !== 'Z'\" b0ee92d21944d5c956603afd1108b575e50c1302 -- tools/import-design/fig/paths.mjs has zero matches (exit 1). The positive control export function toPathData has one matching line.",
+  "owner": "@repair-lane",
+  "linked_commits": [
+    "50643e9f96bb927cfe0ff765dc0501723b98a5f4"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}

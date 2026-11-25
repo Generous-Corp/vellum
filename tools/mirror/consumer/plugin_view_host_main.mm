@@ -119,6 +119,7 @@ int main(int argc, char** argv) {
     options.size = {64, 64};
     options.use_gpu = true;
     options.background_rgb = background_rgb;
+    options.defer_presentation = true;
     auto gpu = Host::create(probe, options);
     if (!gpu || (live_gpu && !gpu->is_gpu_backed()))
         return fail("GPU host factory returned no GPU host");
@@ -126,13 +127,20 @@ int main(int argc, char** argv) {
     NSView* parent = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 64, 64)];
     gpu->attach_to_parent((void*)parent);
     if (live_gpu) {
-        if (!gpu->present_first_frame()) return fail("offscreen GPU paint failed");
-        const auto png = gpu->capture_back_buffer_png();
-        if (png.empty()) return fail("GPU readback was empty");
-        if (!png_pixel_matches(png, -4, -4, background_rgb))
-            return fail("unpainted readback corner did not use the requested background");
-        if (!png_pixel_matches(png, 8, 8, 0x2878DC))
-            return fail("GPU readback did not contain the View paint");
+        if (gpu->presented_frame_count() != 0)
+            return fail("deferred presentation produced a frame before the first paint");
+        if (gpu->present_first_frame())
+            return fail("deferred present_first_frame unexpectedly presented");
+        if (gpu->presented_frame_count() != 0)
+            return fail("deferred presentation acquired or presented a drawable");
+        gpu->resume_presentation();
+        if (!gpu->present_first_frame()) return fail("resumed GPU paint failed");
+        // An AppKit-driven repaint (setNeedsDisplay from resume) may add more
+        // counted frames on its own schedule, so assert "at least one".
+        if (gpu->presented_frame_count() < 1)
+            return fail("resume did not produce a first presentation");
+        if (!png_pixel_matches(gpu->capture_back_buffer_png(), 8, 8, 0x2878DC))
+            return fail("first resumed presentation did not contain the View paint");
     }
     // A real AppKit key event sent to the host's own view must reach the
     // View tree (calling the View's handler directly would prove nothing).
@@ -215,6 +223,7 @@ int main(int argc, char** argv) {
     gpu = Host::create(probe, options);
     if (!gpu || (live_gpu && !gpu->is_gpu_backed()) || probe.plugin_view_host() != gpu.get())
         return fail("reopened GPU host was not installed");
+    gpu->resume_presentation();
     if (live_gpu && !gpu->present_first_frame()) return fail("reopened GPU host did not paint");
     gpu.reset();
     if (probe.plugin_view_host() != nullptr)

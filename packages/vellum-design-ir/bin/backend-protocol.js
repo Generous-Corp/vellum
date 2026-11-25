@@ -20,16 +20,20 @@ export function parseArguments(values) {
             continue;
         }
         const key = argument.slice(2);
-        if (key === 'json') {
-            output.json = true;
+        if (key === 'json' || key === 'outline') {
+            output[key] = true;
             continue;
         }
         const value = values[index + 1];
         if (value === undefined || value.startsWith('--')) {
             fail('invalid_arguments', `--${key} requires a value`);
         }
-        if (Object.hasOwn(output, key)) fail('invalid_arguments', `--${key} was provided twice`);
-        output[key] = value;
+        if (key === 'file') {
+            (output.file ??= []).push(value);
+        } else {
+            if (Object.hasOwn(output, key)) fail('invalid_arguments', `--${key} was provided twice`);
+            output[key] = value;
+        }
         index += 1;
     }
     return output;

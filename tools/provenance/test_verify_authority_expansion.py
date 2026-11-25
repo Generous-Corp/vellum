@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import builtins
+import functools
 import importlib.util
 import hashlib
 import json
@@ -84,6 +85,7 @@ class Tests(unittest.TestCase):
         self, acknowledgement_sha256: str, *, commit: str = "1" * 40,
         tree: str = "2" * 40, completion_sha256: str = "4" * 64,
     ) -> dict:
+        snapshot = {"schema_version": 3, "kind": "github-open-pull-request-snapshot", "repositories": []}
         return {
             "schema_version": 1,
             "kind": "vellum-authority-promotion-attestation",
@@ -842,6 +844,7 @@ class Tests(unittest.TestCase):
         self, acknowledgement_sha256: str, *, commit: str, tree: str,
         receipt: str, receipt_sha256: str,
     ) -> dict:
+        snapshot = {"schema_version": 3, "kind": "github-open-pull-request-snapshot", "repositories": []}
         return {
             "schema_version": 1,
             "kind": "vellum-mirror-promotion-attestation",
@@ -864,6 +867,27 @@ class Tests(unittest.TestCase):
             "mirror_receipt_sha256": receipt_sha256,
             "release_source_commit": commit,
             "parity": "not-proven-deferred-to-matrix-refreeze",
+            **self.signed_open_pr_binding(commit, snapshot),
+        }
+
+    @staticmethod
+    def signed_open_pr_binding(commit: str, snapshot: dict, bump_evidence: dict | None = None,
+                               *, captured_at: str = "2026-10-31T12:00:00Z") -> dict:
+        """The open-PR audit inputs a release tag signs at selection, bound by digest."""
+        if bump_evidence is None:
+            bump_evidence = {"schema": "vellum.release-bump-evidence.v1",
+                             "repository": "Generous-Corp/vellum", "pulls": []}
+
+        snapshot = {"captured_at": captured_at, **snapshot}
+
+        def digest(value: dict) -> str:
+            return hashlib.sha256((json.dumps(value, sort_keys=True) + "\n").encode()).hexdigest()
+        return {
+            "open_pr_snapshot": snapshot,
+            "open_pr_snapshot_commit": commit,
+            "open_pr_snapshot_sha256": digest(snapshot),
+            "open_pr_release_bump_evidence": bump_evidence,
+            "open_pr_release_bump_evidence_sha256": digest(bump_evidence),
         }
 
     def mirror_promotion_fixture(self) -> dict:
@@ -1030,6 +1054,7 @@ class Tests(unittest.TestCase):
         data = dict(
             fixture["data"], authority_commit=commit, delivery_commit=commit,
             authority_tree=tree, delivery_tree=tree, release_source_commit=commit,
+            open_pr_snapshot_commit=commit,
         )
         errors = self.mirror_release_errors(fixture, data, commit=commit)
         self.assertTrue(any("parity completion record exists at the release commit" in e
@@ -1041,13 +1066,14 @@ class Tests(unittest.TestCase):
     def test_mirror_promotion_is_only_for_the_listed_tags(self) -> None:
         # v0.1.10 is the Phase 4 promotion and v0.1.11 rides the same parity
         # waiver; v0.1.9 is retired, and anything later must prove parity.
-        # v0.2.0 and v0.2.1 are waived too. The names near them are refused, so
+        # v0.2.0, v0.2.1 and v0.2.2 are waived too. The names near them are refused, so
         # the set cannot have become a prefix or a pattern.
-        self.assertEqual(verifier.MIRROR_PROMOTION_RELEASE_TAGS, {"v0.1.10", "v0.1.11", "v0.2.0", "v0.2.1"})
+        self.assertEqual(verifier.MIRROR_PROMOTION_RELEASE_TAGS, {"v0.1.10", "v0.1.11", "v0.2.0", "v0.2.1",
+                                                                  "v0.2.2"})
         fixture = self.mirror_promotion_fixture()
-        for tag in ("v0.1.10", "v0.1.11", "v0.2.0", "v0.2.1"):
+        for tag in ("v0.1.10", "v0.1.11", "v0.2.0", "v0.2.1", "v0.2.2"):
             self.assertEqual(self.mirror_release_errors(fixture, fixture["data"], release_tag=tag), [], tag)
-        for tag in ("v0.1.9", "v0.1.12", "v0.2.2", "v0.2.10", "v0.2.00", "v0.2.0.1", "v0.2", "0.2.0", "v0.3.0",
+        for tag in ("v0.1.9", "v0.1.12", "v0.2.3", "v0.2.10", "v0.2.00", "v0.2.0.1", "v0.2.2.1", "v0.2", "0.2.0", "v0.3.0",
                     "v1.0.0", None):
             errors = self.mirror_release_errors(fixture, fixture["data"], release_tag=tag)
             self.assertTrue(any("is not a mirror-promotion release" in e for e in errors),
@@ -1676,6 +1702,58 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
             verifier.validate_open_pr_snapshot(snapshot, acceptance, matrix, amendment),
         )
 
+    def test_tag_uses_selection_snapshot_even_when_a_later_pr_is_open(self) -> None:
+        selected = {"repositories": [], "selection": "2a01d9d6"}
+        later_live = {"repositories": [{"repository": "Generous-Corp/vellum", "pulls": [{"number": 701}]}]}
+        self.assertIs(
+            verifier.authority_open_pr_snapshot(
+                release_tag="v0.2.2", recorded=selected, live=later_live
+            ),
+            selected,
+        )
+        self.assertIs(
+            verifier.authority_open_pr_snapshot(
+                release_tag=None, recorded=selected, live=later_live
+            ),
+            later_live,
+        )
+
+    def test_signed_tag_snapshot_is_required_and_digest_bound(self) -> None:
+        self.assertTrue(any("snapshot is missing" in error for error in
+                            verifier.validate_promotion_open_pr_snapshot({}, "1" * 40)))
+        snapshot = {"schema_version": 3, "kind": "github-open-pull-request-snapshot", "repositories": []}
+        binding = self.signed_open_pr_binding("1" * 40, snapshot)
+        snapshot = binding["open_pr_snapshot"]
+        data = {**binding, "attested_at": "2026-10-31T12:00:00Z"}
+        self.assertEqual(verifier.validate_promotion_open_pr_snapshot(data, "1" * 40), [])
+        self.assertEqual(
+            verifier.promotion_open_pr_binding(
+                "1" * 40, snapshot, data["open_pr_release_bump_evidence"]),
+            binding,
+        )
+        self.assertTrue(any("snapshot is missing" in error for error in
+                            verifier.validate_promotion_open_pr_snapshot(
+                                {key: value for key, value in data.items()
+                                 if not key.startswith("open_pr_release_bump")}, "1" * 40)))
+        self.assertTrue(any("snapshot digest differs" in error
+                            for error in verifier.validate_promotion_open_pr_snapshot(
+                                data | {"open_pr_snapshot_sha256": "0" * 64}, "1" * 40)))
+        self.assertTrue(any("release-bump evidence digest differs" in error
+                            for error in verifier.validate_promotion_open_pr_snapshot(
+                                data | {"open_pr_release_bump_evidence_sha256": "0" * 64}, "1" * 40)))
+
+    def test_selection_overlap_still_refuses(self) -> None:
+        acknowledgement = self.exact_boundary_acknowledgement()
+        acceptance = self.pulp_exact_boundary_acceptance(acknowledgement)
+        matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        route = next(row for row in verifier.exact_route_rows(matrix, amendment)
+                     if row["repository"] == "Generous-Corp/pulp")
+        snapshot = self.open_pr_snapshot({"repository": "Generous-Corp/pulp", "number": 42,
+                                          "head_commit": "8" * 40, "paths": [route["path"]]})
+        errors = verifier.validate_open_pr_snapshot(snapshot, acceptance, matrix, amendment)
+        self.assertTrue(any("live overlap Generous-Corp/pulp#42 is absent" in error for error in errors))
+
     def release_bump_case(self):
         """The bot's bump of 0.1.10 to 0.1.11, judged while v0.1.10's release readiness runs."""
         acknowledgement = self.exact_boundary_acknowledgement()
@@ -1780,13 +1858,15 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
             self.assertTrue(any("is not the version bump away from v0.1.10" in e for e in check(pull=hidden)))
 
     def test_tag_scoped_audit_accepts_the_bump_and_refuses_other_overlaps(self) -> None:
-        # A release or dry-run tag enforces the live audit (the scope test
-        # below), and there #287's content rule decides the open bump: a
-        # #188-shaped bump passes, a non-bump overlap of the same route fails.
+        # A release tag judges the snapshot it signed (no live read, nothing
+        # deferred); a dry-run tag judges a live one. Either way the content
+        # rule decides the open bump: a #188-shaped bump passes, a non-bump
+        # overlap of the same route fails.
         scope = ProvenanceWorkflowScopeTests()
-        for ref in ("refs/tags/v0.1.11", "refs/tags/dry-run/v0.1.11/1-1"):
+        for ref, expected in (("refs/tags/v0.1.11", ("false", False)),
+                              ("refs/tags/dry-run/v0.1.11/1-1", ("true", False))):
             with self.subTest(ref=ref):
-                self.assertEqual(scope.scope(ref), ("true", False))
+                self.assertEqual(scope.scope(ref), expected)
         evidence, pull, check = self.release_bump_case()
         self.assertEqual(check(), [])
         other = pull | {"number": 277}
@@ -2147,6 +2227,219 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
         self.assertFalse(any(mode_error in error for error in legacy), legacy)
         self.assertFalse(any(snapshot_error in error for error in legacy), legacy)
         self.assertTrue(any(self_root_error in error for error in legacy), legacy)
+
+    def tag_run_case(self):
+        """A release-readiness run of a tag, judged with the flags provenance.yml gives that tag.
+
+        Returns (run, overlap, bind): run(ref, signed=..., live=...) builds the
+        signed promotion attestation (optionally carrying ``signed``, the
+        open-PR audit inputs bound at selection), takes
+        --defer-live-open-pr-audit and whether a live snapshot is read from the
+        workflow's own scope fragment, and returns the verifier's errors.
+        ``overlap`` is a landable open Pulp pull request on an exact route that
+        the acceptance does not name; ``bind`` signs a snapshot for the commit.
+        """
+        self.require_full_history()
+        amendment_commit = subprocess.check_output(
+            [
+                "git", "-C", str(ROOT), "log", "--diff-filter=A", "--format=%H",
+                "--", verifier.BOUNDARY_AMENDMENT_PATH.as_posix(),
+            ],
+            text=True,
+        ).splitlines()[-1]
+        acknowledgement = self.exact_boundary_acknowledgement(amendment_commit=amendment_commit)
+        pulp_root, *_ = self.pulp_acceptance_fixture(acknowledgement)
+        clone, commit, tree = self.retired_authority_clone()
+        (clone / verifier.EXPANSIONS_ROOT / (
+            "full-design-import-render-v1/exact-boundary-acknowledgement-1.json"
+        )).write_text(json.dumps(acknowledgement) + "\n")
+        promotion = clone.parent / "signed-tag-promotion.json"
+        matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        route = next(row for row in verifier.exact_route_rows(matrix, amendment)
+                     if row["repository"] == "Generous-Corp/pulp")
+        overlap = {"repository": "Generous-Corp/pulp", "number": 42,
+                   "head_commit": "8" * 40, "paths": [route["path"]]}
+        scope = ProvenanceWorkflowScopeTests()
+
+        def run(ref: str, *, signed: dict | None = None, live: dict | None = None,
+                live_bump_evidence: dict | None = None, replay: bool = False,
+                **overrides) -> list[str]:
+            audit, deferred = scope.scope(ref, replay=replay)
+            name = ref.removeprefix("refs/tags/")
+            dry_run = re.fullmatch(r"dry-run/(v[0-9]+\.[0-9]+\.[0-9]+)/[0-9]+-[0-9]+", name)
+            data = self.promotion_attestation("3" * 64, commit=commit, tree=tree)
+            if signed is not None:
+                data |= signed
+            promotion.write_text(json.dumps(data) + "\n")
+            arguments = dict(
+                repository_checks=False,
+                release_readiness=True,
+                pulp_root=pulp_root,
+                promotion_attestation=promotion,
+                delivery_root=clone,
+                repository="Generous-Corp/vellum",
+                release_source_commit=commit,
+                check_runs={},
+                # The workflow hands the verifier a live snapshot only when it read one.
+                open_pr_snapshot=live if audit == "true" else None,
+                release_bump_evidence=live_bump_evidence if audit == "true" else None,
+                defer_live_open_pr_audit=deferred,
+                release_tag=dry_run.group(1) if dry_run else name,
+            )
+            if dry_run:
+                arguments["dry_run_tag"] = name
+            arguments.update(overrides)
+            with mock.patch.dict(os.environ):
+                os.environ.pop("VELLUM_PRETAG_REPLAY", None)
+                if replay:
+                    os.environ["VELLUM_PRETAG_REPLAY"] = "1"
+                report = verifier.verify(clone, **arguments)
+            return report["errors"]
+
+        bind = functools.partial(self.signed_open_pr_binding, commit, captured_at="2026-12-01T00:00:00Z")
+        return run, overlap, bind
+
+    @staticmethod
+    def open_pr_errors(errors: list[str]) -> list[str]:
+        return [error for error in errors
+                if "open PR snapshot" in error or "open-PR" in error or "release-bump" in error]
+
+    def test_release_tag_run_refuses_an_overlap_in_its_signed_snapshot(self) -> None:
+        run, overlap, bind = self.tag_run_case()
+        signed = bind(self.open_pr_snapshot(overlap, retired=True))
+        errors = run("refs/tags/v0.1.10", signed=signed)
+        self.assertTrue(any("live overlap Generous-Corp/pulp#42 is absent" in error
+                            for error in errors), errors)
+        # A clean live snapshot handed to a release tag's run cannot replace
+        # the one it signed.
+        errors = run("refs/tags/v0.1.10", signed=signed,
+                     open_pr_snapshot=self.open_pr_snapshot(retired=True))
+        self.assertTrue(any("live overlap Generous-Corp/pulp#42 is absent" in error
+                            for error in errors), errors)
+
+    def test_release_tag_run_passes_a_clean_signed_snapshot(self) -> None:
+        run, _, bind = self.tag_run_case()
+        errors = run("refs/tags/v0.1.10", signed=bind(self.open_pr_snapshot(retired=True)))
+        self.assertEqual(self.open_pr_errors(errors), [], errors)
+        self.assertFalse(any("cannot be deferred" in error for error in errors), errors)
+
+    def test_pretag_replay_judges_live_snapshot_without_signed_snapshot(self) -> None:
+        run, overlap, bind = self.tag_run_case()
+        ref = "refs/tags/v0.1.10"
+        clean = self.open_pr_snapshot(retired=True)
+        with_overlap = self.open_pr_snapshot(overlap, retired=True)
+        with self.subTest("selection has no signed snapshot yet"):
+            errors = run(ref, replay=True, live=clean)
+            self.assertEqual(self.open_pr_errors(errors), [], errors)
+            self.assertFalse(any("cannot be deferred" in error for error in errors), errors)
+        with self.subTest("selection still requires live evidence"):
+            errors = run(ref, replay=True)
+            self.assertTrue(any("expected strict snapshot object" in error for error in errors), errors)
+        with self.subTest("selection refuses a live overlap"):
+            errors = run(ref, replay=True, live=with_overlap)
+            self.assertTrue(any("live overlap Generous-Corp/pulp#42 is absent" in error
+                                for error in errors), errors)
+        with self.subTest("signed evidence cannot hide a live selection overlap"):
+            errors = run(ref, replay=True, live=with_overlap, signed=bind(clean))
+            self.assertTrue(any("live overlap Generous-Corp/pulp#42 is absent" in error
+                                for error in errors), errors)
+
+    def test_release_tag_run_refuses_a_digest_valid_but_expired_snapshot(self) -> None:
+        run, _, bind = self.tag_run_case()
+        snapshot = self.open_pr_snapshot(retired=True)
+        snapshot["captured_at"] = "2026-11-29T23:59:59Z"
+        errors = run("refs/tags/v0.1.10", signed=bind(snapshot))
+        self.assertTrue(any("snapshot must be captured within the 24 hours" in error
+                            for error in errors), errors)
+
+    def test_release_tag_run_accepts_the_signed_release_bump(self) -> None:
+        run, _, bind = self.tag_run_case()
+        evidence, pull, _ = self.release_bump_case()
+        bundle = {"schema": "vellum.release-bump-evidence.v1",
+                  "repository": "Generous-Corp/vellum", "pulls": [evidence]}
+        snapshot = self.open_pr_snapshot(pull, retired=True)
+        errors = run("refs/tags/v0.1.10", signed=bind(snapshot, bundle))
+        self.assertEqual(self.open_pr_errors(errors), [], errors)
+        self.assertFalse(any("cannot be deferred" in error for error in errors), errors)
+        # Without its signed content evidence the same open bump is refused.
+        errors = run("refs/tags/v0.1.10", signed=bind(snapshot))
+        self.assertTrue(any("Generous-Corp/vellum#188" in error and "version bump" in error
+                            for error in errors), errors)
+
+    def test_release_tag_run_refuses_a_forged_signed_snapshot(self) -> None:
+        run, overlap, bind = self.tag_run_case()
+        # The overlap is hidden after signing: the digest no longer matches,
+        # and the content that was signed is still judged.
+        clean = self.open_pr_snapshot(retired=True)
+        forged = bind(clean) | {"open_pr_snapshot": self.open_pr_snapshot(overlap, retired=True)}
+        errors = run("refs/tags/v0.1.10", signed=forged)
+        self.assertTrue(any("signed-tag open-PR snapshot digest differs" in error
+                            for error in errors), errors)
+        self.assertTrue(any("live overlap Generous-Corp/pulp#42 is absent" in error
+                            for error in errors), errors)
+        # Bump evidence edited after signing to excuse an overlap is refused.
+        evidence, pull, _ = self.release_bump_case()
+        bundle = {"schema": "vellum.release-bump-evidence.v1",
+                  "repository": "Generous-Corp/vellum", "pulls": [evidence]}
+        snapshot = self.open_pr_snapshot(pull, retired=True)
+        forged = bind(snapshot) | {"open_pr_release_bump_evidence": bundle}
+        errors = run("refs/tags/v0.1.10", signed=forged)
+        self.assertTrue(any("signed-tag release-bump evidence digest differs" in error
+                            for error in errors), errors)
+        # A snapshot signed for another commit is refused.
+        errors = run("refs/tags/v0.1.10", signed=bind(clean) | {"open_pr_snapshot_commit": "0" * 40})
+        self.assertTrue(any("signed-tag open-PR snapshot commit differs" in error
+                            for error in errors), errors)
+        self.assertFalse(any("cannot be deferred" in error for error in errors), errors)
+
+    def test_dry_run_tag_run_judges_a_live_snapshot(self) -> None:
+        run, overlap, bind = self.tag_run_case()
+        ref = "refs/tags/dry-run/v0.1.10/7-1"
+        clean = self.open_pr_snapshot(retired=True)
+        with_overlap = self.open_pr_snapshot(overlap, retired=True)
+        with self.subTest("no signed snapshot, clean live snapshot"):
+            errors = run(ref, live=clean)
+            self.assertEqual(self.open_pr_errors(errors), [], errors)
+            self.assertFalse(any("cannot be deferred" in error for error in errors), errors)
+        with self.subTest("no signed snapshot, live overlap"):
+            errors = run(ref, live=with_overlap)
+            self.assertTrue(any("live overlap Generous-Corp/pulp#42 is absent" in error
+                                for error in errors), errors)
+        with self.subTest("a clean signed snapshot does not hide a live overlap"):
+            errors = run(ref, signed=bind(clean), live=with_overlap)
+            self.assertTrue(any("live overlap Generous-Corp/pulp#42 is absent" in error
+                                for error in errors), errors)
+        with self.subTest("no live snapshot at all"):
+            errors = run(ref)
+            self.assertTrue(any("expected strict snapshot object" in error for error in errors), errors)
+        # The exemption is keyed on the dry-run tag's own name naming the
+        # identity under judgment; a release tag cannot reach it.
+        with self.subTest("a release tag without a signed snapshot"):
+            errors = run("refs/tags/v0.1.10", live=clean)
+            self.assertTrue(any("signed-tag open-PR snapshot is missing" in error
+                                for error in errors), errors)
+        for dry_run_tag in ("v0.1.10", "dry-run/v0.1.11/7-1", "dry-run/v0.1.10/0-1",
+                            "refs/tags/dry-run/v0.1.10/7-1"):
+            with self.subTest(dry_run_tag=dry_run_tag):
+                errors = run("refs/tags/v0.1.10", live=clean, dry_run_tag=dry_run_tag)
+                self.assertTrue(any("is not a release dry-run tag for 'v0.1.10'" in error
+                                    for error in errors), errors)
+
+    def test_a_release_tag_run_cannot_claim_a_dry_run_tag(self) -> None:
+        for ref, refused in (("refs/tags/v0.1.10", True), ("refs/tags/dry-run/v0.1.10/7-1", False)):
+            with self.subTest(ref=ref), mock.patch.dict(os.environ, {"GITHUB_REF": ref}), \
+                    mock.patch.object(sys, "argv", ["verify", "--release-readiness", "--release-tag", "v0.1.10",
+                                                    "--dry-run-tag", "dry-run/v0.1.10/7-1"]), \
+                    mock.patch.object(verifier, "verify", return_value={"status": "pass"}) as verify, \
+                    mock.patch("sys.stdout"), mock.patch("sys.stderr"):
+                if refused:
+                    with self.assertRaises(SystemExit):
+                        verifier.main()
+                    verify.assert_not_called()
+                else:
+                    self.assertEqual(verifier.main(), 0)
+                    self.assertEqual(verify.call_args.kwargs["dry_run_tag"], "dry-run/v0.1.10/7-1")
 
     def test_authority_checkout_is_not_a_delivery_root_without_retirement(self) -> None:
         temporary, root, _ = self.copy()
@@ -2856,7 +3149,7 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
 
 
 class ProvenanceWorkflowScopeTests(unittest.TestCase):
-    """The live open-PR audit is tag-scoped; the observatory is its own job."""
+    """Branches use live overlap state while release tags use their signed snapshot."""
 
     WORKFLOW = ROOT / ".github/workflows/provenance.yml"
 
@@ -2866,33 +3159,52 @@ class ProvenanceWorkflowScopeTests(unittest.TestCase):
         end = text.index("# live-open-pr-audit-scope: end")
         return "\n".join(line.strip() for line in text[start:end].splitlines())
 
-    def scope(self, ref: str, event: str = "push") -> tuple[str, bool]:
+    def scope(self, ref: str, event: str = "push", *, replay: bool = False) -> tuple[str, bool]:
         script = (
             "set -euo pipefail\nrepository_evidence=(--repository x)\n"
             + self.fragment()
             + '\nprintf "%s %s\\n" "$live_open_pr_audit" "${repository_evidence[*]}"\n'
         )
+        environment = {**os.environ, "GITHUB_REF": ref, "GITHUB_EVENT_NAME": event}
+        environment.pop("VELLUM_PRETAG_REPLAY", None)
+        if replay:
+            environment["VELLUM_PRETAG_REPLAY"] = "1"
         completed = subprocess.run(
             ["bash", "-c", script], capture_output=True, text=True, check=True,
-            env={**os.environ, "GITHUB_REF": ref, "GITHUB_EVENT_NAME": event},
+            env=environment,
         )
         audit, _, evidence = completed.stdout.strip().partition(" ")
         return audit, "--defer-live-open-pr-audit" in evidence.split()
 
-    def test_live_open_pr_audit_runs_only_on_release_and_dry_run_tags(self) -> None:
-        for ref, event, enforced in (
-            ("refs/heads/main", "push", False),
-            ("refs/pull/7/merge", "pull_request", False),
-            ("refs/heads/gh-readonly-queue/main/pr-7-abc", "merge_group", False),
-            ("refs/tags/authority/x", "push", False),
-            ("refs/tags/publish-rehearsal/1-1", "push", False),
-            ("refs/tags/v0.1.11", "push", True),
-            ("refs/tags/dry-run/v0.1.11/1-1", "push", True),
+    def test_live_open_pr_audit_runs_only_for_pretag_replay_and_dry_run_tags(self) -> None:
+        # (ref, event, live audit, deferred). A release tag reads nothing live
+        # and defers nothing: it judges the snapshot signed into its tag. A
+        # main or branch push defers, as it did before this change: a release
+        # bump PR open on main would otherwise turn every main push red.
+        for ref, event, live, deferred_expected in (
+            ("refs/heads/main", "push", False, True),
+            ("refs/heads/feature/x", "push", False, True),
+            ("refs/pull/7/merge", "pull_request", False, True),
+            ("refs/heads/gh-readonly-queue/main/pr-7-abc", "merge_group", False, True),
+            ("refs/tags/authority/x", "push", False, True),
+            ("refs/tags/publish-rehearsal/1-1", "push", False, True),
+            ("refs/tags/v0.1.11", "push", False, False),
+            ("refs/tags/dry-run/v0.1.11/1-1", "push", True, False),
         ):
             with self.subTest(ref=ref):
                 audit, deferred = self.scope(ref, event)
-                self.assertEqual(audit, "true" if enforced else "false")
-                self.assertEqual(deferred, not enforced)
+                self.assertEqual(audit, "true" if live else "false")
+                self.assertEqual(deferred, deferred_expected)
+        with self.subTest(ref="pre-tag replay of refs/tags/v0.1.11"):
+            self.assertEqual(self.scope("refs/tags/v0.1.11", replay=True), ("true", False))
+
+    def test_only_a_dry_run_tag_names_itself_to_the_verifier(self) -> None:
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        branch = text[text.index('if [[ "$GITHUB_REF_NAME" =~ ^dry-run/'):]
+        branch = branch[:branch.index("            fi\n")]
+        self.assertEqual(text.count("--dry-run-tag"), 1)
+        self.assertIn('release_readiness+=(--release-tag "${BASH_REMATCH[1]}" --dry-run-tag "$GITHUB_REF_NAME")',
+                      branch.split("elif")[0])
 
     def test_the_snapshot_collection_is_gated_on_the_same_scope(self) -> None:
         text = self.WORKFLOW.read_text(encoding="utf-8")

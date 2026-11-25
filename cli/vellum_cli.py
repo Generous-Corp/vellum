@@ -28,7 +28,7 @@ from vellum_manifest import (
 from vellum_interaction import InteractionPlanError, validate_interaction_plan
 
 
-FRAMEWORK_VERSION = "0.2.2"
+FRAMEWORK_VERSION = "0.2.3"
 CLI_VERSION = FRAMEWORK_VERSION
 UI_VERSION = "0.1.0-experimental.0"
 CLI_API_VERSION = 1
@@ -72,6 +72,44 @@ TEMPLATE_TOKENS = {
     "ARTIFACT_IDENTITY_JSON", "TEMPLATE_NAME",
 }
 TEMPLATE_TOKEN_RE = re.compile(r"{{([A-Z][A-Z0-9_]*)}}")
+
+
+def rmlui_renderer_catalog() -> dict[str, Any]:
+    catalog_path = Path(__file__).resolve().parent.parent / "rmlui" / "renderers.json"
+    try:
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise CliFailure(
+            f"Could not read the RmlUi renderer catalog: {error}",
+            status="renderer_catalog_unavailable", exit_code=EXIT_UNAVAILABLE,
+        ) from error
+    if not isinstance(catalog, dict) or not isinstance(catalog.get("renderers"), list):
+        raise CliFailure(
+            "The RmlUi renderer catalog is invalid.",
+            status="renderer_catalog_invalid", exit_code=EXIT_PROJECT,
+        )
+    return catalog
+
+
+def rmlui_renderers_command() -> dict[str, Any]:
+    catalog = rmlui_renderer_catalog()
+    rows = catalog["renderers"]
+    lines = ["ID       KIND         API              PLATFORMS                 STATUS"]
+    lines.append("-" * len(lines[0]))
+    for renderer in rows:
+        statuses = ", ".join(
+            f"{platform}:{status}" for platform, status in renderer["status"].items()
+        )
+        lines.append(
+            f"{renderer['id']:<8} {renderer['kind']:<12} {renderer['graphics_api']:<16} "
+            f"{', '.join(renderer['platforms']):<25} {statuses}"
+        )
+    lines.append(f"Community: {catalog['community']['url']}")
+    lines.append(catalog["community"]["note"])
+    return result(
+        "rmlui.renderers", ok=True, status="ok", message="\n".join(lines),
+        data=catalog,
+    )
 
 
 class CliFailure(RuntimeError):
@@ -1226,6 +1264,11 @@ def backend_command(args: argparse.Namespace, forwarded: list[str]) -> dict[str,
                 f"Reimport source does not exist: {source_path}",
                 status="source_not_found", exit_code=EXIT_PROJECT,
             )
+        if args.file and source_path.suffix.casefold() in {".html", ".htm"}:
+            raise CliFailure(
+                "--file requires Figma plugin JSON inputs.",
+                status="invalid_arguments", exit_code=EXIT_USAGE,
+            )
         if source_path.suffix.casefold() in {".html", ".htm"}:
             backend_payload, return_code = invoke_import_backend(
                 root, lock, "html", source_path, args.source_key,
@@ -1314,11 +1357,18 @@ def illustrator_command(args: argparse.Namespace) -> dict[str, Any]:
     from vellum_illustrator import ConversionError, convert
 
     try:
+        page = int(args.page) if args.page is not None else 1
+    except ValueError as error:
+        raise CliFailure(
+            "Illustrator --page must be an integer.",
+            status="invalid_arguments", exit_code=EXIT_USAGE,
+        ) from error
+    try:
         receipt = convert(
             Path(args.illustrator_input),
             Path(args.output) if args.output else None,
             Path(args.provenance) if args.provenance else None,
-            page=args.page,
+            page=page,
             timeout=args.timeout,
         )
     except ConversionError as error:
@@ -1339,8 +1389,34 @@ def illustrator_command(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def standalone_asset_import(args: argparse.Namespace) -> dict[str, Any]:
+    from vellum_import_assets import AssetImportError, import_jsx, validate_preconverted_svg
+
+    source = Path(args.source).expanduser()
+    try:
+        if args.source_type == "preconverted-svg":
+            if not args.validate_only:
+                raise AssetImportError("preconverted-svg requires --validate-only")
+            if not args.manifest:
+                raise AssetImportError("preconverted-svg requires --manifest <control-map.json>")
+            data = validate_preconverted_svg(source, Path(args.manifest).expanduser())
+            return result("import preconverted-svg", ok=True, status="validated",
+                          message="validated preconverted SVG + control-map sidecar (no files generated)", data=data)
+        if args.validate_only:
+            raise AssetImportError("--validate-only is not supported for jsx imports; it would generate files")
+        data = import_jsx(
+            source, emit=args.emit, mode=args.mode,
+            output=Path(args.output).expanduser() if args.output else None,
+            source_out=Path(args.source_out).expanduser() if args.source_out else None,
+        )
+        return result("import jsx", ok=True, status="imported",
+                      message=f"Imported JSX ({args.mode}, {args.emit})", data=data)
+    except AssetImportError as error:
+        raise CliFailure(str(error), status="asset_import_refused", exit_code=EXIT_PROJECT) from error
+
+
 def invoke_backend(
-    command: str, root: Path, lock: dict[str, Any], forwarded: list[str]
+    command: str, root: Path | None, lock: dict[str, Any], forwarded: list[str]
 ) -> tuple[dict[str, Any], int]:
     backend = locate_backend()
     if backend is None:
@@ -1356,7 +1432,7 @@ def invoke_backend(
         )
     invocation = [
         str(backend), command,
-        "--project", str(root),
+        *(["--project", str(root)] if root is not None else []),
         "--json",
         "--framework-version", lock["framework"]["version"],
         "--cli-api", str(CLI_API_VERSION),
@@ -1424,6 +1500,10 @@ def parser() -> argparse.ArgumentParser:
         help="fail unless the installed SDK provides the complete requested application lane",
     )
 
+    rmlui = commands.add_parser("rmlui", help="inspect the RmlUi integration")
+    rmlui_actions = rmlui.add_subparsers(dest="rmlui_command", required=True)
+    rmlui_actions.add_parser("renderers", help="list supported RmlUi renderers")
+
     dev = commands.add_parser("dev", help="watch portable app sources and reload a native or web app")
     dev.add_argument("--project")
     dev.add_argument("--target", choices=["macos", "web"], default="macos")
@@ -1476,17 +1556,26 @@ def parser() -> argparse.ArgumentParser:
 
     backend_specs = {
         "import": [
-            ("source", {"nargs": "+"}),
-            ("--source-type", {"choices": ["fig", "figma", "design-ir", "html", "claude-design"], "default": "figma"}),
+            ("source", {"nargs": "*"}),
+            ("--file", {"action": "append", "help": "add an ordered Figma plugin JSON export"}),
+            ("--source-type", {"choices": ["fig", "figma", "figma-plugin", "design-ir", "html", "claude-design", "pencil", "designmd", "v0", "jsx", "preconverted-svg"], "default": "figma"}),
             ("--as", {"dest": "source_key", "default": "main"}),
             ("--interaction-plan", {}),
+            ("--frame", {"help": "select a Figma frame by GUID or name"}),
+            ("--outline", {"action": "store_true", "help": "list pages and frames in a local .fig file"}),
             ("--out", {"dest": "output", "metavar": "SVG"}),
             ("--provenance", {}),
-            ("--page", {"type": int, "default": 1}),
+            ("--manifest", {"help": "control-map sidecar for preconverted SVG"}),
+            ("--validate-only", {"action": "store_true", "help": "validate an import without generating files"}),
+            ("--emit", {"choices": ["js", "ir-json", "materialized-runtime"], "default": "js"}),
+            ("--mode", {"choices": ["live", "baked"], "default": "live"}),
+            ("--source-out", {"help": "output directory for materialized runtime source"}),
+            ("--page", {"help": "Figma page name for frame lookup, or Illustrator page number"}),
             ("--timeout", {"type": int, "default": 60}),
         ],
         "reimport": [
             ("--source", {"required": True}),
+            ("--file", {"action": "append", "help": "add an ordered Figma plugin JSON export"}),
             ("--as", {"dest": "source_key", "default": "main"}),
             ("--interaction-plan", {}),
         ],
@@ -1519,7 +1608,8 @@ def parser() -> argparse.ArgumentParser:
 def forwarded_arguments(args: argparse.Namespace) -> list[str]:
     ignored = {"json", "command", "project"}
     if args.command == "import":
-        ignored.update({"output", "provenance", "page", "timeout", "illustrator_input"})
+        ignored.update({"output", "provenance", "timeout", "illustrator_input", "manifest",
+                        "validate_only", "emit", "mode", "source_out"})
     forwarded: list[str] = []
     for key, value in vars(args).items():
         if key in ignored or value is None or value is False:
@@ -1527,6 +1617,9 @@ def forwarded_arguments(args: argparse.Namespace) -> list[str]:
         option = "--" + key.replace("_", "-")
         if isinstance(value, bool):
             forwarded.append(option)
+        elif key == "file":
+            for path in value:
+                forwarded.extend([option, path])
         elif key == "source" and args.command == "import":
             forwarded.append(str(value))
         else:
@@ -1546,17 +1639,89 @@ def main(argv: Iterable[str] | None = None) -> int:
         if args.command == "import" and isinstance(args.source, list):
             if len(args.source) == 2 and args.source[0] == "illustrator":
                 args.source, args.illustrator_input = args.source
+            elif len(args.source) == 2 and args.source[0] in {"pencil", "designmd", "v0", "jsx", "preconverted-svg"}:
+                args.source_type, args.source = args.source
             elif len(args.source) == 1:
                 args.source = args.source[0]
+            elif not args.source and args.file and args.source_type == "figma-plugin":
+                args.source, *args.file = args.file
             else:
                 raise CliFailure(
-                    "import accepts one source path, or 'illustrator INPUT'.",
+                    "import accepts a source path or a source name followed by its file.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
+        if args.command == "import":
+            if args.source_type in {"jsx", "preconverted-svg"}:
+                if args.source_type == "preconverted-svg" and args.validate_only is False:
+                    raise CliFailure(
+                        "preconverted-svg requires --validate-only",
+                        status="invalid_arguments", exit_code=EXIT_USAGE,
+                    )
+                inapplicable = [
+                    flag for flag, used in (
+                        ("--manifest", args.source_type == "jsx" and args.manifest is not None),
+                        ("--out", args.source_type == "preconverted-svg" and args.output is not None),
+                        ("--source-out", args.source_type == "preconverted-svg" and args.source_out is not None),
+                        ("--emit", args.source_type == "preconverted-svg" and args.emit != "js"),
+                        ("--mode", args.source_type == "preconverted-svg" and args.mode != "live"),
+                    ) if used
+                ]
+                if inapplicable:
+                    raise CliFailure(
+                        f"{', '.join(inapplicable)} do not apply to --source-type {args.source_type}.",
+                        status="invalid_arguments", exit_code=EXIT_USAGE,
+                    )
+            else:
+                standalone_only = [
+                    flag for flag, used in (
+                        ("--validate-only", args.validate_only),
+                        ("--manifest", args.manifest is not None),
+                        ("--source-out", args.source_out is not None),
+                        ("--emit", args.emit != "js"),
+                        ("--mode", args.mode != "live"),
+                    ) if used
+                ]
+                if standalone_only:
+                    raise CliFailure(
+                        f"{', '.join(standalone_only)} apply only to --source-type jsx or preconverted-svg.",
+                        status="invalid_arguments", exit_code=EXIT_USAGE,
+                    )
+
+            is_illustrator = args.source == "illustrator" and (
+                hasattr(args, "illustrator_input") or args.source_type not in {"pencil", "designmd", "v0"}
+            )
+            is_fig = args.source_type == "fig" or (
+                args.source_type == "figma" and Path(args.source).suffix.lower() == ".fig"
+            )
+            if args.file and (args.source_type != "figma-plugin" or is_illustrator):
+                raise CliFailure(
+                    "--file requires --source-type figma-plugin.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
+            is_plugin = args.source_type in {"figma", "figma-plugin"}
+            is_standalone_asset = args.source_type in {"jsx", "preconverted-svg"}
+            if args.frame is not None and (is_illustrator or (not is_standalone_asset and not (is_fig or is_plugin))):
+                raise CliFailure(
+                    "--frame requires a local Figma .fig file or plugin envelope.",
+                    status="invalid_fig_frame", exit_code=EXIT_USAGE,
+                )
+            if args.outline and (not is_fig or is_illustrator or
+                                 args.frame is not None or args.page is not None):
+                raise CliFailure(
+                    "--outline requires a local Figma .fig source and takes no frame or page selector.",
+                    status="invalid_fig_outline", exit_code=EXIT_USAGE,
+                )
+            if args.page is not None and not is_illustrator and not is_standalone_asset and (not is_fig or args.frame is None):
+                raise CliFailure(
+                    "--page requires a local Figma .fig frame selector or an Illustrator input.",
                     status="invalid_arguments", exit_code=EXIT_USAGE,
                 )
         if args.command == "create":
             payload = create_project(args)
         elif args.command == "doctor":
             payload = doctor(args)
+        elif args.command == "rmlui":
+            payload = rmlui_renderers_command()
         elif args.command == "dev":
             if args.poll_interval <= 0 or args.debounce < 0:
                 raise CliFailure(
@@ -1588,8 +1753,25 @@ def main(argv: Iterable[str] | None = None) -> int:
             payload = design_command(args)
         elif args.command == "compare":
             payload = compare_command(args)
-        elif args.command == "import" and args.source == "illustrator":
+        elif args.command == "import" and args.source_type in {"jsx", "preconverted-svg"}:
+            payload = standalone_asset_import(args)
+        elif args.command == "import" and is_illustrator:
             payload = illustrator_command(args)
+        elif args.command == "import" and args.outline:
+            sdk = load_sdk_metadata()
+            if args.project:
+                root, lock = load_project(args.project)
+                validate_project_sdk(lock, sdk)
+            else:
+                root = None
+                lock = {"framework": {"version": sdk[1]["framework_version"] if sdk else FRAMEWORK_VERSION}}
+            backend, return_code = invoke_backend("import", root, lock, forwarded_arguments(args))
+            payload = result(
+                "import", ok=return_code == 0 and bool(backend.get("ok")),
+                status=str(backend.get("status", "backend_failed")),
+                message=str(backend.get("message", "Backend completed import outline.")),
+                data=backend.get("data"), diagnostics=backend.get("diagnostics"),
+            )
         else:
             if args.command == "import" and not args.source:
                 raise CliFailure(

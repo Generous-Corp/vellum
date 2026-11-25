@@ -56,6 +56,10 @@
         "isolated": true
       },
       {
+        "script": "scripts/test_rmlui_plugin_view_not_installed.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/test_ci_lanes.py",
         "isolated": true
       },
@@ -68,6 +72,10 @@
       }
     ],
     "release-source": [
+      {
+        "script": "scripts/test_gha_annotate.py",
+        "isolated": true
+      },
       {
         "discover": "cli/tests",
         "pattern": "test_*.py"
@@ -103,6 +111,10 @@
         ]
       },
       {
+        "script": "scripts/check_react_runtime.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/template_guard.py"
       },
       {
@@ -120,6 +132,10 @@
       },
       {
         "script": "scripts/test_check_renderer_lock.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/test_renderer_platform_evidence.py",
         "isolated": true
       },
       {
@@ -148,6 +164,14 @@
       },
       {
         "script": "scripts/test_verify_rmlui_sdk_artifact.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/test_rmlui_metal_ios_contract.py",
+        "isolated": true
+      },
+      {
+        "script": "tools/mirror/consumer/ios-auv3/test_metal_ios_runtime_contract.py",
         "isolated": true
       },
       {
@@ -191,6 +215,10 @@
       }
     ],
     "product-quality": [
+      {
+        "script": "scripts/test_gha_annotate.py",
+        "isolated": true
+      },
       {
         "discover": "cli/tests",
         "pattern": "test_*.py"
@@ -297,6 +325,10 @@
         "isolated": true
       },
       {
+        "script": "scripts/test_renderer_platform_evidence.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/check_renderer_lock.py",
         "isolated": true
       },
@@ -354,6 +386,10 @@
         "script": "authoring/adapters/illustrator/test_illustrator_to_svg.py"
       },
       {
+        "script": "scripts/check_react_runtime.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/template_guard.py"
       },
       {
@@ -392,6 +428,10 @@
       {
         "script": "scripts/test_ctest_classes.py",
         "isolated": true
+      },
+      {
+        "script": "scripts/test_web_compat_packaging.py",
+        "isolated": true
       }
     ]
   },
@@ -409,8 +449,19 @@
     "graphics/tests/test_dawn_provider_topology.py": "cmake:CMakeLists.txt",
     "packages/vellum-swift/scripts/test_run_sterile_proof.py": "cmake:packages/vellum-swift/CMakeLists.txt",
     "tools/android/test_check_android_objects.py": "workflow:android.yml",
+    "tools/android/test_android_gpu_surface.cmake": "workflow:android.yml",
+    "tools/mirror/consumer/threejs-demo/asset_cleanup_test.cmake": "cmake:tools/mirror/consumer/threejs-demo/CMakeLists.txt",
+    "tools/mirror/consumer/threejs-demo/asset_cleanup_negative_test.cmake": "cmake:tools/mirror/consumer/threejs-demo/CMakeLists.txt",
+    "tools/mirror/consumer/threejs-demo/asset_failure_test.cmake": "cmake:tools/mirror/consumer/threejs-demo/CMakeLists.txt",
+    "tools/mirror/consumer/threejs-demo/texture_capture_negative_test.cmake": "cmake:tools/mirror/consumer/threejs-demo/CMakeLists.txt",
+    "tools/mirror/consumer/threejs-demo/texture_capture_test.py": "cmake:tools/mirror/consumer/threejs-demo/capture_test.cmake",
+    "tools/mirror/consumer/ios-auv3/metal_ios_negative_test.cmake": "cmake:tools/mirror/consumer/ios-auv3/CMakeLists.txt",
+    "tools/mirror/consumer/ios-auv3/run_ios_sim.sh": "cmake:tools/mirror/consumer/ios-auv3/CMakeLists.txt",
+    "tools/mirror/consumer/ios-auv3/run_ios_sim_negative_control.sh": "cmake:tools/mirror/consumer/ios-auv3/CMakeLists.txt",
+    "tools/mirror/provider_symbol_census.py": "cmake:tools/mirror/RunMirrorConsumer.cmake",
     "tools/provenance/test_collect_release_evidence.py": "workflow:provenance.yml",
     "tools/provenance/test_deadline_warning.py": "workflow:provenance.yml",
+    "tools/provenance/test_deadline_warning_gate.py": "workflow:provenance.yml",
     "tools/provenance/test_finalize_authority_reconciliation.py": "workflow:provenance.yml",
     "tools/provenance/test_observatory.py": "workflow:provenance.yml",
     "tools/provenance/test_observatory_mirror_import.py": "workflow:provenance.yml",

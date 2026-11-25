@@ -51,6 +51,10 @@ struct MainThreadTimerState;
 /// plus timer fires), process-wide. Lets a test prove an idle scope costs the
 /// main thread nothing without counting unrelated run-loop wake-ups.
 std::uint64_t main_thread_callouts() noexcept;
+#if defined(__APPLE__)
+/// How many times a timer was repositioned with CFRunLoopTimerSetNextFireDate.
+std::uint64_t main_thread_timer_rearms() noexcept;
+#endif
 } // namespace detail
 
 /// Owner of the work one client (typically one editor) schedules on the main
