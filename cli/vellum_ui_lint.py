@@ -326,14 +326,26 @@ def _mask_non_markup_regions(text: str, *, strings: bool = True,
     return "".join(masked)
 
 
+_CSS_VALUE_WORDS = frozenset({
+    "solid", "dashed", "dotted", "double", "none", "inset", "outset", "transparent",
+    "inherit", "currentcolor", "auto", "bold", "normal", "inline", "block", "linear-gradient",
+})
+_CSS_VALUE_TOKEN = re.compile(
+    r"#[0-9a-fA-F]{3,8}|(?:rgba?|hsla?)\(\)|-?\d*\.?\d+(?:px|em|rem|%|pt|vh|vw|s|ms|deg)?")
+
+
 def _is_style_value_string(content: str) -> bool:
-    """True for a short quoted CSS value such as ``'#fff'`` or
-    ``'1px solid #fff'``, as opposed to documentation prose or markup."""
+    """True for a quoted CSS value such as ``'#fff'`` or ``'1px solid #fff'``.
+
+    Every token must be a colour, a number with an optional unit, or a CSS
+    keyword, so prose such as ``"Use #fff for contrast"`` is not a style value.
+    """
     content = content.strip("'\"` \t")
-    if any(ch in content for ch in "{}<>=;"):
-        return False
     outside_parens = re.sub(r"\([^)]*\)", "()", content)
-    return len(outside_parens.split()) <= 5 and not re.search(r"[.,:]\s", outside_parens)
+    tokens = outside_parens.replace(",", " ").split()
+    return bool(tokens) and all(
+        token.lower() in _CSS_VALUE_WORDS or _CSS_VALUE_TOKEN.fullmatch(token)
+        for token in tokens)
 
 
 def _duplicate_subtree_findings(text: str) -> list[tuple[int, int, str]]:

@@ -143,6 +143,7 @@ export function Docs() {
         report = self._report(
             """export function Help() {
   const help = "style={{color: '#fff'}} sets a literal like rgb(1, 2, 3) or #abc";
+  const note = "Use #fff for contrast";
   return <p data-pulp-action="help">{help}</p>;
 }
 """
