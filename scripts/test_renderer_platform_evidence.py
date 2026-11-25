@@ -28,7 +28,8 @@ import check_renderer_lock as drift  # noqa: E402
 import renderer_platform_evidence as evidence  # noqa: E402
 
 DATA = ROOT / "scripts" / "testdata" / "renderer_platform"
-COPIED = (drift.LOCK, *drift.READERS, *drift.RECORDS, *drift.DOCUMENTS, evidence.PLATFORM_FILE)
+COPIED = (drift.LOCK, *drift.READERS, *drift.RECORDS, *drift.DOCUMENTS, evidence.PLATFORM_FILE,
+          evidence.EVIDENCE)
 RELEASE = "chrome/m158-attested.2"
 KNOWN_BAD = ("android-x86_64 archive_root build/android-gpu/lib/Release repeats android-arm64-v8a",
              "windows-arm64 skunicode_icu.lib digest is 59413d2fa4eddb314ed20529992c8d22c2a503b1d58f4199298ca5d4842d538c",
@@ -76,6 +77,8 @@ class RowsAgainstEvidenceTest(unittest.TestCase):
     def install(self, rows: dict | None = None, pinned: dict | None = None) -> None:
         lock_path = self.root / drift.LOCK
         lock = json.loads((ROOT / drift.LOCK).read_text(encoding="utf-8"))
+        for key in [k for k in lock["platforms"] if k != drift.PLATFORM]:
+            del lock["platforms"][key]
         lock["platforms"].update(self.corrected() if rows is None else rows)
         lock_path.write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
         target = self.root / evidence.EVIDENCE
