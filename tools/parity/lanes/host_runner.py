@@ -281,7 +281,7 @@ def cmd_identity(a: argparse.Namespace) -> int:
         fonts = {}
         for b in paths:
             for f in sorted(b.rglob("*")):
-                if f.suffix.lower() in (".ttf", ".otf", ".ttc", ".woff", ".woff2"):
+                if f.suffix.lower() in (".ttf", ".otf", ".ttc", ".woff2"):
                     fonts[f"{b.name}/{f.relative_to(b).as_posix()}"] = sha256_file(f)
         print(json.dumps({"bundled_fonts": fonts, "system_font_source":
                           f"CoreText system fonts, macOS {platform.mac_ver()[0]} {platform.machine()}"},

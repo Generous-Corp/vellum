@@ -1,6 +1,7 @@
 // widget_bridge/storage_assets_api.cpp - storage and asset-loading registrations for WidgetBridge.
 
 #include <vellum/canvas/bundled_fonts.hpp>
+#include <vellum/view/font_container.hpp>
 #include <vellum/view/widget_bridge.hpp>
 #include <vellum/view/asset_manager.hpp>
 #include <vellum/runtime/base64.hpp>
@@ -17,14 +18,111 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace vellum::view {
 
 namespace {
+
+// The @font-face weight range a register call passes as its optional third
+// and fourth arguments: finite weights clamped to CSS's [1, 1000], or nothing
+// when the call names none or passes a non-finite weight.
+std::optional<std::pair<int, int>>
+declared_font_weights(const choc::javascript::ArgumentList& args) {
+    if (args.size() < 3)
+        return std::nullopt;
+    const double low = args.get<double>(2, 400.0);
+    const double high = args.size() >= 4 ? args.get<double>(3, low) : low;
+    if (!std::isfinite(low) || !std::isfinite(high))
+        return std::nullopt;
+    const auto css = [](double w) { return static_cast<int>(std::clamp(w, 1.0, 1000.0)); };
+    return std::minmax(css(low), css(high));
+}
+
+// A script can call the font API in a loop, so its diagnostics are capped.
+bool sealed_font_diagnostic_allowed() {
+    static std::atomic<int> reported{0};
+    return reported.fetch_add(1, std::memory_order_relaxed) < 32;
+}
+
+// Which panel owns each family registered from sealed bytes, keyed by the
+// bridge's storage identity so every instance and reload of one panel shares
+// its families.
+struct SealedFamilyOwners {
+    std::mutex mutex;
+    std::unordered_map<std::string, std::string> owner_by_family;
+    std::size_t registration_count = 0;
+    std::size_t registered_bytes = 0;
+};
+
+// Font registrations retain native parser/typeface state for the process
+// lifetime. Keep an empty-capability script from exhausting that state by
+// registering an unbounded number of distinct family names.
+constexpr std::size_t kMaxSealedFontRegistrations = 256;
+constexpr std::size_t kMaxSealedFontBytes = 128u * 1024u * 1024u;
+
+SealedFamilyOwners& sealed_family_owners() {
+    static SealedFamilyOwners owners;
+    return owners;
+}
+
+std::string canonical_sealed_family(std::string family) {
+    for (auto& c : family)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return family;
+}
+
+// Registers a font sealed into the panel straight from its bytes. The bytes
+// are size- and signature-checked before the font parser sees them, and no
+// path is ever consulted, so a face that fails to parse cannot fall through
+// to a file lookup. Family registration is process-global, so a panel may not
+// rebind a family that host code or another panel already registered; it may
+// add faces to its own. Only the weight range is scoped to this bridge.
+bool register_sealed_font(WidgetBridge& self, const WidgetBridge::EmbeddedAsset& embedded,
+                          const std::string& family,
+                          const std::optional<std::pair<int, int>>& declared) {
+    auto& owners = sealed_family_owners();
+    const auto owner = self.sealed_font_owner();
+    const auto family_key = canonical_sealed_family(family);
+    {
+        std::lock_guard lock(owners.mutex);
+        const auto it = owners.owner_by_family.find(family_key);
+        const bool ours = it != owners.owner_by_family.end() && it->second == owner;
+        const bool family_registered = vellum::canvas::is_font_registered(family_key) ||
+                                       vellum::canvas::is_font_registered(family);
+        if (!ours &&
+            (it != owners.owner_by_family.end() || family_registered)) {
+            if (sealed_font_diagnostic_allowed())
+                vellum::runtime::log_warn("WidgetBridge: registerEmbeddedFont refused '{}': the "
+                                          "family is already registered by another owner",
+                                          family);
+            return false;
+        }
+        if (owners.registration_count >= kMaxSealedFontRegistrations ||
+            embedded.size > kMaxSealedFontBytes -
+                                 std::min(owners.registered_bytes, kMaxSealedFontBytes)) {
+            if (sealed_font_diagnostic_allowed())
+                vellum::runtime::log_warn("WidgetBridge: registerEmbeddedFont refused '{}': "
+                                          "process sealed-font quota exceeded",
+                                          family);
+            return false;
+        }
+        if (!vellum::view::register_font_container(embedded.data, embedded.size, family))
+            return false;
+        owners.owner_by_family.emplace(family_key, owner);
+        ++owners.registration_count;
+        owners.registered_bytes += embedded.size;
+    }
+    if (declared)
+        vellum::canvas::declare_font_face_weight_range(family_key, declared->first, declared->second,
+                                                       self.font_weight_scope());
+    return true;
+}
 
 std::string strip_leading_slashes(std::string path) {
     while (!path.empty() && (path.front() == '/' || path.front() == '\\')) {
@@ -58,7 +156,6 @@ std::string guess_bridge_asset_mime_type(const std::string& path) {
     if (ext == ".gif") return "image/gif";
     if (ext == ".webp") return "image/webp";
     if (ext == ".woff2") return "font/woff2";
-    if (ext == ".woff") return "font/woff";
     if (ext == ".ttf") return "font/ttf";
     return "application/octet-stream";
 }
@@ -331,6 +428,11 @@ std::string WidgetBridge::storage_identity() const {
     return script_base_dir_.generic_string();
 }
 
+std::string WidgetBridge::sealed_font_owner() const {
+    const auto stored = storage_identity();
+    return stored.empty() ? "anonymous/" + anonymous_font_owner_ : "storage/" + stored;
+}
+
 std::string WidgetBridge::font_weight_scope() const {
     return "widget-bridge/" + std::to_string(reinterpret_cast<std::uintptr_t>(this));
 }
@@ -506,44 +608,48 @@ void BridgeRegistrars::register_font_assets_api(WidgetBridge& self) {
         auto family = args.get<std::string>(0, "");
         auto path = args.get<std::string>(1, "");
         if (family.empty() || path.empty()) return choc::value::createBool(false);
-        // A range is recorded only once the face is registered, and only from
-        // finite weights clamped to CSS's [1, 1000]; a bad weight declares nothing.
-        std::optional<std::pair<int, int>> declared;
-        if (args.size() >= 3) {
-            const double low = args.get<double>(2, 400.0);
-            const double high = args.size() >= 4 ? args.get<double>(3, low) : low;
-            if (std::isfinite(low) && std::isfinite(high)) {
-                const auto css = [](double w) {
-                    return static_cast<int>(std::clamp(w, 1.0, 1000.0));
-                };
-                declared = std::minmax(css(low), css(high));
-            }
-        }
-        const auto declare = [&] {
-            if (declared)
-                vellum::canvas::declare_font_face_weight_range(
-                    family, declared->first, declared->second, self.font_weight_scope());
-        };
-        if (const auto* embedded = self.embedded_asset(path)) {
-            // The face is already in memory; hand it to the font registry
-            // under a name only this bridge's embedded set can produce.
-            const std::string key =
-                "pulp-ui-embed/" + self.storage_identity() + "/" + embedded->name;
-            auto& assets = AssetManager::instance();
-            assets.register_embedded(key, embedded->data, embedded->size);
-            assets.register_font_family(family, key);
-            declare();
-            return choc::value::createBool(true);
-        }
+        const auto declared = declared_font_weights(args);
+        if (const auto* embedded = self.embedded_asset(path))
+            return choc::value::createBool(register_sealed_font(self, *embedded, family, declared));
         path = self.resolve_script_relative(path);
         if (path.empty() || !std::filesystem::exists(path))
             return choc::value::createBool(false);
         // register_font_family decodes the file + registers the typeface with
         // the canvas font registry (Skia on GPU builds; no-op stub otherwise).
         AssetManager::instance().register_font_family(family, path);
-        declare();
+        if (declared) {
+            const auto family_key = canonical_sealed_family(family);
+            vellum::canvas::declare_font_face_weight_range(
+                family_key, declared->first, declared->second, self.font_weight_scope());
+        }
         return choc::value::createBool(true);
     });
+}
+
+void BridgeRegistrars::register_embedded_font_api(WidgetBridge& self) {
+    BridgeApiContext api{self.engine_};
+    // registerEmbeddedFont(family, assetName, weightMin?, weightMax?) registers
+    // only bytes already sealed into this panel, named by their script-relative
+    // path. It never reads a path, URI, asset root or the working directory,
+    // so it needs no capability grant.
+    register_bridge_function(
+        api, "registerEmbeddedFont", [&self](choc::javascript::ArgumentList args) {
+            const auto family = args.get<std::string>(0, "");
+            const auto name = args.get<std::string>(1, "");
+            if (family.empty() || name.empty())
+                return choc::value::createBool(false);
+            const auto* embedded = self.embedded_asset(name);
+            if (!embedded) {
+                if (sealed_font_diagnostic_allowed())
+                    vellum::runtime::log_warn("WidgetBridge: registerEmbeddedFont('{}', '{}'): no "
+                                              "sealed panel asset has that name; the family is "
+                                              "not registered",
+                                              family, name);
+                return choc::value::createBool(false);
+            }
+            return choc::value::createBool(
+                register_sealed_font(self, *embedded, family, declared_font_weights(args)));
+        });
 }
 
 } // namespace vellum::view

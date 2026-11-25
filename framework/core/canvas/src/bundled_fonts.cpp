@@ -31,6 +31,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -71,6 +72,7 @@
 
 #include "bundled_font_blobs.hpp"
 #include "coretext_text.hpp"
+#include "font_validation.hpp"
 
 namespace vellum::canvas {
 
@@ -282,6 +284,7 @@ namespace {
 // family so match_registered_typeface can pick the best style match instead of
 // letting a later face silently replace an earlier one.
 struct RegisteredEntry {
+    std::string display_family;
     std::vector<sk_sp<SkTypeface>> faces;
     // The bytes each face was built from, index-aligned with `faces`, so a
     // re-registration of identical bytes can be recognised by CONTENT.
@@ -296,6 +299,17 @@ std::mutex& registered_mutex() {
 std::unordered_map<std::string, RegisteredEntry>& registered_fonts() {
     static std::unordered_map<std::string, RegisteredEntry> map;
     return map;
+}
+
+std::unordered_set<std::string>& registered_family_keys() {
+    static std::unordered_set<std::string> keys;
+    return keys;
+}
+
+std::string canonical_family(std::string family) {
+    for (auto& c : family)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return family;
 }
 
 // Monotonic counter exposed via `font_registration_generation()`. Every
@@ -376,7 +390,8 @@ sk_sp<SkTypeface> match_registered_typeface(const std::string& family,
     if (family.empty()) return nullptr;
     std::lock_guard<std::mutex> guard(registered_mutex());
     auto& map = registered_fonts();
-    auto it = map.find(family);
+    const auto family_key = canonical_family(family);
+    auto it = map.find(family_key);
     if (it == map.end() || it->second.faces.empty()) return nullptr;
     if (auto match = best_style_match(it->second.faces, style))
         return match;
@@ -384,7 +399,7 @@ sk_sp<SkTypeface> match_registered_typeface(const std::string& family,
     // CSS picks its nearest face and synthesizes the rest. Without this the
     // resolver measured a 700 run in a system face while the paragraph painted
     // the page's Regular face emboldened, and the text wrapped where it did not.
-    if (!has_declared_font_face_weights(family))
+    if (!has_declared_font_face_weights(family_key))
         return nullptr;
     sk_sp<SkTypeface> nearest;
     int nearest_gap = std::numeric_limits<int>::max();
@@ -408,7 +423,7 @@ std::vector<RegisteredTypeface> registered_typefaces_snapshot() {
     const auto& map = registered_fonts();
     for (const auto& [family, entry] : map) {
         for (const auto& f : entry.faces) {
-            if (f) out.push_back({family, f});
+            if (f) out.push_back({entry.display_family.empty() ? family : entry.display_family, f});
         }
     }
     return out;
@@ -438,11 +453,13 @@ bool register_font(const std::uint8_t* data, std::size_t size,
     if (!family_override.empty()) {
         std::lock_guard<std::mutex> guard(registered_mutex());
         const auto& map = registered_fonts();
-        if (const auto it = map.find(family_override); it != map.end()) {
+        if (const auto it = map.find(canonical_family(family_override)); it != map.end()) {
             for (const auto& source : it->second.sources) {
                 if (source && source->size() == size
-                    && std::memcmp(source->data(), data, size) == 0)
+                    && std::memcmp(source->data(), data, size) == 0) {
+                    registered_family_keys().insert(canonical_family(family_override));
                     return true;
+                }
             }
         }
     }
@@ -464,6 +481,8 @@ bool register_font(const std::uint8_t* data, std::size_t size,
         // refuse rather than insert under "".
         return false;
     }
+    const auto display_family = family;
+    family = canonical_family(std::move(family));
 
     {
         std::lock_guard<std::mutex> guard(registered_mutex());
@@ -474,6 +493,8 @@ bool register_font(const std::uint8_t* data, std::size_t size,
         // Regular + Italic + Bold trio is the normal case for "drop the font
         // family folder in").
         auto& entry = registered_fonts()[family];
+        if (entry.display_family.empty())
+            entry.display_family = display_family;
         for (std::size_t i = 0; i < entry.faces.size(); ++i) {
             if (entry.faces[i].get() == face.get()) return true;
             // Same bytes under a family resolved from the face's own name
@@ -485,6 +506,7 @@ bool register_font(const std::uint8_t* data, std::size_t size,
         }
         entry.faces.push_back(std::move(face));
         entry.sources.push_back(std::move(sk_data));
+        registered_family_keys().insert(canonical_family(family));
     }
 #if defined(__APPLE__)
     // The CoreGraphics canvas paints and measures through CoreText, which
@@ -669,8 +691,7 @@ FontProbe probe_font_glyph(const std::string& family,
 bool is_font_registered(const std::string& family) {
     if (family.empty()) return false;
     std::lock_guard<std::mutex> guard(registered_mutex());
-    auto& map = registered_fonts();
-    return map.find(family) != map.end();
+    return registered_family_keys().count(canonical_family(family)) != 0;
 }
 
 // WOFF2 runtime decoding.
@@ -767,95 +788,8 @@ void bump_font_registration_generation() noexcept {
 // further; this structural pass rejects the practical attack surface a plugin
 // developer would actually drop into `register_font`.
 
-namespace {
-
-inline std::uint16_t read_u16_be(const std::uint8_t* p) noexcept {
-    return static_cast<std::uint16_t>((p[0] << 8) | p[1]);
-}
-inline std::uint32_t read_u32_be(const std::uint8_t* p) noexcept {
-    return (static_cast<std::uint32_t>(p[0]) << 24)
-         | (static_cast<std::uint32_t>(p[1]) << 16)
-         | (static_cast<std::uint32_t>(p[2]) <<  8)
-         |  static_cast<std::uint32_t>(p[3]);
-}
-
-inline bool is_valid_sfnt_magic(std::uint32_t magic) noexcept {
-    return magic == 0x00010000u   // TrueType
-        || magic == 0x4F54544Fu   // 'OTTO' — OpenType / CFF
-        || magic == 0x74727565u   // 'true' — old Mac TrueType
-        || magic == 0x74797031u;  // 'typ1' — PostScript Type 1
-}
-
-} // namespace
-
 bool validate_font_bytes(const std::uint8_t* data, std::size_t size) {
-    if (!data) return false;
-    // sfnt header is 12 bytes (magic + numTables + searchRange +
-    // entrySelector + rangeShift) — anything shorter is malformed.
-    if (size < 12) return false;
-
-    const std::uint32_t magic = read_u32_be(data);
-    if (!is_valid_sfnt_magic(magic)) return false;
-
-    const std::uint16_t num_tables = read_u16_be(data + 4);
-    if (num_tables == 0) return false;
-
-    // Table directory: each entry is 16 bytes (tag, checksum, offset,
-    // length). Verify the directory itself fits in the file.
-    const std::size_t dir_end = 12u + 16u * static_cast<std::size_t>(num_tables);
-    if (dir_end > size) return false;
-
-    // Required tables — names taken from the OpenType spec, presence
-    // verified by tag scan. Absent any of these, Skia's downstream
-    // parse will at best produce a degenerate typeface; reject early.
-    constexpr std::uint32_t kHead = 0x68656164u; // 'head'
-    constexpr std::uint32_t kName = 0x6E616D65u; // 'name'
-    constexpr std::uint32_t kCmap = 0x636D6170u; // 'cmap'
-    constexpr std::uint32_t kMaxp = 0x6D617870u; // 'maxp'
-    // Presence is not enough: a malformed font can list required tables with
-    // length=0 and still pass. Enforce minimum lengths derived from the
-    // OpenType spec.
-    //   head: 54 (full table)
-    //   name: 6  (numNameRecords + storageOffset + format)
-    //   cmap: 4  (version + numTables)
-    //   maxp: 6  (version + numGlyphs)
-    bool has_head = false, has_name = false, has_cmap = false, has_maxp = false;
-    std::uint32_t head_offset = 0, head_length = 0;
-
-    for (std::uint16_t i = 0; i < num_tables; ++i) {
-        const std::uint8_t* entry = data + 12 + 16 * i;
-        const std::uint32_t tag    = read_u32_be(entry);
-        const std::uint32_t offset = read_u32_be(entry + 8);
-        const std::uint32_t length = read_u32_be(entry + 12);
-        // Out-of-bounds or overflow.
-        if (offset > size) return false;
-        if (length > size - offset) return false;
-        if (tag == kHead) {
-            if (length < 54) return false;
-            has_head = true; head_offset = offset; head_length = length;
-        } else if (tag == kName) {
-            if (length < 6) return false;
-            has_name = true;
-        } else if (tag == kCmap) {
-            if (length < 4) return false;
-            has_cmap = true;
-        } else if (tag == kMaxp) {
-            if (length < 6) return false;
-            has_maxp = true;
-        }
-    }
-    if (!has_head || !has_name || !has_cmap || !has_maxp) return false;
-
-    // The head table starts with a 4-byte major.minor version and a
-    // 4-byte font revision, followed by the checksum-adjustment field
-    // and the magic number 0x5F0F3CF5. A spec-conformant head is at
-    // least 54 bytes; reject anything smaller as a structural fail.
-    if (head_length < 54) return false;
-    const std::uint8_t* head = data + head_offset;
-    const std::uint32_t head_magic = read_u32_be(head + 12);
-    if (head_magic != 0x5F0F3CF5u) return false;
-
-    return true;
+    return detail::structurally_validate_sfnt(data, size);
 }
 
 } // namespace vellum::canvas
