@@ -62,6 +62,7 @@ function snapshot() {
         gestures: session.gestures,
         calls: calls.map(call => ({...call})),
         value: session.value(0),
+        devicePixelRatio: window.devicePixelRatio,
         canvas: canvas ? {
             width: canvas.width, height: canvas.height,
             left: rect.left, top: rect.top, cssWidth: rect.width, cssHeight: rect.height,

@@ -230,13 +230,14 @@ def verify(cdp: FixtureCdp, capture_dir: Path) -> dict[str, Any]:
           and resized["stats"]["lastFrame"]["cssWidth"] == 480,
           "resize-css", {"size": size, "canvas": resized["canvas"], "stats": resized["stats"]})
     cdp.command("Emulation.setDeviceMetricsOverride", {
-        "width": 800, "height": 600, "deviceScaleFactor": 2, "mobile": False})
+        "width": 820, "height": 620, "deviceScaleFactor": 2, "mobile": False})
     dense = cdp.fixture("settle()")
     check(dense["size"]["scale"] == 2 and dense["canvas"]["width"] == 960
           and dense["canvas"]["height"] == 600
           and dense["stats"]["frames"] > resized["stats"]["frames"]
           and dense["stats"]["lastFrame"]["scale"] == 2,
-          "resize-device-pixels", {"size": dense["size"], "canvas": dense["canvas"]})
+          "resize-device-pixels", {"size": dense["size"], "canvas": dense["canvas"],
+                                   "devicePixelRatio": dense["devicePixelRatio"]})
 
     bridges = cdp.fixture("exerciseBridges()")
     check(bridges == {
@@ -269,8 +270,11 @@ def run(chrome: str, core_root: Path, capture_dir: Path, negative_control: bool)
     files = stage(core_root, negative_control)
     with tempfile.TemporaryDirectory(prefix="vellum-editor-chrome-") as profile:
         os.chmod(profile, 0o700)
+        # chrome-headless-shell is headless by construction and rejects the
+        # full browser's headless mode flag.
+        mode = [] if Path(chrome).name == "chrome-headless-shell" else ["--headless=new"]
         process = subprocess.Popen([
-            chrome, "--headless=new", "--disable-gpu-sandbox", "--no-first-run",
+            chrome, *mode, "--disable-gpu-sandbox", "--no-first-run",
             "--disable-background-networking", "--disable-crash-reporter", "--mute-audio",
             *CdpAdmission.chrome_launch_arguments(), "--window-size=800,600",
             f"--user-data-dir={profile}", "about:blank",

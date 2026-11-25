@@ -124,7 +124,11 @@ export async function createEditorSession({container, adapter, view, createCore}
         size = next;
         stats.resizes += 1;
         bounds = view.layout(size.cssWidth, size.cssHeight);
-        scheduleRepaint();
+        // The observer runs after layout and before paint, so drawing now
+        // shows the new size in this frame instead of stretching the old one.
+        if (frameRequest) window.cancelAnimationFrame(frameRequest);
+        frameRequest = 0;
+        paint();
     }
 
     function scheduleRepaint() {
@@ -278,6 +282,23 @@ export async function createEditorSession({container, adapter, view, createCore}
     } catch {
         observer.observe(canvas);
     }
+    // A device-pixel-ratio change with no CSS size change does not always
+    // reach the observer: headless Chrome reports an emulated ratio change
+    // only as a window resize, and a monitor or zoom change in a desktop
+    // browser arrives as a resolution query change. Both re-measure. Each
+    // query matches one ratio and is re-armed for the next.
+    let scaleQuery = null;
+    function watchScale() {
+        scaleQuery?.removeEventListener('change', onScaleChange);
+        scaleQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+        scaleQuery.addEventListener('change', onScaleChange);
+    }
+    function onScaleChange() {
+        applySize(measureElement());
+        watchScale();
+    }
+    watchScale();
+    window.addEventListener('resize', onScaleChange);
     let fileRequest = null;
 
     const session = {
@@ -367,6 +388,8 @@ export async function createEditorSession({container, adapter, view, createCore}
             if (frameRequest) window.cancelAnimationFrame(frameRequest);
             frameRequest = 0;
             observer.disconnect();
+            scaleQuery.removeEventListener('change', onScaleChange);
+            window.removeEventListener('resize', onScaleChange);
             for (const [type, listener] of Object.entries(listeners)) {
                 canvas.removeEventListener(type, listener);
             }
