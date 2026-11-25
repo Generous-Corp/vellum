@@ -754,6 +754,17 @@ if(VELLUM_BUILD_TESTS)
                 "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
                 "-DTEST_CONFIG=$<CONFIG>"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunInstallConsumer.cmake")
+        # Build-time script bytecode through the installed helper, generator
+        # and encoder, registered with the installed view-script unit.
+        add_test(NAME vellum.mirror-js-bytecode-consumer
+            COMMAND "${CMAKE_COMMAND}"
+                "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                "-DVELLUM_INSTALL_CONSUMER_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tools/mirror/js-bytecode-consumer"
+                "-DVELLUM_INSTALL_CONSUMER_WORK=mirror-js-bytecode-consumer-test"
+                "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
+                "-DTEST_CONFIG=$<CONFIG>"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunInstallConsumer.cmake")
         # Behavior tests of the framework units (ctest label `framework`).
         add_subdirectory(tools/framework-tests)
         if(TARGET yogacore)
