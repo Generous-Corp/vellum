@@ -10,6 +10,7 @@
 // `bundled_fonts.cpp` when Skia is linked.
 
 #include <vellum/canvas/bundled_fonts.hpp>
+#include "font_validation.hpp"
 
 #if !defined(PULP_HAS_SKIA) && defined(__APPLE__)
 #include "coretext_text.hpp"
@@ -656,6 +657,10 @@ std::atomic<std::uint64_t>& registration_generation() {
 } // namespace
 
 bool register_font(const std::uint8_t* data, std::size_t size, const std::string& family_override) {
+    // CoreText is a parser boundary too: reject malformed sfnt bytes before
+    // handing them to the platform registrar on non-Skia Apple builds.
+    if (!detail::structurally_validate_sfnt(data, size))
+        return false;
     if (detail::coretext_register_font(data, size, family_override).empty())
         return false;
     bump_font_registration_generation();
@@ -723,9 +728,7 @@ std::future<FontState> register_font_url(const std::string&,
 }
 
 bool validate_font_bytes(const std::uint8_t* data, std::size_t size) {
-    // Non-Skia builds accept any non-empty buffer; there is no font parser
-    // available on this lane.
-    return data != nullptr && size > 0;
+    return detail::structurally_validate_sfnt(data, size);
 }
 
 // Without Skia we cannot register a typeface even if a decoder is

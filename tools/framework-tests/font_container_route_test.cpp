@@ -42,13 +42,13 @@ FRAMEWORK_TEST(decoder_rejection_never_falls_through_to_platform_parser) {
     CHECK(decoder_calls == 2);
     CHECK(parser_calls == 0);
 
-    // Positive control: the same platform spy is reachable without a decoder.
+    // Without a decoder, compressed WOFF2 cannot reach the sfnt-only registrar.
     decoder_available = false;
-    CHECK(register_container(bytes, "fallback"));
-    CHECK(parser_calls == 1);
+    CHECK(!register_container(bytes, "no-decoder"));
+    CHECK(parser_calls == 0);
     bytes[16] = 0x7f;
     CHECK(!register_container(bytes, "oversized"));
-    CHECK(parser_calls == 1);
+    CHECK(parser_calls == 0);
 }
 
 int main() { return framework_test::run_all(); }

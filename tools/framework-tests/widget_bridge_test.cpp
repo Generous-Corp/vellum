@@ -194,6 +194,15 @@ FRAMEWORK_TEST(empty_grant_registers_only_sealed_embedded_fonts) {
     std::filesystem::remove_all(script_dir, ec);
 }
 
+FRAMEWORK_TEST(font_validation_rejects_signature_only_containers) {
+    const std::vector<std::uint8_t> signature_only{'O', 'T', 'T', 'O', 'n', 'o', 't',
+                                                    ' ', 'a', ' ', 'f', 'o', 'n', 't'};
+    CHECK(!vellum::canvas::validate_font_bytes(signature_only.data(), signature_only.size()));
+    CHECK(!vellum::canvas::validate_font_bytes(nullptr, 0));
+    const std::uint8_t woff[] = {'w', 'O', 'F', 'F'};
+    CHECK(!view::has_font_container_signature(woff, sizeof(woff)));
+}
+
 FRAMEWORK_TEST(sealed_woff2_that_the_decoder_rejects_is_refused) {
     CHECK(vellum::canvas::woff2_decoder_available());
     // A decompression bomb declares a face far over the decoder's bound; a
@@ -645,6 +654,14 @@ FRAMEWORK_TEST(codegen_registers_a_font_beside_the_script_by_its_sealed_name) {
     dotted.asset_manifest.assets[0].local_path = "./assets/0123abcd.ttf";
     CHECK(view::sealed_font_asset_name(dotted, dotted.font_family_assets[0]) ==
           "assets/0123abcd.ttf");
+
+    auto woff = ir;
+    woff.asset_manifest.assets[0].local_path = "assets/0123abcd.woff";
+    woff.font_family_assets[0].resolved_path = "assets/0123abcd.woff";
+    CHECK(view::sealed_font_asset_name(woff, woff.font_family_assets[0]).empty());
+    const auto woff_js = view::generate_pulp_js(woff);
+    CHECK(woff_js.find("registerEmbeddedFont") == std::string::npos);
+    CHECK(woff_js.find("registerFont") == std::string::npos);
 }
 
 FRAMEWORK_TEST(native_click_reaches_the_script_toggle_handler) {

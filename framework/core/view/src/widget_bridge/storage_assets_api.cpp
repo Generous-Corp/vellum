@@ -137,7 +137,6 @@ std::string guess_bridge_asset_mime_type(const std::string& path) {
     if (ext == ".gif") return "image/gif";
     if (ext == ".webp") return "image/webp";
     if (ext == ".woff2") return "font/woff2";
-    if (ext == ".woff") return "font/woff";
     if (ext == ".ttf") return "font/ttf";
     return "application/octet-stream";
 }

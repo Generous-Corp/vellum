@@ -3105,6 +3105,10 @@ std::string sealed_font_asset_name(const DesignIR& ir, const IRFontAsset& face) 
     const auto safe = [](const std::string& candidate) -> std::string {
         if (candidate.empty() || candidate.find("://") != std::string::npos) return {};
         const std::filesystem::path raw(candidate);
+        auto extension = raw.extension().string();
+        for (auto& c : extension)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (extension != ".ttf" && extension != ".otf" && extension != ".woff2") return {};
         for (const auto& part : raw) if (part == "..") return {};
         const auto normal = raw.lexically_normal();
         if (!vellum::runtime::is_safe_relative_path(normal)) return {};
@@ -3182,7 +3186,8 @@ std::string generate_pulp_js(const DesignIR& ir, const CodeGenOptions& opts) {
         for (const auto& fa : ir.font_family_assets) {
             if (fa.family.empty()) continue;
             const auto sealed = sealed_font_asset_name(ir, fa);
-            if (sealed.empty() && fa.resolved_path.empty()) continue;
+            const auto resolved = std::filesystem::path(fa.resolved_path);
+            if (sealed.empty() && (!resolved.is_absolute() || fa.resolved_path.empty())) continue;
             if (!any && opts.include_comments) ss << "// Bundled fonts\n";
             any = true;
             const auto weight_max = fa.weight_max > 0 ? fa.weight_max : fa.weight;

@@ -119,7 +119,7 @@ bool is_panel_font_file(const std::filesystem::path& path) {
     auto ext = path.extension().string();
     for (auto& c : ext)
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return ext == ".ttf" || ext == ".otf" || ext == ".woff" || ext == ".woff2";
+    return ext == ".ttf" || ext == ".otf" || ext == ".woff2";
 }
 
 // A ParamModel that reads through to another and drops every write: values,
