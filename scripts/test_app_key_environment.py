@@ -20,13 +20,6 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 SECRET = "secrets.SHIPYARD_APP_PRIVATE_KEY"
 MAIN_REF_EVENTS = {"push", "workflow_dispatch", "schedule", "repository_dispatch", "workflow_run"}
 
-# version-at-land.yml is a release workflow: check_release_policy.py's
-# RUN_ALLOWLIST pins its job settings and the base branch's copy judges a pull
-# request, so the environment reaches it in two owner-reviewed pull requests
-# (add the variant, then change the workflow). Until then it reads the
-# repository-level key; remove this entry with that change.
-PENDING = {("version-at-land.yml", "push")}
-
 
 def jobs(text: str) -> dict[str, str]:
     body = text.split("\njobs:\n", 1)[1]
@@ -60,16 +53,13 @@ class AppKeyEnvironment(unittest.TestCase):
     def test_every_reader_declares_app_key(self) -> None:
         offenders = []
         for workflow, job, text, _ in readers():
-            declared = re.search(r"(?m)^    environment: app-key$", text) is not None
-            if declared == ((workflow, job) in PENDING):
+            if re.search(r"(?m)^    environment: app-key$", text) is None:
                 offenders.append(f"{workflow}:{job}")
         self.assertEqual(offenders, [])
 
     def test_app_key_workflows_start_only_from_main_refs(self) -> None:
         offenders = []
-        for workflow, job, job_text, text in readers():
-            if (workflow, job) in PENDING:
-                continue
+        for workflow, _, _, text in readers():
             extra = triggers(text) - MAIN_REF_EVENTS
             if extra:
                 offenders.append(f"{workflow}: {sorted(extra)}")

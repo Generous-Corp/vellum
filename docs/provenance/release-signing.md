@@ -300,8 +300,10 @@ promotion attestation and prove full-matrix parity.
 - **Only the release App can create a release tag.** `create-release-tags` refuses `v*` tag creation to everyone but
   integration 3878000 ("Shipyard Local"), the App `release-tag.yml` mints from `RELEASE_APP_ID`. The repository secret
   `SHIPYARD_APP_PRIVATE_KEY`, which the observatory receiver and version-at-land use, mints tokens for the same App, so
-  a workflow holding it could create a `v*` tag. It cannot sign one, but a stray tag would burn that version name. The
-  fix is the owner's: a separate App for release tags, or that key in a `main`-only environment.
+  a workflow holding it could create a `v*` tag. It cannot sign one, but a stray tag would burn that version name.
+  Every job that reads that key declares the `app-key` environment, which admits only runs on `main`, and
+  `scripts/test_app_key_environment.py` fails when one does not. A repository-level copy of the secret still reaches
+  a workflow that names no environment; deleting it is an optional later hardening step.
 
 Owner authorization (owner decisions in the planning repository), release signing (this key) and ordinary commit
 signing (each host's own key) are three separate keys.

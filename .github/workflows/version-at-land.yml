@@ -14,7 +14,8 @@ name: Version at land
 # outputs are checked against strict patterns, and the bump travels as a patch
 # artifact. `push` checks out the planned main commit, applies the patch with
 # hooks off, and mints the App token only for git and gh, with a clean
-# environment. It never runs repository code.
+# environment. It never runs repository code. It reads the App key from
+# the `app-key` environment, which admits only runs on main.
 on:
   push:
     branches: [main]
@@ -153,6 +154,7 @@ jobs:
     name: push
     needs: plan
     if: needs.plan.outputs.action == 'bump' && needs.plan.outputs.current != 'true'
+    environment: app-key
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
