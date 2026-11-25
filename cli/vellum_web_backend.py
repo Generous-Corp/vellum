@@ -685,6 +685,59 @@ def _localize_snapshot_data_urls(snapshot: dict[str, Any]) -> tuple[dict[str, di
     return records, observed_urls
 
 
+def _localize_canvas_screenshots(
+    captures: dict[int, dict[str, Any]] | None,
+    records: dict[str, dict[str, Any]],
+) -> dict[int, dict[str, Any]]:
+    """Turn captured canvas PNGs into the same bounded asset records as data URLs."""
+    localized: dict[int, dict[str, Any]] = {}
+    if captures is None:
+        return localized
+    if len(captures) > MAX_CAPTURE_ASSETS:
+        raise BackendFailure("captured canvas assets exceed the bounded count", status="test_failed")
+    for node_index, screenshot in captures.items():
+        if not isinstance(node_index, int) or node_index < 0 or not isinstance(screenshot, dict):
+            raise BackendFailure("captured canvas asset is malformed", status="test_failed")
+        encoded = screenshot.get("data")
+        if not isinstance(encoded, str) or screenshot.get("mimeType") != "image/png":
+            raise BackendFailure("captured canvas asset is not a PNG", status="test_failed")
+        try:
+            payload = base64.b64decode(encoded, validate=True)
+        except (ValueError, base64.binascii.Error) as error:
+            raise BackendFailure("captured canvas asset is not valid base64", status="test_failed") from error
+        if not payload.startswith(PNG_SIGNATURE) or len(payload) > MAX_CAPTURE_ASSET_BYTES:
+            raise BackendFailure("captured canvas asset is oversized or not a PNG", status="test_failed")
+        digest = hashlib.sha256(payload).hexdigest()
+        content_hash = f"sha256:{digest}"
+        record = records.get(content_hash)
+        if record is None:
+            uri = f"assets/{digest}.png"
+            record = {
+                "asset": {
+                    "id": f"data-{digest[:12]}", "contentHash": content_hash,
+                    "uri": uri, "mimeType": "image/png", "byteLength": len(payload),
+                },
+                "bytes": encoded, "raw": None,
+            }
+            records[content_hash] = record
+        localized[node_index] = record["asset"]
+    return localized
+
+
+def _pair_canvas_captures(
+    canvas_indices: list[int], pixels: list[dict[str, Any] | None],
+) -> dict[int, dict[str, Any]]:
+    """Pair DOMSnapshot canvas nodes with their pixels, in document order.
+
+    The page query sees only light-DOM canvases, while the snapshot also lists
+    canvases inside shadow roots. When the counts differ the pairing is
+    ambiguous, so no canvas is captured and each stays a plain view.
+    """
+    if len(pixels) != len(canvas_indices):
+        return {}
+    return {index: capture for index, capture in zip(canvas_indices, pixels) if capture is not None}
+
+
 def _replace_data_urls(value: str, records: dict[str, dict[str, Any]]) -> tuple[str, list[str]]:
     references: list[str] = []
 
@@ -1056,6 +1109,7 @@ def _promote_page_background(root: dict[str, Any]) -> None:
 def lower_dom_snapshot(
     snapshot: dict[str, Any], *, settled_snapshot: dict[str, Any], screenshot: dict[str, Any],
     interaction_evidence: list[dict[str, Any]] | None = None,
+    canvas_captures: dict[int, dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     """Lower Chrome's bounded DOMSnapshot into the browser capture source model."""
     documents = snapshot.get("documents")
@@ -1072,6 +1126,7 @@ def lower_dom_snapshot(
     if not node_types or len(node_types) > MAX_CAPTURE_NODES:
         raise BackendFailure("DOMSnapshot node count is outside the bounded range", status="test_failed")
     records, observed_urls = _localize_snapshot_data_urls(snapshot)
+    canvas_assets = _localize_canvas_screenshots(canvas_captures, records)
     layout = document.get("layout")
     layout_indices = layout.get("nodeIndex") if isinstance(layout, dict) else None
     laid_out_nodes = (
@@ -1117,9 +1172,10 @@ def lower_dom_snapshot(
                 properties["assetRefs"] = sorted(set(refs))
         elif node_type == 3 and value:
             properties["domNodeIndex"] = index
+        canvas_asset = canvas_assets.get(index) if node_type == 1 and name.lower() == "canvas" else None
         raw: dict[str, Any] = {
             "sourceId": f"dom-{index}",
-            "kind": "text" if node_type == 3 else "view",
+            "kind": "image" if canvas_asset else ("text" if node_type == 3 else "view"),
             "name": name.lower() if name else ("Document" if node_type == 9 else "node"),
             "properties": properties,
             "children": [],
@@ -1139,6 +1195,11 @@ def lower_dom_snapshot(
                 raw.pop("sourceId", None)
             else:
                 raw["sourceId"] = f"dom-{index}"
+            if canvas_asset:
+                # Native image nodes name their pixels by content hash, the
+                # key the bundler and app host use for packaged PNGs.
+                properties["assetRefs"] = [canvas_asset["uri"]]
+                properties["image"] = {"source": canvas_asset["contentHash"], "fit": "fill"}
         source_nodes[index] = raw
         included.add(index)
     if isinstance(layout, dict):
@@ -1175,6 +1236,9 @@ def lower_dom_snapshot(
         raise BackendFailure("DOMSnapshot contained no lowerable nodes", status="test_failed")
     root_index = next((index for index in sorted(included) if node_types[index] == 9), min(included))
     tree_children: dict[int, list[int]] = {}
+    # A captured canvas paints its own pixels. Its fallback content is never
+    # rendered by the browser, and an image node takes no children.
+    inside_image: set[int] = set()
     for index in sorted(included):
         if index == root_index:
             continue
@@ -1183,6 +1247,9 @@ def lower_dom_snapshot(
             parent = parents[parent] if parent < len(parents) else -1
         if not isinstance(parent, int) or parent < 0 or parent == index:
             parent = root_index
+        if parent in inside_image or source_nodes[parent]["kind"] == "image":  # type: ignore[index]
+            inside_image.add(index)
+            continue
         source_nodes[parent]["children"].append(source_nodes[index])  # type: ignore[index]
         tree_children.setdefault(parent, []).append(index)
     _lower_layout_boxes(source_nodes, tree_children, root_index, boxes)
@@ -1326,6 +1393,25 @@ def run_chrome_interaction_capture(
                         settled_snapshot = client.settle_idle()
                         screenshot = client.capture_screenshot()
                         viewport = client.viewport()
+                        canvas_captures = {}
+                        capture_documents = settled_snapshot.get("documents", [])
+                        capture_document = capture_documents[0] if capture_documents else {}
+                        capture_nodes = capture_document.get("nodes", {})
+                        capture_types = capture_nodes.get("nodeType", [])
+                        capture_names = capture_nodes.get("nodeName", [])
+                        canvas_indices = []
+                        for node_index, node_type in enumerate(capture_types):
+                            if node_type != 1 or node_index >= len(capture_names):
+                                continue
+                            node_name = _snapshot_string(
+                                settled_snapshot, capture_names[node_index],
+                                f"nodeName[{node_index}]", allow_absent=True,
+                            ).lower()
+                            if node_name == "canvas":
+                                canvas_indices.append(node_index)
+                        canvas_captures = _pair_canvas_captures(
+                            canvas_indices, client.capture_canvas_data_urls(),
+                        )
                     except CdpClientError as error:
                         raise BackendFailure(
                             f"Browser capture failed: {error}", status="test_failed",
@@ -1335,6 +1421,7 @@ def run_chrome_interaction_capture(
                         settled_snapshot=settled_snapshot,
                         screenshot=screenshot,
                         interaction_evidence=evidence,
+                        canvas_captures=canvas_captures,
                     )
                     browser = discovery.get("Browser")
                     if not isinstance(browser, str) or not browser:
