@@ -96,6 +96,14 @@ vellum_add_framework_test(native-materializer-part2
     SOURCES native_materializer_part2_test.cpp
     UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import Vellum::MirrorCanvas)
 
+vellum_add_framework_test(native-materializer-part3
+    SOURCES native_materializer_part3_test.cpp
+    UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import Vellum::MirrorCanvas)
+
+vellum_add_framework_test(native-materializer-part4
+    SOURCES native_materializer_part4_test.cpp
+    UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import Vellum::MirrorCanvas)
+
 vellum_add_framework_test(param-model-binding
     SOURCES param_model_binding_test.cpp
     UNITS Vellum::MirrorView_core Vellum::Value)
