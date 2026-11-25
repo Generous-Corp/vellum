@@ -42,8 +42,9 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "cli"))
 sys.path.insert(0, str(REPO / "cli/tests"))
 from live_browser import live_browser_skip_reason  # noqa: E402
-from vellum_cli import default_html_interaction_plan  # noqa: E402
+from vellum_cli import default_html_interaction_plan, write_localized_capture_assets  # noqa: E402
 from vellum_html_source import stage_html_source  # noqa: E402
+from vellum_png import RgbaImage, read_png  # noqa: E402
 from vellum_web_backend import BackendFailure, chrome_path  # noqa: E402
 from vellum_web_backend import run_chrome_interaction_capture  # noqa: E402
 sys.path.pop(0)
@@ -86,6 +87,8 @@ def capture_and_import(source: Path, work: Path, node: str) -> tuple[dict, Path]
         "preflightSchema": receipt["schema"], "dependencies": receipt["dependencies"],
         "entry": receipt["entry"],
     })
+    # As `vellum import` does, stage the captured assets beside the source.
+    write_localized_capture_assets(staging, envelope)
     envelope_path = work / "capture-envelope.json"
     envelope_path.write_text(json.dumps(envelope, sort_keys=True), encoding="utf-8")
     project = work / "project"
@@ -292,6 +295,91 @@ def stripped_layout(design: Path) -> Path:
     return target
 
 
+CANVAS_PAGE = """<!doctype html>
+<html><head><style>
+html, body { margin: 0; width: 800px; height: 600px; background: #2040c0; }
+canvas { position: absolute; left: 40px; top: 40px; width: 64px; height: 64px; }
+.column { position: absolute; top: 0; width: 200px; height: 600px; }
+</style></head><body>
+<div class="column" style="left: 200px; background: #ffffff"></div>
+<div class="column" style="left: 400px; background: #888888"></div>
+<div class="column" style="left: 600px; background: #444444"></div>
+<canvas id="plot" width="64" height="64">canvas fallback text</canvas>
+<script>
+const context = document.getElementById('plot').getContext('2d');
+context.fillStyle = '#ff0000';
+context.fillRect(0, 0, 32, 64);
+</script>
+</body></html>
+"""
+
+
+def check_canvas(host: str, node: str, work: Path) -> None:
+    """A canvas's own pixels survive HTML import, bundling and native paint.
+
+    The page paints the left half of a canvas red and leaves the right half
+    transparent over a blue page. Natively, the left half must be red and the
+    right half must show the page through it.
+    """
+    source = work / "canvas-page"
+    source.mkdir()
+    (source / "index.html").write_text(CANVAS_PAGE, encoding="utf-8")
+    _envelope, design = capture_and_import(source, work, node)
+
+    def canvases(document: dict) -> list[dict]:
+        found, pending = [], [document["root"]]
+        while pending:
+            current = pending.pop()
+            if current["properties"].get("tagName") == "canvas":
+                found.append(current)
+            pending.extend(current["children"])
+        return found
+
+    document = json.loads(design.read_text(encoding="utf-8"))
+    [canvas] = canvases(document)
+    hashes = {asset["contentHash"] for asset in document["assets"]}
+    assert canvas["kind"] == "image", canvas
+    assert canvas["properties"]["image"]["source"] in hashes, canvas
+    assert canvas["children"] == [], canvas
+
+    def paint(design_path: Path, name: str) -> tuple[RgbaImage, Path]:
+        directory = work / name
+        directory.mkdir()
+        entry = directory / "main.jsx"
+        entry.write_text(ENTRY, encoding="utf-8")
+        bundle = directory / "bundle.js"
+        run([node, str(BUILD), str(entry), str(bundle), str(design_path)], cwd=BUILD.parents[1])
+        capture = directory / "capture.png"
+        run([host, "--bundle", str(bundle), "--capture", str(capture)])
+        return read_png(capture), bundle
+
+    def pixel(image: RgbaImage, x: int, y: int) -> tuple[int, ...]:
+        scale = image.width // 800
+        offset = ((y * scale) * image.width + x * scale) * 4
+        return tuple(image.pixels[offset:offset + 4])
+
+    painted, bundle = paint(design, "canvas")
+    sidecar = json.loads(Path(f"{bundle}.images.json").read_text(encoding="utf-8"))
+    assert canvas["properties"]["image"]["source"] in sidecar, sorted(sidecar)
+    red, through, page = pixel(painted, 56, 72), pixel(painted, 88, 72), pixel(painted, 20, 300)
+    assert red == (255, 0, 0, 255), red
+    assert through == page, (through, page)
+    print(f"canvas: red={red} transparent-half={through} page={page}")
+
+    # Control: the same import with the canvas lowered as a plain element, as
+    # it was before canvas capture, paints no red where the canvas drew it.
+    canvas["kind"] = "view"
+    canvas["properties"].pop("image", None)
+    plain = design.with_name("plain.materialized.json")
+    plain.write_text(json.dumps(document), encoding="utf-8")
+    design.with_name("plain.bindings.json").write_text(
+        design.with_name("main.bindings.json").read_text(encoding="utf-8"), encoding="utf-8")
+    control, _ = paint(plain, "plain")
+    assert pixel(control, 56, 72) == pixel(control, 20, 300), pixel(control, 56, 72)
+    print(f"canvas: control without the captured image paints the page at the canvas "
+          f"({pixel(control, 56, 72)})")
+
+
 def report(name: str, result: dict) -> None:
     print(f"{name}: compared={result['compared']} maxDelta={result['maxDelta']} mismatches={len(result['mismatches'])} "
           f"origins={len(result['origins'])} missing={len(result['missing'])} "
@@ -302,6 +390,7 @@ def report(name: str, result: dict) -> None:
 def main() -> int:
     host = sys.argv[1]
     material_only = host == "--material-only"
+    canvas_only = "--canvas-only" in sys.argv[3:]
     node = sys.argv[2] if len(sys.argv) > 2 else "node"
     reason = live_browser_skip_reason()
     if reason is not None:
@@ -313,6 +402,10 @@ def main() -> int:
         except BackendFailure as error:
             print(f"SKIP: {error}")
             return 77
+    if canvas_only:
+        with tempfile.TemporaryDirectory(prefix="vellum-canvas-import-") as temporary:
+            check_canvas(host, node, Path(temporary))
+        return 0
     with tempfile.TemporaryDirectory(prefix="vellum-html-geometry-") as temporary:
         work = Path(temporary)
 

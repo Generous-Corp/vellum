@@ -53,7 +53,14 @@ READINESS_EXPRESSION = (
     "document.readyState === 'complete' && "
     "(!document.fonts || document.fonts.status === 'loaded')"
 )
-FIXED_EXPRESSIONS = {READINESS_EXPRESSION}
+# A canvas that cannot be read (tainted by cross-origin pixels, or empty)
+# yields null rather than failing the whole capture.
+CANVAS_DATA_URLS_EXPRESSION = (
+    "Array.from(document.querySelectorAll('canvas')).map(canvas => { "
+    "try { return canvas.width > 0 && canvas.height > 0 ? "
+    "canvas.toDataURL('image/png') : null; } catch (error) { return null; } })"
+)
+FIXED_EXPRESSIONS = {READINESS_EXPRESSION, CANVAS_DATA_URLS_EXPRESSION}
 
 
 class CdpClientError(RuntimeError):
@@ -303,9 +310,40 @@ class CdpClient:
 
     def capture_screenshot(self) -> dict[str, Any]:
         """Capture one bounded PNG from the current browser surface."""
-        result = self.command("Page.captureScreenshot", {
+        return self._decode_screenshot(self.command("Page.captureScreenshot", {
             "format": "png", "fromSurface": True, "captureBeyondViewport": False,
-        })
+        }))
+
+    def capture_canvas_data_urls(self) -> list[dict[str, Any] | None]:
+        """Capture each canvas's own RGBA pixels without the page behind it.
+
+        Entries follow document order; an unreadable canvas is None.
+        """
+        result = self.command("Runtime.evaluate", {
+            "expression": CANVAS_DATA_URLS_EXPRESSION, "returnByValue": True,
+        }).get("result")
+        values = result.get("value") if isinstance(result, dict) else None
+        if not isinstance(values, list) or len(values) > 128:
+            raise CdpClientError("CDP canvas capture response is malformed or unbounded")
+        captures: list[dict[str, Any] | None] = []
+        for value in values:
+            if value is None:
+                captures.append(None)
+                continue
+            if not isinstance(value, str) or not value.startswith("data:image/png;base64,"):
+                raise CdpClientError("CDP canvas capture did not return a PNG data URL")
+            encoded = value[len("data:image/png;base64,"):]
+            try:
+                data = base64.b64decode(encoded, validate=True)
+            except (ValueError, base64.binascii.Error) as error:
+                raise CdpClientError("CDP canvas capture returned invalid base64") from error
+            if not data.startswith(b"\x89PNG\r\n\x1a\n") or len(data) > MAX_SCREENSHOT_BYTES:
+                raise CdpClientError("CDP canvas capture returned an invalid or oversized PNG")
+            captures.append({"mimeType": "image/png", "data": encoded})
+        return captures
+
+    @staticmethod
+    def _decode_screenshot(result: dict[str, Any]) -> dict[str, Any]:
         encoded = result.get("data")
         if not isinstance(encoded, str) or not encoded:
             raise CdpClientError("CDP screenshot response omitted PNG data")

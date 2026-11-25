@@ -170,6 +170,7 @@
       "gpu-runtime.graphite-old-sdk-host",
       "vellum.app-host",
       "vellum.app-host-agent-workflow",
+      "vellum.app-host-canvas-asset",
       "vellum.app-host-design-anchor-dump",
       "vellum.app-host-html-import-geometry",
       "vellum.app-host-manual-clock-capture",
