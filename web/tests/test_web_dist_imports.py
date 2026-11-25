@@ -69,6 +69,60 @@ class ImportGraph(unittest.TestCase):
         static, dynamic = specifiers("// import a from './gone.js';\n/* import './gone2.js' */\n")
         self.assertEqual((static, dynamic), ([], []))
 
+    def test_whitespace_free_and_comment_separated_static_forms(self) -> None:
+        for source in (
+            'import{X}from"./missing.js";',
+            "import/* c */{X}/* d */from/* e */'./missing.js';",
+            'import X,{Y as Z}from"./missing.js"',
+            'import*as ns from"./missing.js"',
+            'export{X}from"./missing.js"',
+            'export*from"./missing.js"',
+            'export * as ns from // note\n"./missing.js"',
+            'import"./missing.js"',
+            'import {\n a, // from "./decoy.js"\n b } from "./missing.js"',
+        ):
+            with self.subTest(source=source):
+                static, dynamic = specifiers(source)
+                self.assertEqual((static, dynamic), (["./missing.js"], []))
+
+    def test_whitespace_free_import_is_reported_as_missing(self) -> None:
+        with payload({"index.html": PAGE, "demo.js": 'import{X}from"./missing.js";'}) as root:
+            self.assertIn("missing missing.js", missing_modules(Path(root))[0])
+
+    def test_comment_separated_dynamic_forms(self) -> None:
+        for source in (
+            'import /* c */("./missing.js")',
+            'import // c\n("./missing.js")',
+            'import(/* c */ "./missing.js" /* d */)',
+            'await import ( "./missing.js" )',
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(specifiers(source), ([], ["./missing.js"]))
+
+    def test_comment_separated_dynamic_import_is_reported_as_missing(self) -> None:
+        with payload({"index.html": PAGE, "demo.js": 'import /* c */("./missing.js");'}) as root:
+            self.assertIn("missing missing.js", missing_modules(Path(root))[0])
+
+    def test_imports_inside_strings_templates_regexes_and_comments_are_ignored(self) -> None:
+        source = (
+            "const a = 'import x from \"./s.js\"';\n"
+            "const b = `import y from './t.js' ${ import('./u.js') } tail`;\n"
+            "const c = /import\\(\"x\"\\)\\/[/]/g.test(a) / 2;\n"
+            "// import z from './c.js'\n/* import('./d.js') */\n"
+            "obj.import('./e.js'); const m = import.meta.url;\n"
+        )
+        self.assertEqual(specifiers(source), ([], ["./u.js"]))
+
+    def test_dynamic_bare_specifier_is_reported(self) -> None:
+        with payload({"index.html": PAGE, "demo.js": "await import('missing-package');\n"}) as root:
+            problems = missing_modules(Path(root))
+            self.assertEqual(len(problems), 1)
+            self.assertIn("bare specifier", problems[0])
+
+    def test_node_builtin_dynamic_import_is_allowed(self) -> None:
+        with payload({"index.html": PAGE, "demo.js": "await import('node:module');\n"}) as root:
+            self.assertEqual(missing_modules(Path(root)), [])
+
     def test_page_without_html_is_an_error_not_a_pass(self) -> None:
         with payload({"demo.js": "export {};\n"}) as root:
             self.assertTrue(missing_modules(Path(root)))

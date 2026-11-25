@@ -18,13 +18,162 @@ import re
 import sys
 
 
-STATIC_IMPORT = re.compile(
-    r"""(?:^|[;\s}])(?:import|export)\s+(?:[^'"`;]*?\s+from\s+)?['"]([^'"]+)['"]""",
-    re.DOTALL,
-)
-DYNAMIC_IMPORT = re.compile(r"""\bimport\(\s*['"]([^'"]+)['"]\s*\)""")
-BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
-LINE_COMMENT = re.compile(r"(^|[^:\\'\"])//[^\n]*")
+# Dynamic bare specifiers the shipped modules may name. Emscripten's glue loads
+# `node:module` behind an ENVIRONMENT_IS_NODE guard, so it never runs in a page.
+# Anything else bare would need an import map the payload does not ship.
+HOST_MODULE_PREFIXES = ("node:",)
+
+_ID_START = re.compile(r"[A-Za-z_$\u0080-\uffff]")
+_ID_PART = re.compile(r"[A-Za-z0-9_$\u0080-\uffff]*")
+_NUMBER = re.compile(r"\.?[0-9][0-9A-Za-z_.]*")
+_REGEX_PREFIX_WORDS = frozenset((
+    "return", "typeof", "instanceof", "in", "of", "new", "delete", "void",
+    "throw", "case", "do", "else", "yield", "await",
+))
+
+
+def _tokens(source: str) -> list[tuple[str, str]]:
+    """Tokenize ECMAScript just far enough to find module specifiers.
+
+    Yields ("id", name), ("str", value), ("num", ""), ("tpl", ""), ("re", "")
+    and ("p", char). Comments are dropped; string, template and regular
+    expression bodies never produce identifier tokens, so text inside them is
+    never mistaken for an import.
+    """
+    out: list[tuple[str, str]] = []
+    n = len(source)
+    i = 0
+    # Each open `${` records the brace depth to return to the template at.
+    templates: list[int] = []
+    depth = 0
+
+    def read_template(start: int) -> int:
+        j = start
+        while j < n:
+            c = source[j]
+            if c == "\\":
+                j += 2
+            elif c == "`":
+                out.append(("tpl", ""))
+                return j + 1
+            elif c == "$" and source.startswith("${", j):
+                out.append(("tpl", ""))
+                templates.append(depth)
+                return j + 2
+            else:
+                j += 1
+        return n
+
+    while i < n:
+        c = source[i]
+        if c.isspace():
+            i += 1
+        elif source.startswith("//", i):
+            end = source.find("\n", i)
+            i = n if end < 0 else end
+        elif source.startswith("/*", i):
+            end = source.find("*/", i + 2)
+            i = n if end < 0 else end + 2
+        elif c in "'\"":
+            j = i + 1
+            while j < n and source[j] != c and source[j] != "\n":
+                j += 2 if source[j] == "\\" else 1
+            raw = source[i + 1:j]
+            out.append(("str", re.sub(r"\\(.)", r"\1", raw)))
+            i = j + 1
+        elif c == "`":
+            i = read_template(i + 1)
+        elif c == "}" and templates and templates[-1] == depth:
+            templates.pop()
+            i = read_template(i + 1)
+        elif c == "/" and _regex_allowed(out):
+            j = i + 1
+            in_class = False
+            while j < n and source[j] != "\n":
+                d = source[j]
+                if d == "\\":
+                    j += 1
+                elif d == "[":
+                    in_class = True
+                elif d == "]":
+                    in_class = False
+                elif d == "/" and not in_class:
+                    break
+                j += 1
+            j += 1
+            while j < n and _ID_PART.match(source, j).end() > j:
+                j = _ID_PART.match(source, j).end()
+            out.append(("re", ""))
+            i = j
+        elif _ID_START.match(c):
+            end = _ID_PART.match(source, i).end()
+            out.append(("id", source[i:end]))
+            i = end
+        elif c.isdigit() or (c == "." and i + 1 < n and source[i + 1].isdigit()):
+            end = _NUMBER.match(source, i).end()
+            out.append(("num", ""))
+            i = end
+        else:
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+            out.append(("p", c))
+            i += 1
+    return out
+
+
+def _regex_allowed(previous: list[tuple[str, str]]) -> bool:
+    """True when a `/` here begins a regular expression rather than a division."""
+    if not previous:
+        return True
+    kind, value = previous[-1]
+    if kind == "id":
+        return value in _REGEX_PREFIX_WORDS
+    if kind in ("str", "num", "tpl", "re"):
+        return False
+    return value not in ")]}"
+
+
+def specifiers(source: str) -> tuple[list[str], list[str]]:
+    """Return (static, dynamic) import specifiers named by a module's source."""
+    tokens = _tokens(source)
+    static: list[str] = []
+    dynamic: list[str] = []
+    count = len(tokens)
+    for index, (kind, value) in enumerate(tokens):
+        if kind != "id" or value not in ("import", "export"):
+            continue
+        if index and tokens[index - 1] == ("p", "."):
+            continue  # a property named import/export, not the keyword
+        following = tokens[index + 1] if index + 1 < count else ("", "")
+        if value == "import" and following == ("p", "("):
+            argument = tokens[index + 2] if index + 2 < count else ("", "")
+            if argument[0] == "str":
+                dynamic.append(argument[1])
+            continue
+        if value == "import" and following == ("p", "."):
+            continue  # import.meta
+        if value == "import" and following[0] == "str":
+            static.append(following[1])
+            continue
+        # `import clause from "x"` and `export {..}`/`export * from "x"`: walk the
+        # clause up to its `from`, giving up at anything a clause cannot contain.
+        if value == "export" and following not in (("p", "{"), ("p", "*")):
+            continue
+        j = index + 1
+        while j < count:
+            k, v = tokens[j]
+            if k == "id" and v == "from":
+                if j + 1 < count and tokens[j + 1][0] == "str":
+                    static.append(tokens[j + 1][1])
+                break
+            if k == "p" and v in ";=()":
+                break
+            if k in ("num", "tpl", "re", "str"):
+                break
+            j += 1
+    return static, dynamic
 
 
 class ModuleScripts(HTMLParser):
@@ -55,12 +204,6 @@ class ModuleScripts(HTMLParser):
     def handle_data(self, data: str) -> None:
         if self._inline_module:
             self.inline[-1] += data
-
-
-def specifiers(source: str) -> tuple[list[str], list[str]]:
-    """Return (static, dynamic) import specifiers named by a module's source."""
-    stripped = LINE_COMMENT.sub(r"\1", BLOCK_COMMENT.sub("", source))
-    return STATIC_IMPORT.findall(stripped), DYNAMIC_IMPORT.findall(stripped)
 
 
 def resolve(root: Path, importer_dir: Path, specifier: str) -> Path | None:
@@ -102,10 +245,10 @@ def missing_modules(root: Path) -> list[str]:
         target = resolve(root, importer_dir, specifier)
         if target is None:
             # A bare specifier only loads through an import map, which this
-            # payload does not ship. Dynamic bare imports are runtime-guarded
-            # host modules (Emscripten's `node:module`) and never run in a page.
-            if "(dynamic)" not in edge:
-                problems.append(f"{edge}: bare specifier has no import map")
+            # payload does not ship; only the listed host modules are exempt.
+            if "(dynamic)" in edge and specifier.startswith(HOST_MODULE_PREFIXES):
+                continue
+            problems.append(f"{edge}: bare specifier has no import map")
             continue
         if root not in target.parents:
             problems.append(f"{edge}: resolves outside the payload")
