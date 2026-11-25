@@ -11,6 +11,15 @@
 // Vertical travel, in CSS pixels, that sweeps a control's full range.
 export const DRAG_TRAVEL = 200;
 
+// The value at `x` along a horizontal `track` box: the minimum at its left
+// edge, the maximum at its right edge, clamped outside it.
+export function trackValue(info, track, x) {
+    const minimum = Number.isFinite(info.minValue) ? info.minValue : 0;
+    const maximum = Number.isFinite(info.maxValue) ? info.maxValue : 1;
+    const fraction = track.width > 0 ? (x - track.x) / track.width : 0;
+    return minimum + Math.min(1, Math.max(0, fraction)) * (maximum - minimum);
+}
+
 export function clampToParameter(info, value) {
     const minimum = Number.isFinite(info.minValue) ? info.minValue : 0;
     const maximum = Number.isFinite(info.maxValue) ? info.maxValue : 1;
@@ -43,19 +52,23 @@ export class GestureTracker {
     }
 
     // Opens a gesture for `pointerId` on `target`. Returns false while another
-    // pointer owns a gesture.
-    begin(pointerId, target, info, startValue, startY) {
+    // pointer owns a gesture. Without `valueAt`, a move is a relative vertical
+    // drag from `start`; with it, a move sets `valueAt(position)`, so the
+    // value follows the pointer's absolute position along a track.
+    begin(pointerId, target, info, startValue, start, valueAt = null) {
         if (this.active) return false;
-        this.active = {pointerId, target, info, startValue, startY, value: startValue};
+        this.active = {pointerId, target, info, startValue, start, valueAt, value: startValue};
         this.emit({type: 'begin', target, param: info.id, value: startValue});
         return true;
     }
 
     // Returns the new value when the move changed it, otherwise null.
-    move(pointerId, y) {
+    move(pointerId, position) {
         const active = this.active;
         if (!active || active.pointerId !== pointerId) return null;
-        const value = dragValue(active.info, active.startValue, y - active.startY);
+        const value = active.valueAt
+            ? clampToParameter(active.info, active.valueAt(position))
+            : dragValue(active.info, active.startValue, position - active.start);
         if (value === active.value) return null;
         active.value = value;
         this.emit({type: 'set', target: active.target, param: active.info.id, value});

@@ -10,18 +10,36 @@
 // `destroy()` leaves it running.
 //
 // A view is {background, nodes, layout(width, height)}. Each node has an
-// `id` and a `kind`: `knob` (bound to `param`, a parameter id), `label`
-// (static `text`) or `plot` (draws the `feed` named `spectrum` or `ir`).
-// `layout` returns {[id]: {x, y, width, height}} in CSS pixels.
+// `id` and a `kind`:
+//   `knob`    bound to `param`, a parameter id; a vertical drag changes it.
+//   `slider`  bound to `param`; the value follows the pointer along the
+//             `<id>/track` box from the press on, with `label`, `unit` and
+//             `decimals` drawn in the `<id>/name` and `<id>/value` boxes.
+//   `toggle`  bound to `param`; a press flips it as one gesture.
+//   `label`   static `text`, or `format(state)` of the session's feeds.
+//   `button`  draws `text` and runs `view.actions[action](session)` on press.
+//   `plot`    draws the `feed` named `spectrum` or `ir`.
+// `layout` returns {[key]: {x, y, width, height}} in CSS pixels, one entry
+// per node id plus any sub-boxes the view names. A view may also supply
+// `colors` to override the default palette, and `textStyle(key)` returning
+// {fontSize, align} for a text box, where `align` is left, right or center.
 
 import {createCanvas2DBackend} from './canvas2d_backend.js';
-import {GestureTracker, clampToParameter} from './gesture_tracker.js';
+import {GestureTracker, clampToParameter, trackValue} from './gesture_tracker.js';
 
 const INK_DISTANCE = 8;
-const COLORS = {
+const DEFAULT_COLORS = {
     knob: '#1e293b', knobFill: '#14b8a6', knobText: '#e2e8f0',
-    label: '#f8fafc', plot: '#111827', plotFill: '#38bdf8',
+    label: '#f8fafc', labelDim: '#94a3b8', value: '#f8fafc', plot: '#111827', plotFill: '#38bdf8',
+    track: '#1e293b', trackFill: '#14b8a6', thumb: '#f8fafc',
+    button: '#1e293b', buttonText: '#14b8a6',
+    toggleOff: '#1e293b', toggleOn: '#f59e0b', toggleText: '#f8fafc', toggleTextOn: '#0b1020',
 };
+const BOUND_KINDS = new Set(['knob', 'slider', 'toggle']);
+const PRESS_KINDS = new Set(['knob', 'slider', 'toggle', 'button']);
+// Average advance of a glyph as a fraction of the font size, used to align
+// text without measuring it.
+const ADVANCE = 0.52;
 
 function rgba(hex) {
     const source = /^#[0-9a-fA-F]{6}$/.test(hex) ? hex : '#000000';
@@ -60,15 +78,16 @@ export async function createEditorSession({container, adapter, view, createCore}
     const document = container.ownerDocument;
     const window = document.defaultView;
     const infos = new Map((await adapter.getParameterInfo()).map(info => [info.id, info]));
+    const COLORS = {...DEFAULT_COLORS, ...(view.colors || {})};
     const nodes = view.nodes.map(node => ({...node}));
     for (const node of nodes) {
-        if (node.kind === 'knob' && !infos.has(node.param)) {
+        if (BOUND_KINDS.has(node.kind) && !infos.has(node.param)) {
             throw new Error(`editor control ${node.id} names an absent parameter ${node.param}`);
         }
     }
     const values = new Map();
     for (const node of nodes) {
-        if (node.kind === 'knob') {
+        if (BOUND_KINDS.has(node.kind)) {
             values.set(node.param, await adapter.getParameterValue(node.param));
         }
     }
@@ -87,6 +106,8 @@ export async function createEditorSession({container, adapter, view, createCore}
     const feeds = {ir: null, spectrum: null};
     const gestures = [];
     const stats = {frames: 0, resizes: 0, lastFrame: null};
+    // The string each text box showed in the last frame, by box key.
+    let drawnText = {};
     const backend = createCanvas2DBackend(canvas, () => size);
 
     const tracker = new GestureTracker(event => {
@@ -139,10 +160,66 @@ export async function createEditorSession({container, adapter, view, createCore}
         });
     }
 
+    function drawText(key, text, box, fontSize, color) {
+        const style = view.textStyle?.(key) ?? {fontSize, align: 'left'};
+        const size = Math.max(1, style.fontSize);
+        const slack = box.width - text.length * size * ADVANCE;
+        let x = box.x;
+        if (style.align === 'right') x += Math.max(0, slack);
+        else if (style.align === 'center') x += Math.max(0, slack / 2);
+        drawnText[key] = text;
+        core.text(key, text, x, box.y, Math.max(0, box.x + box.width - x), box.height,
+            size, ...rgba(color));
+    }
+
+    function fractionOf(node) {
+        const info = infos.get(node.param);
+        const minimum = Number.isFinite(info.minValue) ? info.minValue : 0;
+        const maximum = Number.isFinite(info.maxValue) ? info.maxValue : 1;
+        const fraction = maximum > minimum ? (values.get(node.param) - minimum) / (maximum - minimum) : 0;
+        return Math.min(1, Math.max(0, fraction));
+    }
+
     function paintNode(node, box) {
         if (node.kind === 'label') {
-            core.text(node.id, node.text || '', box.x, box.y, box.width, box.height,
-                Math.max(1, node.fontSize || 16), ...rgba(COLORS.label));
+            const text = node.format
+                ? String(node.format({impulseResponseName: feeds.ir?.name ?? null}))
+                : node.text || '';
+            drawText(node.id, text, box, node.fontSize || 16, COLORS[node.color] || COLORS.label);
+        } else if (node.kind === 'button') {
+            core.rectangle(node.id, box.x, box.y, box.width, box.height,
+                box.height * 0.16, ...rgba(COLORS.button));
+            drawText(`${node.id}/text`, node.text || '', bounds[`${node.id}/text`] || box,
+                13, COLORS.buttonText);
+        } else if (node.kind === 'slider') {
+            const track = bounds[`${node.id}/track`];
+            const value = values.get(node.param);
+            const unit = node.unit ? ` ${node.unit}` : '';
+            if (bounds[`${node.id}/name`]) {
+                drawText(`${node.id}/name`, node.label || '', bounds[`${node.id}/name`], 10,
+                    COLORS.labelDim);
+            }
+            if (bounds[`${node.id}/value`]) {
+                drawText(`${node.id}/value`, `${value.toFixed(node.decimals ?? 2)}${unit}`,
+                    bounds[`${node.id}/value`], 14, COLORS.value);
+            }
+            if (track) {
+                const radius = track.height / 2;
+                const handle = track.x + fractionOf(node) * track.width;
+                const thumb = track.height * (tracker.activeParam === node.param ? 2 : 1.75);
+                core.rectangle(`${node.id}/track`, track.x, track.y, track.width, track.height,
+                    radius, ...rgba(COLORS.track));
+                core.rectangle(`${node.id}/fill`, track.x, track.y, handle - track.x, track.height,
+                    radius, ...rgba(COLORS.trackFill));
+                core.rectangle(`${node.id}/thumb`, handle - thumb, track.y + radius - thumb,
+                    2 * thumb, 2 * thumb, thumb, ...rgba(COLORS.thumb));
+            }
+        } else if (node.kind === 'toggle') {
+            const on = values.get(node.param) >= 0.5;
+            core.rectangle(node.id, box.x, box.y, box.width, box.height, box.height / 2,
+                ...rgba(on ? COLORS.toggleOn : COLORS.toggleOff));
+            drawText(`${node.id}/text`, node.label || '', bounds[`${node.id}/text`] || box, 13,
+                on ? COLORS.toggleTextOn : COLORS.toggleText);
         } else if (node.kind === 'knob') {
             const info = infos.get(node.param);
             const minimum = Number.isFinite(info.minValue) ? info.minValue : 0;
@@ -176,6 +253,7 @@ export async function createEditorSession({container, adapter, view, createCore}
         if (!core.begin(size.cssWidth, size.cssHeight, ...rgba(view.background))) {
             throw new Error('the shared Wasm core rejected the frame');
         }
+        drawnText = {};
         for (const node of nodes) {
             if (bounds[node.id]) paintNode(node, bounds[node.id]);
         }
@@ -192,6 +270,7 @@ export async function createEditorSession({container, adapter, view, createCore}
         stats.lastFrame = {
             digest: core.digest() >>> 0, commandCount: core.count(),
             cssWidth: size.cssWidth, cssHeight: size.cssHeight, scale: size.scale,
+            text: {...drawnText},
         };
     }
 
@@ -207,7 +286,7 @@ export async function createEditorSession({container, adapter, view, createCore}
         for (let index = nodes.length - 1; index >= 0; --index) {
             const node = nodes[index];
             const box = bounds[node.id];
-            if (node.kind === 'knob' && box && point.x >= box.x && point.y >= box.y &&
+            if (PRESS_KINDS.has(node.kind) && box && point.x >= box.x && point.y >= box.y &&
                 point.x <= box.x + box.width && point.y <= box.y + box.height) {
                 return node;
             }
@@ -217,11 +296,44 @@ export async function createEditorSession({container, adapter, view, createCore}
 
     const listeners = {
         pointerdown(event) {
-            const node = hit(locate(event));
+            const point = locate(event);
+            const node = hit(point);
             if (!node) return;
+            if (node.kind === 'button') {
+                event.preventDefault();
+                view.actions?.[node.action]?.(session);
+                return;
+            }
             const info = infos.get(node.param);
-            if (!tracker.begin(event.pointerId, node.id, info, values.get(node.param),
-                locate(event).y)) {
+            if (node.kind === 'toggle') {
+                // A press flips the toggle as one complete gesture.
+                const flipped = values.get(node.param) >= 0.5 ? 0 : 1;
+                if (!tracker.begin(event.pointerId, node.id, info, values.get(node.param), 0,
+                    () => flipped)) {
+                    return;
+                }
+                event.preventDefault();
+                const value = tracker.move(event.pointerId, 0);
+                if (value !== null) values.set(node.param, value);
+                tracker.end(event.pointerId);
+                scheduleRepaint();
+                return;
+            }
+            if (node.kind === 'slider') {
+                const track = bounds[`${node.id}/track`];
+                if (!track || !tracker.begin(event.pointerId, node.id, info,
+                    values.get(node.param), point.x, x => trackValue(info, track, x))) {
+                    return;
+                }
+                event.preventDefault();
+                canvas.setPointerCapture(event.pointerId);
+                // The press itself sets the value under the pointer.
+                const value = tracker.move(event.pointerId, point.x);
+                if (value !== null) values.set(node.param, value);
+                scheduleRepaint();
+                return;
+            }
+            if (!tracker.begin(event.pointerId, node.id, info, values.get(node.param), point.y)) {
                 return;
             }
             event.preventDefault();
@@ -231,18 +343,21 @@ export async function createEditorSession({container, adapter, view, createCore}
             const active = tracker.active;
             if (!active || active.pointerId !== event.pointerId) return;
             // A handler may have remounted the view and dropped the target.
-            if (!nodes.some(node => node.id === active.target)) {
+            const target = nodes.find(node => node.id === active.target);
+            if (!target) {
                 tracker.abandon();
                 return;
             }
-            const value = tracker.move(event.pointerId, locate(event).y);
+            const point = locate(event);
+            const value = tracker.move(event.pointerId,
+                target.kind === 'slider' ? point.x : point.y);
             if (value !== null) {
                 values.set(active.info.id, value);
                 scheduleRepaint();
             }
         },
         pointerup(event) {
-            tracker.end(event.pointerId);
+            if (tracker.end(event.pointerId)) scheduleRepaint();
         },
         pointercancel(event) {
             tracker.cancel(event.pointerId);
@@ -353,15 +468,13 @@ export async function createEditorSession({container, adapter, view, createCore}
                 input.click();
             });
         },
-        // The drawn canvas, with ink per node: the pixels farther than
+        // The drawn canvas, with ink per laid-out box: the pixels farther than
         // INK_DISTANCE in RGB from the view background.
         capture() {
             const context = canvas.getContext('2d');
             const background = rgba(view.background).map(value => value * 255);
             const ink = {};
-            for (const node of nodes) {
-                const box = bounds[node.id];
-                if (!box) continue;
+            for (const [key, box] of Object.entries(bounds)) {
                 const left = Math.floor(box.x * size.backingWidth / size.cssWidth);
                 const top = Math.floor(box.y * size.backingHeight / size.cssHeight);
                 const width = Math.max(1, Math.ceil(box.width * size.backingWidth / size.cssWidth));
@@ -373,7 +486,7 @@ export async function createEditorSession({container, adapter, view, createCore}
                         data[index + 1] - background[1], data[index + 2] - background[2]);
                     if (distance > INK_DISTANCE) pixels += 1;
                 }
-                ink[node.id] = {pixels, area: width * height};
+                ink[key] = {pixels, area: width * height};
             }
             return {
                 png: canvas.toDataURL('image/png'),
