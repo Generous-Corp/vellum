@@ -187,11 +187,13 @@ public:
 
     /// One file compiled into the plug-in beside its editor script. `name` is
     /// the script-relative path with forward slashes (`assets/knob.png`); the
-    /// bytes live for the process (a static array in the plug-in image).
+    /// bytes live for the process (a static array in the plug-in image), or
+    /// are held by `owned_bytes` when sealed from disk for a reload snapshot.
     struct EmbeddedAsset {
         std::string name;
         const unsigned char* data = nullptr;
         std::size_t size = 0;
+        std::shared_ptr<const std::vector<unsigned char>> owned_bytes;
     };
 
     /// Install the files embedded beside the script. For an editor whose
@@ -223,6 +225,12 @@ public:
     /// The identity the persisted stores hash: `set_storage_identity()`'s value
     /// when set, else the script base directory, else empty (no store).
     std::string storage_identity() const;
+    /// Font ownership remains private when no persistent storage identity exists.
+    std::string sealed_font_owner() const;
+    /// A session supplies one stable anonymous owner across realm replacements.
+    void set_anonymous_font_owner(std::string owner) {
+        anonymous_font_owner_ = std::move(owner);
+    }
     /// Process-local identity for declarations owned by this bridge lifetime.
     /// Unlike storage_identity(), this must never be shared by two bridges.
     std::string font_weight_scope() const;
@@ -562,6 +570,9 @@ private:
     bool allow_unreviewed_file_paths_ = false;
     std::vector<EmbeddedAsset> embedded_assets_;
     std::string storage_identity_;
+    inline static std::atomic<std::uint64_t> next_anonymous_font_owner_{0};
+    std::string anonymous_font_owner_ = "bridge/" + std::to_string(
+        next_anonymous_font_owner_.fetch_add(1, std::memory_order_relaxed));
 
     /// Per-bridge persisted-store directories (widget storage, style presets),
     /// resolved once per storage identity by the storage registrars so a UI

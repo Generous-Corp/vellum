@@ -10,6 +10,7 @@
 // `bundled_fonts.cpp` when Skia is linked.
 
 #include <vellum/canvas/bundled_fonts.hpp>
+#include "font_validation.hpp"
 
 #if !defined(PULP_HAS_SKIA) && defined(__APPLE__)
 #include "coretext_text.hpp"
@@ -501,6 +502,12 @@ std::vector<std::size_t> line_break_opportunities(const std::string& text,
 
 namespace {
 
+std::string canonical_family_name(std::string family) {
+    for (auto& c : family)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return family;
+}
+
 std::mutex& declared_weights_mutex() {
     static std::mutex m;
     return m;
@@ -526,7 +533,7 @@ void declare_font_face_weight_range(const std::string& family, int weight_min, i
     const DeclaredWeightRange range{std::min(weight_min, weight_max),
                                     std::max(weight_min, weight_max)};
     std::lock_guard<std::mutex> guard(declared_weights_mutex());
-    auto& ranges = declared_weights()[scope][family];
+    auto& ranges = declared_weights()[scope][canonical_family_name(family)];
     for (const auto& existing : ranges) {
         if (existing.min == range.min && existing.max == range.max)
             return;
@@ -543,9 +550,10 @@ void clear_declared_font_face_weight_ranges(const std::string& scope) {
 
 bool has_declared_font_face_weights(const std::string& family) {
     std::lock_guard<std::mutex> guard(declared_weights_mutex());
+    const auto family_key = canonical_family_name(family);
     for (const auto& [scope, families] : declared_weights()) {
         (void)scope;
-        if (families.count(family) != 0)
+        if (families.count(family_key) != 0)
             return true;
     }
     return false;
@@ -601,9 +609,10 @@ std::optional<bool> declared_face_synthesizes_bold(const std::string& family,
     std::vector<DeclaredWeightRange> ranges;
     {
         std::lock_guard<std::mutex> guard(declared_weights_mutex());
+        const auto family_key = canonical_family_name(family);
         for (const auto& [scope, families] : declared_weights()) {
             (void)scope;
-            const auto it = families.find(family);
+            const auto it = families.find(family_key);
             if (it != families.end())
                 ranges.insert(ranges.end(), it->second.begin(), it->second.end());
         }
@@ -649,6 +658,10 @@ std::atomic<std::uint64_t>& registration_generation() {
 } // namespace
 
 bool register_font(const std::uint8_t* data, std::size_t size, const std::string& family_override) {
+    // CoreText is a parser boundary too: reject malformed sfnt bytes before
+    // handing them to the platform registrar on non-Skia Apple builds.
+    if (!detail::structurally_validate_sfnt(data, size))
+        return false;
     if (detail::coretext_register_font(data, size, family_override).empty())
         return false;
     bump_font_registration_generation();
@@ -716,9 +729,7 @@ std::future<FontState> register_font_url(const std::string&,
 }
 
 bool validate_font_bytes(const std::uint8_t* data, std::size_t size) {
-    // Non-Skia builds accept any non-empty buffer; there is no font parser
-    // available on this lane.
-    return data != nullptr && size > 0;
+    return detail::structurally_validate_sfnt(data, size);
 }
 
 // Without Skia we cannot register a typeface even if a decoder is
