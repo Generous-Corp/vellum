@@ -94,7 +94,8 @@ private:
 
 using framework_test::Approx;
 
-namespace vellum::test {
+
+namespace materializer_test {
 
 inline fs::path make_unique_temp_dir(const std::string& prefix) {
     static std::atomic<unsigned> counter{0};
@@ -105,14 +106,10 @@ inline fs::path make_unique_temp_dir(const std::string& prefix) {
     return path;
 }
 
-}  // namespace vellum::test
-
-namespace materializer_test {
-
 class TempDir {
 public:
     explicit TempDir(const std::string& prefix) {
-        path = vellum::test::make_unique_temp_dir(prefix);
+        path = make_unique_temp_dir(prefix);
     }
 
     ~TempDir() {
