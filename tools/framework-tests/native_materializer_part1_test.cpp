@@ -17,7 +17,7 @@ FRAMEWORK_TEST(baked_native_materializer_matches_live_react_layout_parity_for_a_
     baked->layout_children();
 
     const LayoutTreeSnapshotOptions options{
-        .surface = "phase4-baked-native",
+        .surface = "baked-native",
         .fixture = "plugin-panel-live-react-vs-native",
         .viewport_width = 360,
         .viewport_height = 160,
@@ -339,7 +339,7 @@ FRAMEWORK_TEST(baked_native_materializer_resolves_figma_plugin_asset_ref_image_s
 }
 
 FRAMEWORK_TEST(baked_native_materializer_renders_a_faithful_svg_node_as_a_designframeview) {
-    // Plan B / B3: a faithful_svg node materializes to a DesignFrameView that
+    // A faithful_svg node materializes to a DesignFrameView that
     // renders the node's own SVG (resolved from a data: asset) and overlays the
     // typed interactive elements. The view auto-crops to the panel (the largest
     // in-frame rect) and holds the knob overlay.
@@ -449,7 +449,7 @@ FRAMEWORK_TEST(faithful_svg_knob_with_a_param_key_self_wires_to_the_host_param_s
 }
 
 FRAMEWORK_TEST(render_patch_golden_a_knob_s_needle_visibly_rotates_with_value_p3) {
-    // P3 render-patch golden-gate: the faithful-vector lane rotates ONLY the
+    // Render-patch golden gate: the faithful-vector lane rotates ONLY the
     // knob's needle path (svg_patch_d) around (cx,cy) by value and re-renders the
     // SVG, the chrome stays pixel-exact. Render the SAME frame at value 0.05 vs
     // 0.95 and prove the raster differs (the needle moved), the render-patch is
@@ -581,7 +581,7 @@ FRAMEWORK_TEST(baked_native_materializer_falls_back_when_a_faithful_svg_asset_is
 }
 
 FRAMEWORK_TEST(materializer_overlays_a_texteditor_for_a_faithful_svg_text_field_element) {
-    // Plan B full-A slice 2: a text_field interactive element on a faithful_svg
+    // A text_field interactive element on a faithful_svg
     // node materializes (via to_frame_elements) into a DesignFrameView that hosts
     // a native TextEditor overlay, not a knob.
     const std::string svg =
@@ -616,7 +616,7 @@ FRAMEWORK_TEST(materializer_overlays_a_texteditor_for_a_faithful_svg_text_field_
 }
 
 FRAMEWORK_TEST(faithful_svg_flows_producer_envelope_parse_materialize_designframeview) {
-    // The whole-chain proof (Plan B / B5): an envelope shaped EXACTLY like the
+    // The whole-chain proof: an envelope shaped EXACTLY like the
     // faithful-vector producers emit (figma_rest_export.py --faithful-vector and
     // the Figma plugin's faithfulVector lane) must survive parse_figma_plugin_json
     // -> parse_ir_node -> build_native_view_tree and become a DesignFrameView with

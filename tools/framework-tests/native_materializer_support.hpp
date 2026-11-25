@@ -431,7 +431,7 @@ DesignIR build_plugin_panel_ir_from_live(const View& live_root) {
     // so the baked fixture mirrors the bridge-assigned live IDs.
     DesignIR ir;
     ir.source = DesignSource::jsx;
-    ir.source_adapter = "phase4-live-react-fixture";
+    ir.source_adapter = "live-react-fixture";
     ir.root = frame(panel->id(), 360.0f, 160.0f, LayoutDirection::column);
     ir.root.layout.padding_top = 12.0f;
     ir.root.layout.padding_right = 12.0f;
