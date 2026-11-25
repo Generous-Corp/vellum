@@ -98,6 +98,10 @@ target_link_libraries(vellum-framework-js-bytecode-embed-test PRIVATE
 target_compile_definitions(vellum-framework-js-bytecode-embed-test PRIVATE
     VELLUM_TEST_JS_BYTECODE_FIXTURE="${PROJECT_SOURCE_DIR}/fixtures/js-bytecode/bytecode_fixture.js")
 
+vellum_add_framework_test(jsx-lock
+    SOURCES jsx_lock_test.cpp
+    UNITS Vellum::MirrorDesign_import)
+
 vellum_add_framework_test(param-model-binding
     SOURCES param_model_binding_test.cpp
     UNITS Vellum::MirrorView_core Vellum::Value)
