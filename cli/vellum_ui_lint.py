@@ -396,8 +396,12 @@ def lint_source(root: Path, *, enforce_size: bool = False, max_component_lines: 
         }
     component_count = 0
     for path in files:
-        text = path.read_text(encoding="utf-8")
         rel = path.relative_to(root if root.is_dir() else path.parent).as_posix()
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            findings.append(Finding("invalid-utf8", rel, 1, "source file is not valid UTF-8"))
+            continue
         # Generic component/file names lose semantic identity on re-import.
         if GENERIC_NAME.search(path.stem):
             findings.append(Finding("generic-name", rel, 1, "file name is positional or generic"))

@@ -131,6 +131,14 @@ export function Docs() {
         )
         self.assertTrue(report["ok"], report)
 
+    def test_invalid_utf8_source_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "Bad.tsx").write_bytes(b"export const Bad = '\xff\xfe';\n")
+            report = lint_source(root)
+        self.assertFalse(report["ok"])
+        self.assertEqual([f["code"] for f in report["findings"]], ["invalid-utf8"])
+
     def test_real_violations_still_fire_beside_masked_text(self):
         report = self._report(
             """// Math.random() in a comment is fine
