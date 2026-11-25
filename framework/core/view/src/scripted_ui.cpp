@@ -3,6 +3,8 @@
 #include <vellum/view/accessibility_provider.hpp>
 #include <vellum/view/value_channel_set.hpp>
 #include <vellum/runtime/log.hpp>
+#include <vellum/runtime/safe_relative_path.hpp>
+#include <vellum/view/font_container.hpp>
 #include <vellum/value/param_metadata.hpp>
 #include <optional>
 #include <vellum/runtime/trace.hpp>
@@ -10,6 +12,10 @@
 #include <chrono>
 #include <condition_variable>
 #include <fstream>
+#include <iterator>
+#include <algorithm>
+#include <cctype>
+#include <unordered_map>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
@@ -108,6 +114,14 @@ void load_script_before_deadline(WidgetBridge& bridge, ScriptEngine& engine,
         std::rethrow_exception(load_error);
 }
 
+// The font file extensions sealed from beside a path-backed script.
+bool is_panel_font_file(const std::filesystem::path& path) {
+    auto ext = path.extension().string();
+    for (auto& c : ext)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return ext == ".ttf" || ext == ".otf" || ext == ".woff2";
+}
+
 // A ParamModel that reads through to another and drops every write: values,
 // gestures and plain writes do nothing, and a subscription never fires. A
 // reload probe runs over it so the probe script cannot move a parameter or
@@ -178,6 +192,112 @@ std::unique_ptr<value::ParamModel> read_only_view(value::ParamModel& source,
 }
 
 } // namespace
+
+// A path-backed script has no embedded files, so the fonts beside it are read
+// here and sealed into each bridge under their script-relative names, the
+// names an embedded panel uses for the same files. The panel then registers them with registerEmbeddedFont
+// and needs no Filesystem grant. Each snapshot owns its bytes through its
+// bridges and recovery state. The weak cache reuses unchanged live bytes
+// without retaining revisions after their realms retire.
+struct ScriptedUiSession::DiskFontCache {
+    struct Entry {
+        std::filesystem::file_time_type write_time;
+        std::uintmax_t size = 0;
+        std::uint64_t content_hash = 0;
+        std::weak_ptr<const std::vector<unsigned char>> bytes;
+    };
+    std::unordered_map<std::string, Entry> by_path;
+};
+
+std::uint64_t disk_font_content_hash(const std::vector<unsigned char>& bytes) {
+    constexpr std::uint64_t kOffset = 1469598103934665603ULL;
+    constexpr std::uint64_t kPrime = 1099511628211ULL;
+    std::uint64_t hash = kOffset;
+    for (const auto byte : bytes)
+        hash = (hash ^ byte) * kPrime;
+    return hash;
+}
+
+std::vector<WidgetBridge::EmbeddedAsset>
+ScriptedUiSession::sealed_assets_for(const std::filesystem::path& script) {
+    auto assets = embedded_assets_;
+    if (!script_source_.empty() || script.empty())
+        return assets;
+    namespace fs = std::filesystem;
+    constexpr std::size_t kMaxFiles = 256;
+    constexpr std::size_t kMaxVisitedEntries = 4096;
+    constexpr std::uintmax_t kMaxTotalBytes = 128u * 1024u * 1024u;
+    std::error_code ec;
+    const auto dir = fs::weakly_canonical(
+        script.has_parent_path() ? script.parent_path() : fs::path{"."}, ec);
+    if (ec || dir.empty())
+        return assets;
+    if (!disk_fonts_)
+        disk_fonts_ = std::make_shared<DiskFontCache>();
+    std::erase_if(disk_fonts_->by_path, [](const auto& item) {
+        return item.second.bytes.expired();
+    });
+    std::size_t files = 0;
+    std::size_t visited_entries = 0;
+    std::uintmax_t total = 0;
+    for (auto it = fs::recursive_directory_iterator(
+             dir, fs::directory_options::skip_permission_denied, ec);
+         !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        // Reloads must see nested file changes, but even entries that are not
+        // usable fonts consume the enumeration budget on the owner thread.
+        if (++visited_entries > kMaxVisitedEntries)
+            break;
+        const auto& path = it->path();
+        const auto leaf = path.filename().string();
+        std::error_code entry_ec;
+        if (it->is_directory(entry_ec)) {
+            // Hidden directories, dependency trees and build trees beside the
+            // script are not part of the panel.
+            if ((!leaf.empty() && leaf.front() == '.') || leaf == "node_modules" ||
+                fs::exists(path / "CMakeCache.txt", entry_ec))
+                it.disable_recursion_pending();
+            continue;
+        }
+        if (!is_panel_font_file(path) || !it->is_regular_file(entry_ec))
+            continue;
+        // A symlink beside the script must not reach a file outside it.
+        const auto real = fs::weakly_canonical(path, entry_ec);
+        if (entry_ec || !runtime::is_within_directory(dir, real))
+            continue;
+        const auto size = fs::file_size(real, entry_ec);
+        if (entry_ec || size == 0 || size > kMaxShippedFontBytes)
+            continue;
+        if (++files > kMaxFiles || (total += size) > kMaxTotalBytes)
+            break;
+        const auto name = path.lexically_relative(dir).generic_string();
+        const auto write_time = fs::last_write_time(real, entry_ec);
+        if (entry_ec)
+            continue;
+        auto& entry = disk_fonts_->by_path[real.generic_string()];
+        auto bytes = entry.bytes.lock();
+        std::ifstream in(real, std::ios::binary);
+        if (!in)
+            continue;
+        // Read and hash every reload so a file changed in place with a
+        // preserved timestamp cannot reuse stale sealed bytes.
+        auto loaded = std::make_shared<std::vector<unsigned char>>(size);
+        in.read(reinterpret_cast<char*>(loaded->data()),
+                static_cast<std::streamsize>(loaded->size()));
+        if (!in)
+            continue;
+        const auto content_hash = disk_font_content_hash(*loaded);
+        if (!bytes || entry.write_time != write_time || entry.size != size ||
+            entry.content_hash != content_hash)
+            bytes = std::move(loaded);
+        entry = {write_time, size, content_hash, bytes};
+        // A file embedded at build time wins over one of the same name on disk.
+        const bool embedded = std::any_of(assets.begin(), assets.end(),
+                                          [&](const auto& a) { return a.name == name; });
+        if (!embedded)
+            assets.push_back({name, bytes->data(), bytes->size(), bytes});
+    }
+    return assets;
+}
 
 ScriptedUiSession::ScriptedUiSession(View& root, state::StateStore& store,
                                      ScriptedUiOptions options)
@@ -857,6 +977,11 @@ bool ScriptedUiSession::rebuild_from_code(
             ? last_good_effective_theme_
             : (preserve_state ? base_theme_ : root_.theme());
         check_deadline();
+        // Recovery uses only the last successfully loaded snapshot. Directory
+        // traversal and font reads belong to ordinary loads, outside the deadline.
+        const auto sealed_assets = deadline ? last_good_sealed_assets_
+                                            : sealed_assets_for(source_path);
+        check_deadline();
         // The probe realm exists to protect a LIVE editor: a reload evaluates
         // the new code on a throwaway tree first so a script that throws leaves
         // the current UI untouched. The first load has no live editor to
@@ -904,8 +1029,9 @@ bool ScriptedUiSession::rebuild_from_code(
             probe_bridge->set_asset_roots(asset_roots_);
             probe_bridge->set_script_base_dir(source_path.parent_path());
             probe_bridge->set_allow_unreviewed_file_paths(allow_unreviewed_file_paths_);
-            probe_bridge->set_embedded_assets(embedded_assets_);
+            probe_bridge->set_embedded_assets(sealed_assets);
             probe_bridge->set_storage_identity(storage_identity_);
+            probe_bridge->set_anonymous_font_owner("session/" + std::to_string(identity_));
             probe_bridge->set_host_kind(host_kind_);
             probe_bridge->set_time_source(time_source_);
             load_script_before_deadline(*probe_bridge, *probe_engine, code, deadline);
@@ -982,8 +1108,9 @@ bool ScriptedUiSession::rebuild_from_code(
         next_bridge->set_asset_roots(asset_roots_);
         next_bridge->set_script_base_dir(source_path.parent_path());
         next_bridge->set_allow_unreviewed_file_paths(allow_unreviewed_file_paths_);
-        next_bridge->set_embedded_assets(embedded_assets_);
+        next_bridge->set_embedded_assets(sealed_assets);
         next_bridge->set_storage_identity(storage_identity_);
+        next_bridge->set_anonymous_font_owner("session/" + std::to_string(identity_));
         next_bridge->set_host_kind(host_kind_);
         next_bridge->set_time_source(time_source_);
         if (repaint_callback_) {
@@ -1037,8 +1164,10 @@ bool ScriptedUiSession::rebuild_from_code(
         last_reload_metrics_.total_ms = ms(t0, t_restore);
         last_good_code_ = code;
         last_good_script_path_ = source_path;
-        if (!deadline)
+        if (!deadline) {
             last_good_effective_theme_ = root_.theme();
+            last_good_sealed_assets_ = sealed_assets;
+        }
         if (!deadline) {
             // The pre-clear will-change barrier already made every old native
             // node inert. Republishing the replacement tree is best-effort and
