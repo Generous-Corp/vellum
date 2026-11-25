@@ -32,6 +32,7 @@
       "vellum.dawn-provider-bootstrap",
       "vellum.dawn-provider-topology",
       "vellum.design-pipeline",
+      "vellum.design-tool-cli",
       "vellum.downstream-consumer-registry",
       "vellum.downstream-consumer-registry-unit",
       "vellum.effects",
