@@ -253,7 +253,7 @@ def _canonical_markup(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _mask_non_markup_regions(text: str) -> str:
+def _mask_non_markup_regions(text: str, *, strings: bool = True) -> str:
     """Blank comments and quoted JavaScript regions without changing offsets.
 
     The duplicate scanner is intentionally dependency-free rather than a TSX
@@ -263,6 +263,10 @@ def _mask_non_markup_regions(text: str) -> str:
     A template literal is treated as one quoted region; JSX embedded in a
     ``${...}`` expression is therefore a conservative false negative rather
     than a false positive.
+
+    With ``strings=False`` only comments are blanked; quoted regions are
+    skipped over (so ``"http://x"`` is not a comment) but kept, for scans such
+    as colour literals whose real values live inside quotes.
     """
     masked = list(text)
     length = len(text)
@@ -303,8 +307,13 @@ def _mask_non_markup_regions(text: str) -> str:
             elif character == quote:
                 end += 1
                 break
+            elif character == "\n" and quote != "`":
+                # Ordinary JS strings cannot span lines; a stray apostrophe in
+                # JSX text must not swallow the rest of the file.
+                break
             end += 1
-        blank(index, end)
+        if strings:
+            blank(index, end)
         index = end
     return "".join(masked)
 
@@ -397,15 +406,20 @@ def lint_source(root: Path, *, enforce_size: bool = False, max_component_lines: 
             if GENERIC_NAME.search(match.group(1)):
                 findings.append(Finding("generic-name", rel, _line_for(text, match.start(1)),
                                         f"component {match.group(1)!r} has no semantic name"))
+        # Semantic scans must not fire on comments or quoted prose. Colour and
+        # style values live inside quotes, so those scans mask comments only;
+        # offsets are preserved so line numbers still come from ``text``.
+        code_text = _mask_non_markup_regions(text, strings=False)
+        bare_text = _mask_non_markup_regions(text)
         # Static inline styles are importer output; dynamic values are allowed.
-        for match in STATIC_STYLE.finditer(text):
+        for match in STATIC_STYLE.finditer(code_text):
             body = match.group("body")
             if not re.search(r"\b(?:var|value|state|props|theme|tokens?)\b", body):
                 findings.append(Finding("inline-static-style", rel, _line_for(text, match.start()),
                                         "static style object must be lifted to a stylesheet/token"))
         # Raw colours are allowed only when explicitly marked as an unmatched
         # token (the marker is counted by a later corpus budget).
-        for match in COLOR_LITERAL.finditer(text):
+        for match in COLOR_LITERAL.finditer(code_text):
             line_start = text.rfind("\n", 0, match.start()) + 1
             line_end = text.find("\n", match.start())
             if line_end < 0:
@@ -414,12 +428,12 @@ def lint_source(root: Path, *, enforce_size: bool = False, max_component_lines: 
             if "unmatched" not in line.lower() and "tokens." not in line:
                 findings.append(Finding("literal-color", rel, _line_for(text, match.start()),
                                         "colour literal is not represented by a design token"))
-        for match in CLICK_TARGET.finditer(text):
+        for match in CLICK_TARGET.finditer(bare_text):
             attrs = match.group("attrs")
             if not re.search(r"\b(?:role\s*=|tabIndex\s*=|data-pulp-action\s*=)", attrs):
                 findings.append(Finding("nonsemantic-click-target", rel, _line_for(text, match.start()),
                                         "click handler on a non-interactive element lacks semantic metadata"))
-        for match in RANDOMNESS.finditer(text):
+        for match in RANDOMNESS.finditer(bare_text):
             findings.append(Finding("nondeterministic-expression", rel, _line_for(text, match.start()),
                                     "runtime output depends on an unseeded clock or random source"))
         # Keep the high-signal same-line control for repeated leaves, then use

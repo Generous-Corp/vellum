@@ -106,6 +106,45 @@ export function Other() {
         )
         self.assertTrue(report["ok"], report)
 
+    def test_semantic_scans_ignore_comments_and_quoted_prose(self):
+        report = self._report(
+            """// colour #fff, rgb(1,2,3), Math.random(), Date.now()
+/* <div onClick={go}>x</div> style={{color: 'red'}} #abc */
+export function Notes() {
+  const doc = "uses Math.random() and Date.now() and <div onClick={go}>";
+  const url = 'http://example.test/page';
+  return <p data-pulp-action="notes">{doc}{url}</p>;
+}
+"""
+        )
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(report["findings"], [])
+
+    def test_real_violations_still_fire_beside_masked_text(self):
+        report = self._report(
+            """// Math.random() in a comment is fine
+export function Live() {
+  const note = "Date.now() in a string is fine";
+  return <div onClick={() => Math.random()} style={{color: '#fff'}}>{note}</div>;
+}
+"""
+        )
+        codes = {finding["code"] for finding in report["findings"]}
+        self.assertTrue({"nonsemantic-click-target", "nondeterministic-expression",
+                         "literal-color", "inline-static-style"} <= codes, report)
+        lines = {f["line"] for f in report["findings"]}
+        self.assertEqual(lines, {4}, report)
+
+    def test_stray_apostrophe_in_jsx_text_does_not_mask_later_lines(self):
+        report = self._report(
+            """export function Live() {
+  const a = <p data-pulp-action="x">don't</p>;
+  return <div onClick={() => 1}>{a}</div>;
+}
+"""
+        )
+        self.assertIn("nonsemantic-click-target", {f["code"] for f in report["findings"]})
+
     def test_json_report_is_deterministic(self):
         first = self._report("export function Knob() { return <button data-pulp-action=\"x\">x</button>; }\n")
         second = self._report("export function Knob() { return <button data-pulp-action=\"x\">x</button>; }\n")
