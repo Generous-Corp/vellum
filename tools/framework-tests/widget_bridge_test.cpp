@@ -248,8 +248,8 @@ FRAMEWORK_TEST(a_panel_cannot_rebind_a_family_another_owner_registered) {
         sealed_display_name_preserved |= registered.family == case_variant;
     CHECK(sealed_display_name_preserved);
     auto lower_case_variant = case_variant;
-    std::transform(lower_case_variant.begin(), lower_case_variant.end(), lower_case_variant.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    for (auto& character : lower_case_variant)
+        character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
     CHECK(!register_embedded(b, lower_case_variant, "assets/face.ttf"));
 
     const auto host_case_variant = probe_family("host-case-variant");
@@ -259,9 +259,8 @@ FRAMEWORK_TEST(a_panel_cannot_rebind_a_family_another_owner_registered) {
         host_display_name_preserved |= registered.family == host_case_variant;
     CHECK(host_display_name_preserved);
     auto host_lower_case_variant = host_case_variant;
-    std::transform(host_lower_case_variant.begin(), host_lower_case_variant.end(),
-                   host_lower_case_variant.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    for (auto& character : host_lower_case_variant)
+        character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
     CHECK(!register_embedded(a, host_lower_case_variant, "assets/face.ttf"));
 
     // The owning panel adds faces, and another instance of it shares them.
