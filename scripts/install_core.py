@@ -62,6 +62,8 @@ SAFE_ROOTS = {
     "vellum_interaction.py",
     "vellum_html_source.py",
     "vellum_web_backend.py",
+    "vellum_ui_build.py",
+    "vellum_ui_lint.py",
     "web",
 }
 SHA256 = re.compile(r"[0-9a-f]{64}")

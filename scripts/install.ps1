@@ -41,6 +41,13 @@ function Install-Payload([string]$Payload) {
     if (Test-Path (Join-Path $Payload "vellum_html_source.py")) {
         Copy-Item (Join-Path $Payload "vellum_html_source.py") (Join-Path $library "vellum_html_source.py") -Force
     }
+    foreach ($uiModule in @("vellum_ui_build.py", "vellum_ui_lint.py")) {
+        if (Test-Path (Join-Path $Payload $uiModule)) {
+            Copy-Item (Join-Path $Payload $uiModule) (Join-Path $library $uiModule) -Force
+        } else {
+            Remove-Item (Join-Path $library $uiModule) -Force -ErrorAction SilentlyContinue
+        }
+    }
     Copy-Item (Join-Path $Payload "metadata.json") (Join-Path $library "metadata.json") -Force
     Copy-Item (Join-Path $Payload "install-manifest.json") (Join-Path $library "install-manifest.json") -Force
     $agentDestination = Join-Path $library ".agents"
@@ -184,6 +191,8 @@ if ($LocalRoot) {
         Copy-Item $cdpClient (Join-Path $temporary "vellum_cdp_client.py")
         Copy-Item $browserModule (Join-Path $temporary "vellum_browser.py")
         Copy-Item $interactionModule (Join-Path $temporary "vellum_interaction.py")
+        Copy-Item (Join-Path $LocalRoot "cli\vellum_ui_build.py") (Join-Path $temporary "vellum_ui_build.py")
+        Copy-Item (Join-Path $LocalRoot "cli\vellum_ui_lint.py") (Join-Path $temporary "vellum_ui_lint.py")
         $temporaryAgentSkills = Join-Path $temporary ".agents\skills"
         New-Item -ItemType Directory -Force -Path $temporaryAgentSkills | Out-Null
         Copy-Item `

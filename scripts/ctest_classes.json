@@ -20,6 +20,7 @@
       "vellum.capture-stats",
       "vellum.ci-runner-policy",
       "vellum.cli-illustrator-to-svg",
+      "vellum.cli-ui-build",
       "vellum.cli-ui-lint",
       "vellum.cli-ui-lint-captured-corpus",
       "vellum.cli-ui-lint-clean-fixture",

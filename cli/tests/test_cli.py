@@ -33,6 +33,26 @@ def invoke(*arguments: str, cwd: Path | None = None, env: dict[str, str] | None 
 
 
 class CliTests(unittest.TestCase):
+    def test_help_discovers_the_design_command_family(self) -> None:
+        """Every design-family verb is discoverable from help without an SDK."""
+        top = invoke("--help")
+        self.assertEqual(top.returncode, 0, top.stderr)
+        for verb in ("import", "reimport", "design", "ui", "compare", "capture"):
+            with self.subTest(verb=verb):
+                self.assertRegex(top.stdout, rf"\n    {verb} ")
+        design = invoke("design", "--help")
+        self.assertEqual(design.returncode, 0, design.stderr)
+        for action in ("check", "diff"):
+            self.assertIn(action, design.stdout)
+        ui = invoke("ui", "--help")
+        self.assertEqual(ui.returncode, 0, ui.stderr)
+        for action in ("build", "check", "lint"):
+            self.assertIn(f"{action}:", ui.stdout)
+        imported = invoke("import", "--help")
+        self.assertEqual(imported.returncode, 0, imported.stderr)
+        for source_type in ("fig", "figma-plugin", "pencil", "designmd", "v0", "jsx", "preconverted-svg"):
+            self.assertIn(source_type, imported.stdout)
+
     def test_html_import_without_browser_payload_reports_capability_unavailable(self) -> None:
         """An SDK built without the browser payload must not surface a traceback."""
         for source_type in ("html", "claude-design"):

@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import hashlib
+import io
 import json
 import math
 import os
@@ -1542,6 +1544,20 @@ def parser() -> argparse.ArgumentParser:
         action.add_argument("--project")
         action.add_argument("--as", dest="source_key", default="main")
 
+    ui = commands.add_parser(
+        "ui",
+        help="build, check, or lint a deterministic owned UI source snapshot",
+        description=(
+            "build: emit source files and ui-build-manifest.json; "
+            "check: verify source and output bytes against the manifest; "
+            "lint: check semantic source and a captured corpus"
+        ),
+    )
+    ui.add_argument(
+        "ui_arguments", nargs=argparse.REMAINDER,
+        help="build|check|lint [--source DIR] [--out DIR] [--manifest FILE] [--enforce-size]",
+    )
+
     compare = commands.add_parser(
         "compare", help="compare two PNG captures with deterministic pixel metrics",
     )
@@ -1603,6 +1619,52 @@ def parser() -> argparse.ArgumentParser:
         for argument, options in arguments:
             command.add_argument(argument, **options)
     return root
+
+
+UI_ACTIONS = ("build", "check", "lint")
+
+
+def ui_command(arguments: list[str], *, json_output: bool) -> int:
+    """Run the owned UI source snapshot tool and return its exit code.
+
+    The tool prints its own receipt. With --json the receipt becomes the
+    data of one CLI result object, so callers parse one schema.
+    """
+    if not arguments or arguments[0] not in UI_ACTIONS:
+        raise CliFailure(
+            "ui requires one of: " + ", ".join(UI_ACTIONS) + ".",
+            status="invalid_arguments", exit_code=EXIT_USAGE,
+        )
+    try:
+        import vellum_ui_build
+    except ImportError as error:
+        raise CliFailure(
+            "This SDK does not provide the UI source snapshot tool.",
+            status="capability_unavailable", exit_code=EXIT_UNAVAILABLE,
+        ) from error
+    if not json_output:
+        try:
+            return vellum_ui_build.main(arguments)
+        except SystemExit as error:
+            return error.code if isinstance(error.code, int) else EXIT_USAGE
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        try:
+            code = vellum_ui_build.main([*arguments, "--json"])
+        except SystemExit as error:
+            code = error.code if isinstance(error.code, int) else EXIT_USAGE
+    try:
+        receipt = json.loads(stdout.getvalue())
+    except json.JSONDecodeError:
+        receipt = None
+    action = arguments[0]
+    message = stderr.getvalue().strip() or f"ui {action} completed."
+    emit(result(
+        "ui", ok=code == 0,
+        status=f"ui_{action}_ok" if code == 0 else f"ui_{action}_failed",
+        message=message, data=receipt if isinstance(receipt, dict) else None,
+    ), json_output=True)
+    return code
 
 
 def forwarded_arguments(args: argparse.Namespace) -> list[str]:
@@ -1716,6 +1778,8 @@ def main(argv: Iterable[str] | None = None) -> int:
                     "--page requires a local Figma .fig frame selector or an Illustrator input.",
                     status="invalid_arguments", exit_code=EXIT_USAGE,
                 )
+        if args.command == "ui":
+            return ui_command(list(args.ui_arguments), json_output=args.json)
         if args.command == "create":
             payload = create_project(args)
         elif args.command == "doctor":
