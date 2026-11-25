@@ -1117,6 +1117,16 @@
       "pulp_commits": [],
       "framework_blob": null,
       "reason": "Path-free validation and registration of sealed panel font containers."
+    },
+    {
+      "framework_path": "framework/core/canvas/src/font_validation.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Structural validation for sealed font bytes before platform parsing."
     }
   ]
 }
