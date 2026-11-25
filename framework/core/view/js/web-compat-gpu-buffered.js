@@ -398,12 +398,18 @@ function __installNativeGpuBufferedDrawAugmentation() {
         // The wrapped encoder records a canvas clear that it hands over when
         // the pass ends, after this pass's buffered draws. Those draws already
         // apply the pass's load operation, so the late clear would erase them;
-        // it is kept only for a pass that drew nothing through this path.
+        // it is kept only for a pass that drew nothing through this path. A
+        // pass-only command keeps the dropped clear as its fallback, applied
+        // when the native bridge does not take pass-only payloads.
+        var passOnlyCommand = null;
         var innerInit = {};
         for (var key in init) innerInit[key] = init[key];
         if (typeof init.onEnd === "function") {
             innerInit.onEnd = function(command) {
-                if (emittedBufferedDraw && command && command.type === "native-clear-current-texture") return;
+                if (emittedBufferedDraw && command && command.type === "native-clear-current-texture") {
+                    if (passOnlyCommand) passOnlyCommand.fallbackClear = command;
+                    return;
+                }
                 init.onEnd(command);
             };
         }
@@ -577,7 +583,8 @@ function __installNativeGpuBufferedDrawAugmentation() {
                     // The native pass applies the colour clear too, so the
                     // wrapped encoder's own clear is dropped.
                     emittedBufferedDraw = true;
-                    init.onEnd({ type: "native-pass-only-buffered", payload: passOnlyPayload });
+                    passOnlyCommand = { type: "native-pass-only-buffered", payload: passOnlyPayload };
+                    init.onEnd(passOnlyCommand);
                 }
             }
             if (!emittedBufferedDraw && typeof init.onEnd === "function") {
@@ -617,7 +624,13 @@ function __installNativeGpuBufferedDrawAugmentation() {
                     }
                     if (command.type === "native-pass-only-buffered" &&
                         typeof __gpuQueueDrawBufferedImpl === "function") {
-                        __gpuQueueDrawBufferedImpl(command.payload);
+                        // A bridge without pass-only support returns false;
+                        // the pass's colour clear then runs as a plain clear.
+                        var applied = __gpuQueueDrawBufferedImpl(command.payload);
+                        var fallback = command.fallbackClear;
+                        if (applied === false && fallback && typeof __gpuQueueSubmitImpl === "function") {
+                            __gpuQueueSubmitImpl(fallback.canvasId, fallback.r, fallback.g, fallback.b, fallback.a);
+                        }
                         continue;
                     }
                     if (command.type === "native-draw-current-texture-buffered" &&
