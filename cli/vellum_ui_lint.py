@@ -438,10 +438,13 @@ def lint_source(root: Path, *, enforce_size: bool = False, max_component_lines: 
                                     "runtime output depends on an unseeded clock or random source"))
         # Keep the high-signal same-line control for repeated leaves, then use
         # the balanced subtree scanner below for copied markup that spans lines.
-        for line_number, source_line in enumerate(text.splitlines(), 1):
+        # Match on the masked line (comments/quoted prose blanked) but read the
+        # tag text from the original so differing attribute strings still differ.
+        for line_number, (source_line, masked_line) in enumerate(
+                zip(text.splitlines(), bare_text.splitlines()), 1):
             tags = []
-            for match in OPEN_TAG.finditer(source_line):
-                tag = re.sub(r"\s+", " ", match.group(0)).strip()
+            for match in OPEN_TAG.finditer(masked_line):
+                tag = re.sub(r"\s+", " ", source_line[match.start():match.end()]).strip()
                 if not tag.startswith(("<Fragment", "<React.Fragment", "<style", "<script")):
                     tags.append(tag)
             for tag in sorted(set(tags)):

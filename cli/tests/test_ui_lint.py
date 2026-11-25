@@ -120,6 +120,17 @@ export function Notes() {
         self.assertTrue(report["ok"], report)
         self.assertEqual(report["findings"], [])
 
+    def test_same_line_duplicate_scan_ignores_strings_and_comments(self):
+        report = self._report(
+            """// <div>x</div><div>x</div>
+export function Docs() {
+  const docs = "<div>x</div><div>x</div>";
+  return <p data-pulp-action="d" title="a">{docs}<i className="a"/><i className="b"/></p>;
+}
+"""
+        )
+        self.assertTrue(report["ok"], report)
+
     def test_real_violations_still_fire_beside_masked_text(self):
         report = self._report(
             """// Math.random() in a comment is fine
