@@ -156,6 +156,7 @@
       "vellum.web.browser-process-cleanup",
       "vellum.web.browser-proof-wait",
       "vellum.web.canvas-shell-lowering",
+      "vellum.web.editor-gesture",
       "vellum.web.layout-contract",
       "vellum.web.no-engine",
       "vellum.web.no-engine-negative-control",
@@ -277,6 +278,8 @@
       "vellum.rmlui.install-consumer-native",
       "vellum.rmlui.install-consumer-native-package",
       "vellum.web.browser-smoke",
+      "vellum.web.editor-session",
+      "vellum.web.editor-session-negative-control",
       "vellum.web.phase3-exact-browser",
       "vellum.web.text-ime-accessibility"
     ]
