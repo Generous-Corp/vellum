@@ -253,7 +253,8 @@ def _canonical_markup(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _mask_non_markup_regions(text: str, *, strings: bool = True) -> str:
+def _mask_non_markup_regions(text: str, *, strings: bool = True,
+                             spans: list[tuple[int, int]] | None = None) -> str:
     """Blank comments and quoted JavaScript regions without changing offsets.
 
     The duplicate scanner is intentionally dependency-free rather than a TSX
@@ -317,23 +318,18 @@ def _mask_non_markup_regions(text: str, *, strings: bool = True) -> str:
                 # JSX text must not swallow the rest of the file.
                 break
             end += 1
+        if spans is not None:
+            spans.append((index, end))
         if strings:
             blank(index, end)
         index = end
     return "".join(masked)
 
 
-def _is_style_value_string(code_text: str, bare_text: str, offset: int) -> bool:
-    """True when ``offset`` sits in a short quoted CSS value such as ``'#fff'``
-    or ``'1px solid #fff'``, as opposed to documentation prose or markup."""
-    start = offset
-    while start > 0 and bare_text[start - 1] == " " and code_text[start - 1] != "\n":
-        start -= 1
-    end = offset
-    while end < len(bare_text) and bare_text[end] == " " and code_text[end] != "\n":
-        end += 1
-    # Widen to the quote characters, which are blanked along with the content.
-    content = code_text[start:end].strip("'\"` \t")
+def _is_style_value_string(content: str) -> bool:
+    """True for a short quoted CSS value such as ``'#fff'`` or
+    ``'1px solid #fff'``, as opposed to documentation prose or markup."""
+    content = content.strip("'\"` \t")
     if any(ch in content for ch in "{}<>=;"):
         return False
     outside_parens = re.sub(r"\([^)]*\)", "()", content)
@@ -424,7 +420,8 @@ def lint_source(root: Path, *, enforce_size: bool = False, max_component_lines: 
         except UnicodeDecodeError:
             findings.append(Finding("invalid-utf8", rel, 1, "source file is not valid UTF-8"))
             continue
-        code_text = _mask_non_markup_regions(text, strings=False)
+        string_spans: list[tuple[int, int]] = []
+        code_text = _mask_non_markup_regions(text, strings=False, spans=string_spans)
         bare_text = _mask_non_markup_regions(text)
         # Generic component/file names lose semantic identity on re-import.
         if GENERIC_NAME.search(path.stem):
@@ -448,8 +445,9 @@ def lint_source(root: Path, *, enforce_size: bool = False, max_component_lines: 
         # Raw colours are allowed only when explicitly marked as an unmatched
         # token (the marker is counted by a later corpus budget).
         for match in COLOR_LITERAL.finditer(code_text):
-            if bare_text[match.start()] == " " and \
-                    not _is_style_value_string(code_text, bare_text, match.start()):
+            enclosing = next((span for span in string_spans
+                              if span[0] <= match.start() < span[1]), None)
+            if enclosing and not _is_style_value_string(text[enclosing[0]:enclosing[1]]):
                 continue  # colour-looking text inside quoted prose
             line_start = text.rfind("\n", 0, match.start()) + 1
             line_end = text.find("\n", match.start())
