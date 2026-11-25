@@ -269,7 +269,11 @@ if(GPU_RUNTIME_BUILD_TESTS)
         if(NOT EXISTS "${_gpu_runtime_renderer_libdir}/libskia.a")
             message(FATAL_ERROR "Graphite host qualification needs the full renderer provider")
         endif()
-        gpu_runtime_read_renderer_lock(PLATFORM macos-arm64 PREFIX _gpu_runtime_graphite)
+        include("${CMAKE_CURRENT_LIST_DIR}/cmake/GpuRuntimeGraphiteHost.cmake")
+        gpu_runtime_graphite_lock_platform("${CMAKE_SYSTEM_NAME}" "${CMAKE_SYSTEM_PROCESSOR}"
+            "${ANDROID_ABI}" _gpu_runtime_graphite_platform)
+        gpu_runtime_read_renderer_lock(PLATFORM ${_gpu_runtime_graphite_platform}
+            PREFIX _gpu_runtime_graphite)
         file(SHA256 "${_gpu_runtime_renderer_libdir}/libskia.a" _gpu_runtime_graphite_actual)
         if(NOT _gpu_runtime_graphite_actual STREQUAL _gpu_runtime_graphite_SHA256_libskia.a)
             message(FATAL_ERROR "Graphite host qualification Skia library differs from renderer lock")
@@ -302,6 +306,10 @@ if(GPU_RUNTIME_BUILD_TESTS)
     add_test(NAME gpu-runtime.device-api-closure-unit
         COMMAND "${Python3_EXECUTABLE}" -I
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/test_check_device_api_closure.py")
+    add_test(NAME gpu-runtime.graphite-host-platform
+        COMMAND "${CMAKE_COMMAND}"
+            -DMODULE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/GpuRuntimeGraphiteHost.cmake
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/graphite_host_platform_test.cmake")
     add_test(NAME gpu-runtime.graphite-host-checker-unit
         COMMAND "${Python3_EXECUTABLE}" -I
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/test_check_graphite_host.py")
