@@ -1483,6 +1483,27 @@ class RunAllowlist(unittest.TestCase):
         self.assertEqual(self.judged(policy.VERSION_WORKFLOW, bump, bump), [])
         self.assertEqual(self.judged(policy.VERSION_WORKFLOW, job, job), [])
 
+    def test_the_bump_push_may_read_the_app_key_environment(self) -> None:
+        # The push job may read SHIPYARD_APP_PRIVATE_KEY through the main-only
+        # `app-key` environment, so the repository-level secret can go. The
+        # base branch's copy judges with its own list, so the variant is listed
+        # before the workflow names the environment.
+        job = "    runs-on: ubuntu-latest\n    timeout-minutes: 10\n"
+        self.assertEqual(self.judged(policy.VERSION_WORKFLOW, job, "    environment: app-key\n" + job), [])
+        # Only that literal name: another environment, another spelling, the
+        # mapping form, or anything else beside it is still unreviewed.
+        for new in ("    environment: APP-KEY\n" + job,
+                    "    environment: release-app-key\n" + job,
+                    "    environment:\n      name: app-key\n" + job,
+                    "    environment: app-key\n" + job + "    env:\n      BASH_ENV: x.sh\n"):
+            with self.subTest(new=new):
+                self.assert_unsupported(self.judged(policy.VERSION_WORKFLOW, job, new))
+        # The plan job, which runs repository Python, gains no such variant.
+        plan = "    runs-on: ubuntu-latest\n    timeout-minutes: 15\n"
+        self.assert_unsupported(self.judged(policy.VERSION_WORKFLOW, plan, "    environment: app-key\n" + plan))
+        # Positive control: the workflow as written still passes.
+        self.assertEqual(self.judged(policy.VERSION_WORKFLOW, job, job), [])
+
     def test_a_reviewed_step_cannot_change_any_key(self) -> None:
         # Every key but `name` is reviewed: the token, the checkout, a working
         # directory or `continue-on-error` change what the token-holding step does.
