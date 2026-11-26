@@ -215,6 +215,20 @@ def default_ir_path(capture_dir: pathlib.Path) -> pathlib.Path:
     return capture_dir.with_name(name + ".json")
 
 
+def _capture_child(capture_dir: pathlib.Path, asset_name: str, what: str) -> pathlib.Path:
+    """Resolve a capture-controlled path and keep it inside the capture tree."""
+    if not isinstance(asset_name, str) or not asset_name:
+        raise CaptureInputError(f"{what} must name a file inside {capture_dir}")
+    root = capture_dir.resolve()
+    path = (capture_dir / asset_name).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        raise CaptureInputError(
+            f"{what} {asset_name!r} escapes capture directory {capture_dir}") from None
+    return path
+
+
 def _walk_ir(node: dict, out: list[dict]) -> None:
     out.append(node)
     for child in node.get("children") or []:
@@ -233,13 +247,18 @@ def _verify_pairing(ir: dict, capture_dir: pathlib.Path) -> int:
     checked = 0
     for asset in (ir.get("assetManifest") or {}).get("assets") or []:
         uri = asset.get("original_uri") or ""
+        if not uri.startswith(CAPTURE_URI):
+            continue
         expected = asset.get("content_hash") or ""
-        if not uri.startswith(CAPTURE_URI) or not expected:
-            continue
-        path = capture_dir / uri[len(CAPTURE_URI):]
+        if not expected:
+            raise CaptureInputError(f"capture asset {uri!r} has no content_hash")
+        path = _capture_child(capture_dir, uri[len(CAPTURE_URI):], "capture asset")
         if not path.is_file():
-            continue
-        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+            raise CaptureInputError(f"capture asset {path} not found")
+        try:
+            actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError as error:
+            raise CaptureInputError(f"capture asset {path} cannot be read: {error}") from None
         if actual != expected:
             raise CaptureInputError(
                 f"{path.name} in {capture_dir} does not match the IR's recorded hash; "
@@ -261,7 +280,8 @@ def _load_snapshot(capture_dir: pathlib.Path) -> dict:
         raise CaptureInputError(
             f"unsupported capture schema {envelope.get('schema')!r} (expected {CAPTURE_SCHEMA})")
     documents = envelope.get("documents") or [{}]
-    snapshot_path = capture_dir / (documents[0].get("snapshot_asset") or "dom-snapshot.json")
+    snapshot_asset = documents[0].get("snapshot_asset") or "dom-snapshot.json"
+    snapshot_path = _capture_child(capture_dir, snapshot_asset, "snapshot asset")
     if not snapshot_path.is_file():
         raise CaptureInputError(f"capture has no DOM snapshot: {snapshot_path}")
     raw = snapshot_path.read_bytes()

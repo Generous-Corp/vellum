@@ -647,7 +647,52 @@ class TestCaptureCli(CaptureTestCase):
         (fx.capture / "browser-static.png").unlink()
         result = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
         self.assertEqual(result.returncode, 2)
-        self.assertIn("cannot prove", result.stderr)
+        self.assertIn("not found", result.stderr)
+
+    def test_a_missing_listed_capture_asset_is_refused_even_if_another_verifies(self):
+        fx = self.fixture()
+        ir = json.loads(fx.ir.read_text())
+        ir["assetManifest"]["assets"].append({
+            "original_uri": "pulp-capture:///missing.png",
+            "content_hash": hashlib.sha256(b"missing").hexdigest(),
+        })
+        fx.ir.write_text(json.dumps(ir))
+        result = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("capture asset", result.stderr)
+        self.assertIn("not found", result.stderr)
+
+    def test_a_capture_asset_path_escape_is_refused(self):
+        fx = self.fixture()
+        outside = fx.capture.parent / "outside.png"
+        outside.write_bytes(REFERENCE_PNG)
+        ir = json.loads(fx.ir.read_text())
+        ir["assetManifest"]["assets"][0]["original_uri"] = "pulp-capture:///../outside.png"
+        fx.ir.write_text(json.dumps(ir))
+        result = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("escapes capture directory", result.stderr)
+
+    def test_a_symlinked_capture_asset_outside_the_capture_is_refused(self):
+        fx = self.fixture()
+        outside = fx.capture.parent / "outside.png"
+        outside.write_bytes(REFERENCE_PNG)
+        (fx.capture / "browser-static.png").unlink()
+        (fx.capture / "browser-static.png").symlink_to(outside)
+        result = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("escapes capture directory", result.stderr)
+
+    def test_a_snapshot_asset_path_escape_is_refused(self):
+        fx = self.fixture()
+        outside = fx.capture.parent / "outside.json"
+        outside.write_bytes((fx.capture / "dom-snapshot.json").read_bytes())
+        envelope = json.loads((fx.capture / "capture.json").read_text())
+        envelope["documents"][0]["snapshot_asset"] = "../outside.json"
+        (fx.capture / "capture.json").write_text(json.dumps(envelope))
+        result = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("escapes capture directory", result.stderr)
 
     def test_a_non_numeric_backend_id_is_a_usage_error(self):
         lowered = PANEL_LOWERED + [("card/odd", "not-a-number")]
