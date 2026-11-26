@@ -33,6 +33,8 @@
       "vellum.effects",
       "vellum.feature-versions",
       "vellum.feature-versions-drift",
+      "vellum.fidelity-montage",
+      "vellum.fidelity-reference-diff",
       "vellum.foundation",
       "vellum.frame-driver",
       "vellum.frame-pump",
