@@ -13,14 +13,15 @@ The run checks, in this order:
            with the adapter's begin, set and end calls and their values;
   source   a click on the Source chip opens the page's file selection, and
            the chosen file's cleaned name reaches the chip;
-  ink      the capture has ink in the chip, every track and every label box.
+  ink      every label, chip, track, tab and the info glyph has ink against
+           its own surface (the shared gate, perceptual_gate.js).
 
-Before those, the field check mounts the editor at the native screenshot's
-size and device scale 2 in the native capture's state (field inputs,
-parameter values and clock) with the clock frozen. The frame's digest
-repeats at the same time and changes at the next, and a press on each mode
-tab switches the field. The frame is saved next to the viewport captures
-for comparison with the native capture, at both viewports.
+Before those, the calibration gate mounts the editor at the native
+screenshot's size and device scale with the native capture's field state,
+parameter values and clock, and runs the shared gate: SSIM against the
+native reference, ink in every region against its surface, and Bypass state
+ink. It also checks the frozen clock is deterministic and that a mode tab
+switches the field.
 
 The view must also tear down cleanly and no browser process may outlive the
 run.
@@ -29,6 +30,10 @@ run.
 the right and passes only when the bounds check fails.
 --negative-control swap serves a view whose Mix and Size parameter ids are
 exchanged and passes only when the mapping check fails.
+--negative-control missing-chip, missing-label, solid-background and
+placeholder serve a view with no Source chip, no source name, nothing but
+the ground colour, or a one pixel placeholder for every text, and pass only
+when the gate fails.
 
 The browser is VELLUM_CHROME_PATH and nothing else; an installed browser is
 never used. Without it the run exits 77 so ctest reports a skip.
@@ -86,22 +91,120 @@ ADVANCES = {**dict.fromkeys("IJ", 0.30), "L": 0.52, **dict.fromkeys("SEFPTZ", 0.
             **dict.fromkeys("RBKVAXY", 0.66), **dict.fromkeys("CDHNUOQG", 0.73),
             **dict.fromkeys("MW", 0.88), " ": 0.40}
 
+VIEW = "views/superconvolver.js"
+SESSION = "session/editor_session.js"
+# The regions the gate inks: text boxes, measured without their text, and
+# chrome, measured without the shape. Sliders add their name, value and track.
+TEXT_REGIONS = ["wordmark", "info/glyph", "source/name", "source/caption", "bypass/text",
+                "tab/0/text", "tab/1/text", "tab/2/text"]
+CHROME_REGIONS = ["source", "source/orb", "tabs", "tab/0", "info", "bypass"]
+SLIDER_TEXT = [f"{key}/{part}" for key in ("mix", "size", "gain") for part in ("name", "value")]
+SLIDER_TRACKS = [f"{key}/track" for key in ("mix", "size", "gain")]
+ALL_INK = {f"ink:{name}" for name in TEXT_REGIONS + SLIDER_TEXT + CHROME_REGIONS + SLIDER_TRACKS}
+ALL_INK.add("ink:bypass/state")
+# Each control: the file it alters, the single text it replaces and with what,
+# the stage that must fail and, for the gate, exactly the failures it must name.
+# The info glyph's 3s wide box holds 4 device pixels of a one pixel
+# placeholder, 2.3% of its area, so the placeholder control cannot fail it.
+NEGATIVE_CONTROLS = {
+    "move": (VIEW, "const track = {x: cell.x + hpad,", "const track = {x: cell.x + hpad + 4,", "bounds",
+             None),
+    "swap": (VIEW, "PARAMETERS = Object.freeze({mix: 1, size: 2,",
+             "PARAMETERS = Object.freeze({mix: 2, size: 1,", "mapping", None),
+    "missing-chip": (VIEW, "vector: box => chip(box, radius('source'), CHROME_FILL, CHROME_STROKE)},",
+                     "vector: box => ({viewBox: [0, 0, box.width, box.height], ops: []})},", "gate",
+                     {"ink:source"}),
+    "missing-label": (VIEW, """        {id: 'source/name', kind: 'label', color: 'value',
+            format: state => sourceLabel(state.impulseResponseName)},
+""", "", "gate", {"ink:source/name"}),
+    "missing-field": (SESSION, "        setBackdrop();\n", "", "gate", {"ssim"}),
+    "solid-background": (SESSION, "        setBackdrop();\n        if (omit.nodes) {",
+                         "        if (false) {", "gate", ALL_INK | {"ssim"}),
+    "placeholder": (SESSION, "        if (omit.ids.has(key)) return;\n",
+                    "        if (omit.ids.has(key)) return;\n        drawnText[key] = text;\n"
+                    "        rect(key, box.x, box.y, 1, 1, 0, ...rgba(color));\n        return;\n", "gate",
+                    {f"ink:{name}" for name in TEXT_REGIONS + SLIDER_TEXT if name != "info/glyph"}),
+}
+
 # The native capture's state (Pulp examples/super-convolver/screenshot.cpp at
 # 3a6f370295), measured from that build: one paint, so the clock is 1/60 s;
 # Rooms 16 and Flow 0, so density 16 and no motion; the energy its spectrum
 # smoothing reached; Tracers. The plug-in values are the ones screenshot.cpp
-# sets. The field check overrides the web field's inputs with these, which
+# sets. The calibration overrides the web field's inputs with these, which
 # the web build cannot otherwise reach (it declares neither Rooms nor Flow).
 CALIBRATION = {
     "viewport": (820, 560), "scale": 2, "time": 1 / 60,
     "field": {"density": 16, "flow": 0, "energy": 0.304196358},
     "values": {"1": 45, "2": 1.5, "3": 0, "4": 0},
 }
-NEGATIVE_CONTROLS = {
-    "move": ("const track = {x: cell.x + hpad,", "const track = {x: cell.x + hpad + 4,", "bounds"),
-    "swap": ("PARAMETERS = Object.freeze({mix: 1, size: 2,",
-             "PARAMETERS = Object.freeze({mix: 2, size: 1,", "mapping"),
-}
+REFERENCE = ROOT / "web/tests/fixtures/superconvolver-native/native-820x560-luma.png"
+
+
+def gate_regions(bounds: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every region the gate inks, with the draw ids its surface leaves out."""
+    regions = []
+    for key in TEXT_REGIONS + SLIDER_TEXT + CHROME_REGIONS:
+        regions.append({"name": key, "box": bounds[key], "omit": [key]})
+    for key in SLIDERS:
+        regions.append({"name": f"{key}/track", "box": bounds[f"{key}/track"],
+                        "omit": [f"{key}/{part}" for part in ("track", "fill", "thumb", "thumb-disc")]})
+    return regions
+
+
+def check_gate(result: dict[str, Any], enforce_ssim: bool = True) -> None:
+    failures = [name for name in result["failures"] if enforce_ssim or name != "ssim"]
+    check(not failures, "gate", {
+        "failures": result["failures"], "ssim": result["similarity"],
+        "ink": {name: ink for name, ink in result["ink"].items() if not ink["pass"]}})
+
+
+def calibrate(cdp: "ViewCdp", width: int, height: int, references: dict[str, str],
+              capture_dir: Path, enforce_ssim: bool = True) -> dict[str, Any]:
+    """Mounts the editor in the native capture's state at `width` by `height`
+    and device scale 2, runs the gate against the staged `references`
+    ({"reference", "fieldReference"}, either optional), proves the frozen
+    clock and the mode tabs, and saves the capture."""
+    cdp.command("Emulation.setDeviceMetricsOverride", {
+        "width": PAGE["width"], "height": PAGE["height"],
+        "deviceScaleFactor": CALIBRATION["scale"], "mobile": False})
+    options = json.dumps({"field": CALIBRATION["field"], "values": CALIBRATION["values"],
+                          "time": CALIBRATION["time"]})
+    cdp.fixture(f"mount({width}, {height}, {options})")
+    report = cdp.fixture("remeasure()")
+    check(report["size"]["scale"] == CALIBRATION["scale"]
+          and report["size"]["backingWidth"] == CALIBRATION["scale"] * width, "device-scale",
+          report["size"])
+    request = {"regions": gate_regions(report["bounds"]), "bypassState": "bypass", **references}
+    result = cdp.fixture(f"gate({json.dumps(request)})")
+    check_gate(result, enforce_ssim)
+    captured = cdp.fixture("capture()")
+    capture_dir.mkdir(parents=True, exist_ok=True)
+    png = capture_dir / f"superconvolver-calibration-{width}x{height}@2x.png"
+    png.write_bytes(base64.b64decode(captured["png"].split(",", 1)[1]))
+
+    time_now = CALIBRATION["time"]
+    first = cdp.fixture(f"digestAt({time_now})")
+    again = cdp.fixture(f"digestAt({time_now})")
+    later = cdp.fixture(f"digestAt({time_now + 1 / 60})")
+    check(first == again == result["digest"] and later != first, "field-clock",
+          {"first": first, "again": again, "later": later, "gate": result["digest"]})
+    # A press on each tab switches the field; the clock stays frozen.
+    left, top = report["canvas"]["left"], report["canvas"]["top"]
+    modes = []
+    for index in (1, 2, 0):
+        tab = report["bounds"][f"tab/{index}"]
+        x, y = round(left + tab["x"] + tab["width"] / 2), round(top + tab["y"] + tab["height"] / 2)
+        cdp.mouse("mousePressed", x, y)
+        cdp.mouse("mouseReleased", x, y)
+        modes.append(cdp.fixture("frozenFrame()"))
+    check([mode["mode"] for mode in modes] == [1, 2, 0]
+          and len({mode["digest"] for mode in modes}) == 3 and modes[2]["digest"] == later,
+          "field-modes", modes)
+    return {"ssim": result["similarity"], "fieldSsim": result["fieldSimilarity"],
+            "ssimWithoutField": result["withoutField"],
+            "capture": str(png), "regions": len(result["ink"]), "time": result["time"],
+            "commandCount": result["commandCount"], "modeCommandCounts": [m["commandCount"] for m in modes],
+            "lowestInk": min((ink["fraction"], name) for name, ink in result["ink"].items())}
 
 
 class ViewCdp(FixtureCdp):
@@ -208,47 +311,6 @@ def check_bounds(report: dict[str, Any], width: int, height: int) -> dict[str, f
         check(worst[key] <= BOX_TOLERANCE, "bounds",
               {"box": key, "viewport": [width, height], "actual": actual[key], "expected": want})
     return worst
-
-
-def check_field(cdp: "ViewCdp", width: int, height: int, capture_dir: Path) -> dict[str, Any]:
-    """Mounts the editor in the native capture's state at `width` by `height`
-    and device scale 2 with the clock frozen, proves the frozen clock and the
-    mode tabs, and saves the frame."""
-    cdp.command("Emulation.setDeviceMetricsOverride", {
-        "width": PAGE["width"], "height": PAGE["height"],
-        "deviceScaleFactor": CALIBRATION["scale"], "mobile": False})
-    options = json.dumps({"field": CALIBRATION["field"], "values": CALIBRATION["values"],
-                          "time": CALIBRATION["time"]})
-    cdp.fixture(f"mount({width}, {height}, {options})")
-    report = cdp.fixture("remeasure()")
-    check(report["size"]["scale"] == CALIBRATION["scale"]
-          and report["size"]["backingWidth"] == CALIBRATION["scale"] * width, "device-scale",
-          report["size"])
-    captured = cdp.fixture("capture()")
-    capture_dir.mkdir(parents=True, exist_ok=True)
-    png = capture_dir / f"superconvolver-calibration-{width}x{height}@2x.png"
-    png.write_bytes(base64.b64decode(captured["png"].split(",", 1)[1]))
-
-    time_now = CALIBRATION["time"]
-    first = cdp.fixture(f"digestAt({time_now})")
-    again = cdp.fixture(f"digestAt({time_now})")
-    later = cdp.fixture(f"digestAt({time_now + 1 / 60})")
-    check(first == again and later != first, "field-clock",
-          {"first": first, "again": again, "later": later})
-    # A press on each tab switches the field; the clock stays frozen.
-    left, top = report["canvas"]["left"], report["canvas"]["top"]
-    modes = []
-    for index in (1, 2, 0):
-        tab = report["bounds"][f"tab/{index}"]
-        x, y = round(left + tab["x"] + tab["width"] / 2), round(top + tab["y"] + tab["height"] / 2)
-        cdp.mouse("mousePressed", x, y)
-        cdp.mouse("mouseReleased", x, y)
-        modes.append(cdp.fixture("frozenFrame()"))
-    check([mode["mode"] for mode in modes] == [1, 2, 0]
-          and len({mode["digest"] for mode in modes}) == 3 and modes[2]["digest"] == later,
-          "field-modes", modes)
-    return {"capture": str(png), "commandCount": modes[2]["commandCount"],
-            "modeCommandCounts": [mode["commandCount"] for mode in modes]}
 
 
 def check_mapping(report: dict[str, Any]) -> None:
@@ -374,20 +436,15 @@ def verify_viewport(cdp: ViewCdp, name: str, width: int, height: int,
     capture_dir.mkdir(parents=True, exist_ok=True)
     png = capture_dir / f"superconvolver-{name}-{width}x{height}.png"
     png.write_bytes(base64.b64decode(encoded))
-    inked = ["source", "source/orb", "source/name", "source/caption", "bypass", "wordmark"]
-    for key in SLIDERS:
-        inked += [f"{key}/track", f"{key}/name", f"{key}/value"]
-    for key in inked:
-        ink = captured["ink"][key]
-        # The plan's 1.0% per-region ink floor.
-        check(ink["pixels"] >= 0.01 * ink["area"], "ink", {"box": key, **ink})
+    inked = cdp.fixture(f"gate({json.dumps({'regions': gate_regions(chosen['bounds'])})})")
+    check(inked["pass"], "ink", {name: ink for name, ink in inked["ink"].items() if not ink["pass"]})
     return {"viewport": [width, height], "capture": str(png), "worstBoxDelta": max(worst.values()),
             "boxes": len(worst), "mapping": {entry["id"]: entry["param"] for entry in report["mapping"]},
             "pointerCalls": len(calls), "values": chosen["values"],
             "text": chosen["text"]}
 
 
-def verify(cdp: ViewCdp, capture_dir: Path) -> dict[str, Any]:
+def verify(cdp: ViewCdp, capture_dir: Path, extra: dict[str, Path]) -> dict[str, Any]:
     deadline = time.monotonic() + 30
     while True:
         try:
@@ -401,12 +458,20 @@ def verify(cdp: ViewCdp, capture_dir: Path) -> dict[str, Any]:
         check(boot == [] and time.monotonic() < deadline, "fixture-boot", boot)
         time.sleep(0.1)
     cdp.command("Page.setInterceptFileChooserDialog", {"enabled": True})
-    field = {name: check_field(cdp, width, height, capture_dir) for name, width, height in VIEWPORTS}
+    width, height = CALIBRATION["viewport"]
+    references = {"reference": "reference.png"}
+    if "field" in extra:
+        references["fieldReference"] = "field-reference.png"
+    calibration = {"native-screenshot": calibrate(cdp, width, height, references, capture_dir)}
+    # DESIGN: the narrow viewport has no committed native reference; one given
+    # with --narrow-reference is compared and reported, not held to the floor.
+    calibration["narrow"] = calibrate(cdp, 390, 700, {"reference": "narrow-reference.png"}
+                                      if "narrow" in extra else {}, capture_dir, enforce_ssim=False)
     cdp.command("Emulation.setDeviceMetricsOverride", {
         "width": PAGE["width"], "height": PAGE["height"], "deviceScaleFactor": 1, "mobile": False})
     evidence = {name: verify_viewport(cdp, name, width, height, capture_dir)
                 for name, width, height in VIEWPORTS}
-    evidence["field"] = field
+    evidence["calibration"] = calibration
     finished = cdp.fixture("teardown()")
     check(finished == {"canvasRemoved": True, "pendingFrame": False,
                        "paramsHandlerRestored": True, "callsAfterTeardown": 0}, "teardown", finished)
@@ -415,7 +480,7 @@ def verify(cdp: ViewCdp, capture_dir: Path) -> dict[str, Any]:
     return evidence
 
 
-def stage(core_root: Path, control: str | None) -> dict[str, bytes]:
+def stage(core_root: Path, control: str | None, extra: dict[str, Path]) -> dict[str, bytes]:
     files = {name: (core_root / name).read_bytes()
              for name in ("vellum_web_core.js", "vellum_web_core.wasm")}
     fixture = ROOT / "web/tests/fixtures/superconvolver-view"
@@ -427,17 +492,22 @@ def stage(core_root: Path, control: str | None) -> dict[str, bytes]:
     files["shell/vector-canvas.js"] = (ROOT / "web/shell/vector-canvas.js").read_bytes()
     for path in sorted((ROOT / "web/views").glob("*.js")):
         files[f"views/{path.name}"] = path.read_bytes()
+    files["perceptual_gate.js"] = (ROOT / "web/tests/perceptual_gate.js").read_bytes()
+    files["reference.png"] = REFERENCE.read_bytes()
+    for name, path in extra.items():
+        files[f"{name}-reference.png"] = path.read_bytes()
     if control:
-        old, new, _ = NEGATIVE_CONTROLS[control]
-        text = files["views/superconvolver.js"].decode("utf-8")
+        target, old, new, _, _ = NEGATIVE_CONTROLS[control]
+        text = files[target].decode("utf-8")
         if text.count(old) != 1:
             raise SystemExit(f"negative control {control} cannot find its single target")
-        files["views/superconvolver.js"] = text.replace(old, new).encode("utf-8")
+        files[target] = text.replace(old, new).encode("utf-8")
     return files
 
 
-def run(chrome: str, core_root: Path, capture_dir: Path, control: str | None) -> dict[str, Any]:
-    files = stage(core_root, control)
+def run(chrome: str, core_root: Path, capture_dir: Path, control: str | None,
+        extra: dict[str, Path]) -> dict[str, Any]:
+    files = stage(core_root, control, extra)
     with tempfile.TemporaryDirectory(prefix="vellum-superconvolver-chrome-") as profile:
         os.chmod(profile, 0o700)
         mode = [] if Path(chrome).name == "chrome-headless-shell" else ["--headless=new"]
@@ -465,7 +535,7 @@ def run(chrome: str, core_root: Path, capture_dir: Path, control: str | None) ->
                         time.sleep(0.1)
                 cdp.command("Fetch.enable", {"patterns": [{"urlPattern": "*"}]})
                 cdp.navigate(ORIGIN + "index.html")
-                evidence = verify(cdp, capture_dir)
+                evidence = verify(cdp, capture_dir, extra)
         finally:
             if cdp is not None:
                 cdp.close()
@@ -485,6 +555,10 @@ def main() -> int:
     parser.add_argument("--core-root", required=True, type=Path)
     parser.add_argument("--capture-dir", required=True, type=Path)
     parser.add_argument("--negative-control", choices=sorted(NEGATIVE_CONTROLS))
+    parser.add_argument("--field-reference", type=Path,
+                        help="a greyscale native field-only reference, to report the field's own SSIM")
+    parser.add_argument("--narrow-reference", type=Path,
+                        help="a greyscale native reference at 390 by 700, to report its SSIM")
     args = parser.parse_args()
     chrome = browser()
     if chrome is None:
@@ -492,11 +566,21 @@ def main() -> int:
         return SKIP
     control = args.negative_control
     try:
-        evidence = run(chrome, args.core_root, args.capture_dir, control)
+        extra = {name: path for name, path in (("field", args.field_reference),
+                                               ("narrow", args.narrow_reference)) if path}
+        evidence = run(chrome, args.core_root, args.capture_dir, control, extra)
     except CheckFailure as failure:
-        if control and str(failure).startswith(NEGATIVE_CONTROLS[control][2] + ":"):
+        _, _, _, stage, required = NEGATIVE_CONTROLS[control] if control else (None,) * 5
+        named = None
+        if control and required is not None and str(failure).startswith(stage + ":"):
+            named = set(json.loads(str(failure)[len(stage) + 1:])["failures"])
+        if control and str(failure).startswith(stage + ":") and (required is None or named == required):
             print(f"negative control {control} failed as required: {failure}")
             return 0
+        if named is not None:
+            print(f"negative control {control} failed at {stage} naming {sorted(named)}, "
+                  f"not exactly {sorted(required)}", file=sys.stderr)
+            return 1
         print(f"superconvolver view proof failed: {failure}", file=sys.stderr)
         return 1
     if control:
