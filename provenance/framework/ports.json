@@ -1127,6 +1127,30 @@
       "pulp_commits": [],
       "framework_blob": null,
       "reason": "Structural validation for sealed font bytes before platform parsing."
+    },
+    {
+      "framework_path": "framework/core/view/src/text_accessibility.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Owner-aware default text accessibility registry for platforms without a native backend."
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/text_accessibility_windows.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ],
+      "reason": "Windows UI Automation backend for the owner-aware text accessibility registry."
     }
   ]
 }

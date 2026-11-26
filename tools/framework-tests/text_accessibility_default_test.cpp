@@ -10,9 +10,10 @@ using vellum::view::snapshot_accessibility_nodes;
 
 bool contains_owner(const void* owner, std::string_view id) {
     const auto nodes = snapshot_accessibility_nodes();
-    return std::any_of(nodes.begin(), nodes.end(), [=](const auto& node) {
-        return node.owner == owner && node.id == id;
-    });
+    for (const auto& node : nodes) {
+        if (node.owner == owner && node.id == id) return true;
+    }
+    return false;
 }
 
 }  // namespace
