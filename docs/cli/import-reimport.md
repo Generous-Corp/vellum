@@ -103,7 +103,14 @@ vellum import --source-type design-ir ./panel.ir.json --mode baked --emit cpp --
   DESIGN.md file is a token spec and is refused with exit 2. For JSX, import with
   `--mode baked --emit ir-json` first and emit that file as `design-ir`.
 - `--emit cpp|swiftui` without `--mode baked` exits 2.
+- `--dry-run` prints the files instead of writing them; with `--json` each
+  `data.files` entry carries its `content`.
 - Fidelity losses are reported as diagnostics and in `data.losses`.
+  `--strict-fidelity` fails a SwiftUI emit that has any (status
+  `fidelity_failed`, exit 5, nothing written). The baked C++ lane reports losses
+  without failing, so `--strict-fidelity` with `--emit cpp` exits 2.
+- Exit status follows the CLI contract: 2 for usage or a refused source, 4 only
+  when the emitter is not installed, 5 for any failed emit.
 
 The installed SDK runs `sdk/bin/vellum-design-emit`; `VELLUM_DESIGN_EMIT`
 overrides it. Without it the command exits 4 (`capability_unavailable`).

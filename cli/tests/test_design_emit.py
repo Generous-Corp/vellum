@@ -18,6 +18,7 @@ import unittest
 REPO = Path(__file__).resolve().parents[2]
 CLI = REPO / "cli" / "vellum_cli.py"
 IR_FIXTURE = REPO / "fixtures/emitter-conformance/keyed-list-18.ir.json"
+LOSSY_FIXTURE = REPO / "fixtures/emitter-conformance/form-controls-08.ir.json"
 PLUGIN_FIXTURE = REPO / "fixtures/emitter-conformance/fidelity-scene-no-display.pulp.json"
 TOOL = os.environ.get("VELLUM_DESIGN_EMIT", "")
 
@@ -142,6 +143,54 @@ class BakedEmitTests(unittest.TestCase):
         self.assertEqual(code, 2, payload)
         self.assertIn(".fig", payload["message"])
         self.assertFalse((self.out / "ui.cpp").exists())
+
+    def test_dry_run_returns_content_and_writes_nothing(self) -> None:
+        code, payload = vellum("--source-type", "design-ir", str(IR_FIXTURE), "--mode", "baked",
+                               "--emit", "cpp", "--dry-run", "--out", str(self.out / "ui.cpp"))
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["status"], "dry_run")
+        contents = {item["role"]: item["content"] for item in payload["data"]["files"]}
+        self.assertIn('#include "ui.hpp"', contents["cpp.source"])
+        self.assertIn("build_imported_ui", contents["cpp.header"])
+        self.assertEqual(list(self.out.iterdir()), [])
+
+    def test_dry_run_prints_files_without_json(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, str(CLI), "import", "--source-type", "design-ir", str(IR_FIXTURE),
+             "--mode", "baked", "--emit", "swiftui", "--dry-run", "--out", str(self.out / "P.swift")],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("=== swift.view (", completed.stdout)
+        self.assertIn("struct P", completed.stdout)
+        self.assertEqual(list(self.out.iterdir()), [])
+
+    def test_strict_fidelity_failure_is_a_backend_failure(self) -> None:
+        code, payload = vellum("--source-type", "design-ir", str(LOSSY_FIXTURE), "--mode", "baked",
+                               "--emit", "swiftui", "--strict-fidelity",
+                               "--out", str(self.out / "Lossy.swift"))
+        self.assertEqual(code, 5, payload)
+        self.assertEqual(payload["status"], "fidelity_failed")
+        self.assertTrue(payload["data"]["losses"])
+        self.assertFalse((self.out / "Lossy.swift").exists())
+
+    def test_without_strict_fidelity_losses_are_reported_and_written(self) -> None:
+        code, payload = vellum("--source-type", "design-ir", str(LOSSY_FIXTURE), "--mode", "baked",
+                               "--emit", "swiftui", "--out", str(self.out / "Lossy.swift"))
+        self.assertEqual(code, 0, payload)
+        self.assertTrue(payload["data"]["losses"])
+        self.assertTrue((self.out / "Lossy.swift").is_file())
+
+    def test_strict_fidelity_is_refused_for_cpp(self) -> None:
+        code, payload = vellum("--source-type", "design-ir", str(IR_FIXTURE), "--mode", "baked",
+                               "--emit", "cpp", "--strict-fidelity")
+        self.assertEqual(code, 2, payload)
+        self.assertIn("only --emit swiftui", payload["message"])
+
+    def test_emit_flags_need_a_baked_emit(self) -> None:
+        code, payload = vellum("--source-type", "design-ir", str(IR_FIXTURE), "--dry-run")
+        self.assertEqual(code, 2, payload)
+        self.assertIn("apply only to --emit cpp or swiftui", payload["message"])
 
     def test_missing_emitter_is_unavailable(self) -> None:
         code, payload = vellum("--source-type", "design-ir", str(IR_FIXTURE), "--mode", "baked",

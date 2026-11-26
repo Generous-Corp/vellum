@@ -1428,6 +1428,11 @@ def validate_baked_emit(args: argparse.Namespace) -> None:
             f"--emit {args.emit} does not read local .fig files yet; pass a Figma JSON or plugin export.",
             status="invalid_arguments", exit_code=EXIT_USAGE,
         )
+    if args.strict_fidelity and args.emit != "swiftui":
+        raise CliFailure(
+            "--strict-fidelity gates only --emit swiftui; the baked C++ lane reports losses without failing.",
+            status="invalid_arguments", exit_code=EXIT_USAGE,
+        )
     inapplicable = [
         flag for flag, used in (
             ("--file", bool(args.file)), ("--frame", args.frame is not None),
@@ -1462,6 +1467,10 @@ def baked_emit_import(args: argparse.Namespace) -> dict[str, Any]:
                "--emit", args.emit, "--json"]
     if args.output:
         command.extend(["--output", args.output])
+    if args.dry_run:
+        command.append("--dry-run")
+    if args.strict_fidelity:
+        command.append("--strict-fidelity")
     completed = subprocess.run(command, check=False, text=True, capture_output=True)
     try:
         receipt = json.loads(completed.stdout)
@@ -1477,15 +1486,41 @@ def baked_emit_import(args: argparse.Namespace) -> dict[str, Any]:
          "message": line}
         for line in completed.stderr.splitlines() if line.strip()
     ]
-    if completed.returncode == EXIT_USAGE:
+    code = baked_emit_exit_code(completed.returncode)
+    if code == EXIT_USAGE:
         raise CliFailure(str(receipt.get("message")), status=str(receipt.get("status")),
                          exit_code=EXIT_USAGE, diagnostics=diagnostics)
+    message = str(receipt.get("message", ""))
+    files = receipt.get("files", [])
+    if args.dry_run and not args.json and code == 0:
+        message = "\n".join(
+            f"=== {item.get('role')} ({item.get('path')}) ===\n\n{item.get('content', '')}"
+            for item in files
+        )
+    # A failed emit returns ok=false; main() reports it with the backend exit.
     return result(
-        f"import {args.emit}", ok=completed.returncode == 0 and bool(receipt.get("ok")),
-        status=str(receipt.get("status", "emit_failed")), message=str(receipt.get("message", "")),
-        data={"files": receipt.get("files", []), "losses": receipt.get("losses", [])},
+        f"import {args.emit}", ok=code == 0,
+        status=str(receipt.get("status", "emitted" if code == 0 else "emit_failed")),
+        message=message or f"The baked emitter failed (exit {completed.returncode}).",
+        data={"files": files, "losses": receipt.get("losses", [])},
         diagnostics=diagnostics,
     )
+
+
+def baked_emit_exit_code(tool_exit: int) -> int:
+    """Map a vellum-design-emit exit status onto the CLI contract.
+
+    The tool exits 0 (written or printed), 1 (input, asset or write failure),
+    2 (usage or refused source) or 4 (strict fidelity failed). The CLI's 4 means
+    an unavailable capability, so a fidelity failure, like any other failed
+    emit, is a backend failure (5); only usage keeps its own status. main()
+    applies the 5 to any result that is not ok.
+    """
+    if tool_exit == 0:
+        return 0
+    if tool_exit == EXIT_USAGE:
+        return EXIT_USAGE
+    return EXIT_BACKEND
 
 
 def standalone_asset_import(args: argparse.Namespace) -> dict[str, Any]:
@@ -1667,6 +1702,8 @@ def parser() -> argparse.ArgumentParser:
             ("--manifest", {"help": "control-map sidecar for preconverted SVG"}),
             ("--validate-only", {"action": "store_true", "help": "validate an import without generating files"}),
             ("--emit", {"choices": ["js", "ir-json", "materialized-runtime", *BAKED_EMITS], "default": "js"}),
+            ("--dry-run", {"action": "store_true", "help": "print a baked emit instead of writing it"}),
+            ("--strict-fidelity", {"action": "store_true", "help": "fail a baked SwiftUI emit that reports fidelity losses"}),
             ("--mode", {"choices": ["live", "baked"], "default": "live"}),
             ("--source-out", {"help": "output directory for materialized runtime source"}),
             ("--page", {"help": "Figma page name for frame lookup, or Illustrator page number"}),
@@ -1708,7 +1745,8 @@ def forwarded_arguments(args: argparse.Namespace) -> list[str]:
     ignored = {"json", "command", "project"}
     if args.command == "import":
         ignored.update({"output", "provenance", "timeout", "illustrator_input", "manifest",
-                        "validate_only", "emit", "mode", "source_out"})
+                        "validate_only", "emit", "mode", "source_out", "dry_run",
+                        "strict_fidelity"})
     forwarded: list[str] = []
     for key, value in vars(args).items():
         if key in ignored or value is None or value is False:
@@ -1750,6 +1788,11 @@ def main(argv: Iterable[str] | None = None) -> int:
                     status="invalid_arguments", exit_code=EXIT_USAGE,
                 )
         if args.command == "import":
+            if args.emit not in BAKED_EMITS and (args.dry_run or args.strict_fidelity):
+                raise CliFailure(
+                    "--dry-run and --strict-fidelity apply only to --emit cpp or swiftui.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
             if args.emit in BAKED_EMITS:
                 validate_baked_emit(args)
             elif args.source_type in {"jsx", "preconverted-svg"}:

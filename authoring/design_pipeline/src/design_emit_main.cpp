@@ -149,6 +149,8 @@ std::string json_string(std::string_view text) {
 struct Written {
     std::string role;
     fs::path path;
+    // Set only for --dry-run, so a JSON caller receives what would be written.
+    std::optional<std::string> content;
 };
 
 int report(const Options& options, int code, std::string_view status, std::string_view message,
@@ -160,7 +162,9 @@ int report(const Options& options, int code, std::string_view status, std::strin
             << ",\"files\":[";
         for (std::size_t i = 0; i < files.size(); ++i) {
             out << (i ? "," : "") << "{\"role\":" << json_string(files[i].role)
-                << ",\"path\":" << json_string(files[i].path.string()) << "}";
+                << ",\"path\":" << json_string(files[i].path.string());
+            if (files[i].content) out << ",\"content\":" << json_string(*files[i].content);
+            out << "}";
         }
         out << "],\"losses\":[";
         for (std::size_t i = 0; i < losses.size(); ++i) {
@@ -306,6 +310,7 @@ int run(const Options& options) {
                           emitted.losses);
         }
         written.push_back(target);
+        if (options.dry_run) written.back().content = file->content;
     }
     if (options.dry_run && !options.json) std::cout << printed.str();
     if (fidelity_failed)
