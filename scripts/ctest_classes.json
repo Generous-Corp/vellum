@@ -151,6 +151,7 @@
       "vellum.tracing-refused-Linux-x86-64-bypass",
       "vellum.tracing-refused-Windows-AMD64-",
       "vellum.tracing-source",
+      "vellum.tweak-store",
       "vellum.utf8-text",
       "vellum.value.feed",
       "vellum.value.install-consumer",
