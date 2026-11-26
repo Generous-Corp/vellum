@@ -1,19 +1,11 @@
 #pragma once
 
-// WebView embedding for Vellum
-// Wraps CHOC's WebView (ISC license) to provide embedded web content
-// inside plugin/app UIs: Monaco editors, docs panels, custom UIs and so on.
-//
-// The page-side bridge keeps its established wire names (`window.pulp`,
+// WebView embedding for Vellum: CHOC's WebView (ISC license) wrapped for web
+// content inside plug-in and app UIs (Monaco editors, docs panels, custom
+// UIs). The page-side bridge keeps its established wire names (`window.pulp`,
 // `__pulpPostMessage`, the `pulp-message` event and the `pulp://app` default
-// scheme), so a page written against that bridge runs unchanged.
-//
-// Usage:
-//   auto wv = WebViewPanel::create(options);
-//   wv->navigate("https://example.com");
-//   wv->set_html("<h1>Hello</h1>");
-//   wv->evaluate_js("document.title");
-//   wv->bind("myFunc", [](const std::string& args) { ... });
+// scheme), so a page written against that bridge runs unchanged. Typical use:
+// create(), set_html() or navigate(), then bind() or set_message_handler().
 
 #include <string>
 #include <functional>
@@ -126,18 +118,10 @@ WebViewOptions::FetchResource make_webview_directory_resource_fetcher(
     std::filesystem::path root_directory,
     std::string index_filename = "index.html");
 
-/// Identifies the live WebView backend on this platform / build.
-///
-/// Returned values:
-///   * `"wkwebview"`   - macOS / iOS (`WebKit.framework`).
-///   * `"webview2"`    - Windows (Microsoft Edge WebView2 runtime).
-///   * `"webkitgtk"`   - Linux (WebKitGTK via `libwebkit2gtk-4.1.so.0`).
-///   * `"chromium"`    - Android (system WebView).
-///   * `"none"`        - this build compiles no WebView backend, or no
-///                       runtime backend resolved on this OS.
-///
-/// Useful for callers that need to surface a clear "no embedded browser
-/// available on this OS" message.
+/// Identifies the WebView backend this build carries: `"wkwebview"` on macOS
+/// (`WebKit.framework`), `"none"` elsewhere. Vellum compiles WebViewPanel on
+/// macOS only so far; other platforms answer `"none"` until their backends
+/// land, so callers can show a clear "no embedded browser" message.
 std::string detect_webview_backend();
 
 /// Returns true if the host process has a usable WebView backend.
@@ -228,7 +212,8 @@ public:
     // `pulp-message` is also dispatched.
     virtual void post_message(const WebViewMessage& message) = 0;
 
-    // Resize the webview
+    // Resize the native view (macOS: the WKWebView's frame size). An embedding
+    // host that positions the view (NativeViewHost) sets its frame too.
     virtual void set_size(uint32_t width, uint32_t height) = 0;
 };
 

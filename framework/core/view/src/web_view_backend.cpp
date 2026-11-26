@@ -1,25 +1,26 @@
 // WebView backend detector.
 //
-// It is compiled together with web_view.cpp, so a build that carries
-// WebViewPanel answers with the platform backend it compiled. The answer is a
-// constant, which keeps it correct from the first call, including one made by
-// another translation unit's static initializer. Tests may install an override
-// through detail::set_webview_backend_provider().
-//
-//   * macOS / iOS   -> "wkwebview"   (WebKit.framework ships with the OS).
-//   * Other         -> "none"        (no backend in this build yet).
+// It is compiled together with web_view.cpp, which the build carries on
+// macOS only, so it answers "wkwebview" there and "none" on any other target.
+// The answer is a constant, so it is correct from the first call, including
+// one made by another translation unit's static initializer. Tests may install
+// an override through detail::set_webview_backend_provider().
 
 #include <vellum/view/web_view.hpp>
 
 #include <atomic>
 #include <string>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 namespace vellum::view {
 
 namespace {
 
 std::string build_webview_backend() {
-#if defined(__APPLE__)
+#if defined(__APPLE__) && TARGET_OS_OSX
     return "wkwebview";
 #else
     return "none";
@@ -27,7 +28,7 @@ std::string build_webview_backend() {
 }
 
 bool build_webview_backend_available() {
-#if defined(__APPLE__)
+#if defined(__APPLE__) && TARGET_OS_OSX
     return true;
 #else
     return false;

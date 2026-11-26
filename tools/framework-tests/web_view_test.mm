@@ -338,10 +338,8 @@ FRAMEWORK_TEST(snapshot_captures_rendered_content) {
     CHECK(panel != nullptr);
     if (!panel)
         return;
-    // The panel's view takes its frame from whatever embeds it (NativeViewHost
-    // in a view tree); with no host here the test sets it directly.
-    NSView* native = (__bridge NSView*)panel->native_handle();
-    [native setFrame:NSMakeRect(0, 0, 160, 120)];
+    // No host embeds the panel here, so set_size() alone gives the view its size.
+    panel->set_size(160, 120);
     panel->set_html("<!doctype html><html><body style=\"margin:0;background:#1e90ff\"></body></html>");
     CHECK(eventually(*panel, "getComputedStyle(document.body).backgroundColor", "\"rgb(30, 144, 255)\""));
 
@@ -360,7 +358,11 @@ FRAMEWORK_TEST(snapshot_captures_rendered_content) {
     if (pixel)
         std::printf("  snapshot %zux%zu centre rgba(%d,%d,%d,%d)\n", w, h, (*pixel)[0],
                     (*pixel)[1], (*pixel)[2], (*pixel)[3]);
-    CHECK(w >= 160 && h >= 120);
+    CHECK(w == 160 && h == 120);
+    // set_size() resizes the native view, and the next snapshot follows it.
+    panel->set_size(200, 150);
+    centre_pixel(panel->snapshot_png(), w, h);
+    CHECK(w == 200 && h == 150);
     if (const char* out = std::getenv("VELLUM_WEB_VIEW_SNAPSHOT_PNG"))
         std::ofstream(out, std::ios::binary).write(reinterpret_cast<const char*>(png.data()),
                                                    std::streamsize(png.size()));

@@ -1,4 +1,5 @@
-// In-process snapshot of a native WKWebView (macOS) → PNG bytes.
+// In-process snapshot of a native WKWebView (macOS) → PNG bytes, and the
+// view's frame sizing for WebViewPanel::set_size().
 //
 // A WebView is a native NSView composited by the window server, NOT painted into
 // the Vellum Skia canvas: so render_to_png / HeadlessSurface can't see it. WebKit's
@@ -75,6 +76,12 @@ std::vector<uint8_t> web_view_snapshot_png(void* ns_view_ptr) {
         }
         return result;
     }
+}
+
+void web_view_set_frame_size(void* ns_view_ptr, uint32_t width, uint32_t height) {
+    if (!ns_view_ptr) return;
+    NSView* view = (__bridge NSView*)ns_view_ptr;
+    [view setFrameSize:NSMakeSize(width, height)];
 }
 
 }  // namespace vellum::view::detail

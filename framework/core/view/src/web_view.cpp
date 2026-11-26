@@ -25,15 +25,16 @@
 // guarding them with bare __APPLE__ would compile a call to an undefined symbol
 // on iOS (also __APPLE__) and break the iOS link.
 #if defined(__APPLE__) && TARGET_OS_OSX
-#define VELLUM_WEB_VIEW_HAS_MAC_SNAPSHOT 1
+#define VELLUM_WEB_VIEW_HAS_MAC_VIEW 1
 #endif
 
 namespace vellum::view {
 
-#ifdef VELLUM_WEB_VIEW_HAS_MAC_SNAPSHOT
-// Implemented in platform/mac/web_view_snapshot_mac.mm (WKWebView takeSnapshot).
+#ifdef VELLUM_WEB_VIEW_HAS_MAC_VIEW
+// Implemented in platform/mac/web_view_snapshot_mac.mm.
 namespace detail {
 std::vector<uint8_t> web_view_snapshot_png(void* ns_view_ptr);
+void web_view_set_frame_size(void* ns_view_ptr, uint32_t width, uint32_t height);
 }  // namespace detail
 #endif
 
@@ -538,7 +539,7 @@ public:
     }
 
     std::vector<uint8_t> snapshot_png() override {
-#ifdef VELLUM_WEB_VIEW_HAS_MAC_SNAPSHOT
+#ifdef VELLUM_WEB_VIEW_HAS_MAC_VIEW
         NativeViewHandle nh = native_handle();
         if (!nh) return {};
         return detail::web_view_snapshot_png(nh);
@@ -599,9 +600,13 @@ public:
         webview_->evaluateJavascript(make_bridge_delivery_script(message));
     }
 
-    void set_size(uint32_t /*width*/, uint32_t /*height*/) override {
-        // CHOC WebView sizing is handled by the parent view/window.
-        // The native handle is added as a child view and resized by the parent.
+    void set_size(uint32_t width, uint32_t height) override {
+#ifdef VELLUM_WEB_VIEW_HAS_MAC_VIEW
+        detail::web_view_set_frame_size(native_handle(), width, height);
+#else
+        (void)width;
+        (void)height;
+#endif
     }
 
 private:
