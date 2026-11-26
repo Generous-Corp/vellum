@@ -201,6 +201,7 @@ class HelperScoringTests(unittest.TestCase):
             self.assertEqual(same.getdata()[0], (1, 2, 3))
             scaled = diff.load_normalized(path, (4, 6))
             self.assertEqual(scaled.size, (4, 6))
+            # Lanczos weights sum to one, so a flat image stays flat.
             self.assertEqual(set(scaled.getdata()), {(1, 2, 3)})
             self.assertEqual(diff.load_normalized(path, (2, 2), mode="RGBA").getdata()[0], (1, 2, 3, 255))
 
@@ -224,8 +225,6 @@ class MainFlowTests(unittest.TestCase):
             cand_path = root / "cand.png"
             ref_path.write_text("ref", encoding="utf-8")
             cand_path.write_text("cand", encoding="utf-8")
-            if "--size" not in argv:
-                argv = [*argv, "--size", "1x1"]
             args = [str(ref_path), str(cand_path), *argv]
             with mock.patch.object(sys, "argv", [str(SCRIPT), *args]), \
                  mock.patch.object(diff, "load_normalized", side_effect=[ref_img, cand_img]), \
@@ -276,8 +275,7 @@ class MainFlowTests(unittest.TestCase):
             with mock.patch.object(
                 sys,
                 "argv",
-                [str(SCRIPT), str(ref_path), str(cand_path), "--json", "--size", "1x1",
-                 "--residual-json", str(residual_path)],
+                [str(SCRIPT), str(ref_path), str(cand_path), "--json", "--residual-json", str(residual_path)],
             ), mock.patch.object(
                 diff,
                 "load_normalized",
@@ -320,7 +318,7 @@ class MainFlowTests(unittest.TestCase):
             cand_path = root / "cand.png"
             ref_path.write_text("ref", encoding="utf-8")
             cand_path.write_text("cand", encoding="utf-8")
-            with mock.patch.object(sys, "argv", [str(SCRIPT), str(ref_path), str(cand_path), "--size", "1x1"]), \
+            with mock.patch.object(sys, "argv", [str(SCRIPT), str(ref_path), str(cand_path)]), \
                  mock.patch.object(diff, "load_normalized", side_effect=RuntimeError("bad image")), \
                  contextlib.redirect_stdout(stdout), \
                  contextlib.redirect_stderr(stderr):
@@ -352,7 +350,8 @@ class SyntheticParityTests(unittest.TestCase):
             write_png(root / "candidate.png", candidate.to_rgba())
             completed = subprocess.run(
                 [sys.executable, str(SCRIPT), str(root / "reference.png"),
-                 str(root / "candidate.png"), "--json", *extra],
+                 str(root / "candidate.png"), "--json", "--size",
+                 f"{self.WIDTH}x{self.HEIGHT}", *extra],
                 text=True, capture_output=True, check=False,
             )
         self.assertEqual(completed.stderr, "")
@@ -401,6 +400,78 @@ class SyntheticParityTests(unittest.TestCase):
             )
         self.assertEqual(completed.returncode, 2)
         self.assertIn("failed to load images", completed.stderr)
+
+
+
+PILLOW_5X3 = [
+    (0, 0, 4), (11, 0, 0), (144, 40, 36), (254, 210, 187), (255, 255, 255),
+    (128, 0, 6), (100, 56, 0), (64, 160, 16), (113, 155, 178), (132, 128, 255),
+    (255, 0, 8), (189, 124, 0), (0, 255, 0), (0, 99, 169), (0, 0, 255),
+]
+
+
+# Pillow 13.0.0 output for a 4x9 pattern resized to 5x3. The height shrinks by
+# more than twice the width, so Pillow runs the vertical pass first.
+TALL_PATTERN = [((x * 60 + y * 7) % 256, (x * 13 + y * 40) % 256, (x * 90 + y * 25) % 256)
+                for y in range(9) for x in range(4)]
+PILLOW_TALL_LANCZOS = [
+    (5, 36, 21), (44, 43, 67), (97, 60, 206), (150, 77, 174), (189, 84, 25),
+    (26, 171, 92), (65, 183, 180), (118, 176, 171), (171, 169, 100), (210, 181, 116),
+    (47, 113, 180), (86, 131, 129), (139, 98, 64), (192, 64, 115), (231, 82, 197),
+]
+PILLOW_TALL_BICUBIC = [
+    (4, 42, 23), (46, 51, 85), (97, 64, 184), (148, 77, 175), (190, 86, 33),
+    (25, 165, 96), (67, 176, 175), (118, 172, 159), (169, 167, 105), (211, 178, 114),
+    (46, 112, 176), (88, 126, 121), (139, 97, 82), (190, 68, 114), (232, 82, 191),
+]
+
+
+class PillowParityTests(unittest.TestCase):
+    """At the default 1320x860 the score matches the Pillow-based scorer."""
+
+    @staticmethod
+    def panel(shift: int, fill: tuple[int, int, int]) -> Image:
+        width, height = 64, 48
+        pixels = []
+        for y in range(height):
+            for x in range(width):
+                inside = 14 + shift <= x <= 49 + shift and 10 <= y <= 37
+                edge = inside and (x - 14 - shift < 2 or 49 + shift - x < 2
+                                   or y - 10 < 2 or 37 - y < 2)
+                pixels.append((120, 130, 145) if edge else fill if inside else (24, 28, 36))
+        return Image(width, height, pixels, "RGB")
+
+    def test_default_size_score_matches_the_pillow_scorer(self) -> None:
+        # Recorded from Pulp's diff_against_reference.py (Pillow 13.0.0) on
+        # this pair: a 64x48 panel against one shifted 3 px and recolored.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            write_png(root / "reference.png", self.panel(0, (220, 220, 220)).to_rgba())
+            write_png(root / "candidate.png", self.panel(3, (200, 180, 120)).to_rgba())
+            completed = subprocess.run(
+                [sys.executable, str(SCRIPT), str(root / "reference.png"),
+                 str(root / "candidate.png"), "--json"],
+                text=True, capture_output=True, check=False,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        report = json.loads(completed.stdout)
+        self.assertEqual(report["histogram_similarity"], 0.9109)
+        self.assertEqual(report["pixel_similarity"], 0.907)
+        self.assertEqual(report["score"], 0.9085)
+        self.assertEqual(report["tier"], "pass")
+        self.assertEqual(report["dominant_colors_cand"],
+                         [[0, 0, 32], [192, 160, 96], [96, 128, 128], [0, 0, 0], [128, 128, 128]])
+
+    def test_lanczos_resize_matches_recorded_pillow_pixels(self) -> None:
+        # Pillow 13.0.0 LANCZOS output for a 3x2 gradient resized to 5x3.
+        source = Image(3, 2, [(0, 0, 0), (128, 64, 32), (255, 255, 255),
+                              (255, 0, 0), (0, 255, 0), (0, 0, 255)], "RGB")
+        self.assertEqual(source.resize_lanczos((5, 3)).getdata(), PILLOW_5X3)
+
+    def test_pass_order_matches_pillow_when_the_height_shrinks_most(self) -> None:
+        tall = Image(4, 9, TALL_PATTERN, "RGB")
+        self.assertEqual(tall.resize_lanczos((5, 3)).getdata(), PILLOW_TALL_LANCZOS)
+        self.assertEqual(tall.resize_bicubic((5, 3)).getdata(), PILLOW_TALL_BICUBIC)
 
 
 if __name__ == "__main__":

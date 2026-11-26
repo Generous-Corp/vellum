@@ -21,8 +21,9 @@ Metrics computed:
 
 The score is position-blind on its histogram half: it catches obviously broken
 renders (blank, wrong UI, fallback layout), not anti-aliasing differences.
-Both images are compared at --size, which defaults to the reference's size;
-a differently sized candidate is resized with nearest-neighbour sampling.
+Both images are resized to --size (default 1320x860) with a Lanczos filter
+that reproduces Pillow's output exactly, so scores match the Pillow-based
+scorer this was ported from.
 """
 
 from __future__ import annotations
@@ -41,7 +42,7 @@ def load_normalized(
 ) -> Image:
     img = open_image(path, mode)
     if img.size != target_size:
-        img = img.resize(target_size)
+        img = img.resize_lanczos(target_size)
     return img
 
 
@@ -271,8 +272,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--size",
-        default=None,
-        help="Compare both images at this WxH (default: the reference size)",
+        default="1320x860",
+        help="Normalize both images to this WxH before comparing (default 1320x860)",
     )
     parser.add_argument(
         "--json",
@@ -295,19 +296,13 @@ def main() -> int:
             return 2
 
     try:
-        if args.size is None:
-            target = open_image(args.reference).size
-        else:
-            w, h = (int(x) for x in args.size.split("x"))
-            if w <= 0 or h <= 0:
-                raise ValueError(args.size)
-            target = (w, h)
+        w, h = (int(x) for x in args.size.split("x"))
+        if w <= 0 or h <= 0:
+            raise ValueError(args.size)
     except ValueError:
         print(f"error: malformed --size {args.size}", file=sys.stderr)
         return 2
-    except Exception as e:
-        print(f"error: failed to load images: {e}", file=sys.stderr)
-        return 2
+    target = (w, h)
 
     try:
         ref = load_normalized(args.reference, target)

@@ -20,9 +20,9 @@ Config (JSON, all optional; CLI overrides): {
 }
 Importable: build_montage(panels, out_path, **opts) where panels=[(label, path), ...].
 
-Labels use a built-in 5x7 bitmap font scaled to about font_size, and panels
-are scaled to panel_width with nearest-neighbour sampling, so the tool needs
-no Pillow and no font files.
+Labels use a built-in 5x7 bitmap font scaled to about font_size, so the tool
+needs no font files. Panels are scaled to panel_width with Pillow's bicubic
+resampling, reproduced without Pillow.
 """
 
 from __future__ import annotations
@@ -52,10 +52,10 @@ def build_montage(panels, out_path, labels=True, columns=1, title_height=36,
     scale = max(1, round(font_size / (GLYPH_HEIGHT + 1)))
     cells = []
     for label, path in panels:
-        im = open_image(Path(path), "RGBA")
+        im = open_image(Path(path), "RGB")
         w, h = im.size
         if w != panel_width:
-            im = im.resize((panel_width, max(1, int(h * panel_width / w))))
+            im = im.resize_bicubic((panel_width, max(1, int(h * panel_width / w))))
         cells.append((label, im))
     th = title_height if labels else 0
     col_w = panel_width + pad * 2
@@ -91,7 +91,7 @@ def build_montage(panels, out_path, labels=True, columns=1, title_height=36,
                     px, py = x + column, y + th + row
                     if 0 <= px < W and 0 <= py < H:
                         offset = (py * W + px) * 4
-                        canvas[offset:offset + 4] = bytes(im.getdata()[row * im.width + column])
+                        canvas[offset:offset + 4] = bytes((*im.getdata()[row * im.width + column], 255))
             x += col_w
         y += row_heights[r]
     write_png(Path(out_path), RgbaImage(W, H, bytes(canvas)))
