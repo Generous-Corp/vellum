@@ -227,13 +227,13 @@ void register_text_accessibility_node(const TextAccessibilityNode& node) {
 
 #if TARGET_OS_OSX
     const std::string key = registry_key(node.owner, node.id);
-    NSString* nsId = [[NSString alloc] initWithUTF8String:key.c_str()];
-    VellumMirrorTextAccessibilityElement* el = [r.elements objectForKey:nsId];
+    NSString* nsKey = [[NSString alloc] initWithUTF8String:key.c_str()];
+    VellumMirrorTextAccessibilityElement* el = [r.elements objectForKey:nsKey];
     BOOL inserted = NO;
     if (!el) {
         el = [[VellumMirrorTextAccessibilityElement alloc] init];
-        el->_identifier = [nsId retain];
-        [r.elements setObject:el forKey:nsId];
+        el->_identifier = [[NSString alloc] initWithUTF8String:node.id.c_str()];
+        [r.elements setObject:el forKey:nsKey];
         // setObject: retained the element; release our local +1.
         [el release];
         inserted = YES;
@@ -265,7 +265,7 @@ void register_text_accessibility_node(const TextAccessibilityNode& node) {
                                          static_cast<NSUInteger>(len));
     }
 
-    [nsId release];
+    [nsKey release];
 #endif
 }
 

@@ -71,7 +71,7 @@ NSArray* editor_accessibility_children(VellumMirrorMetalView* host) {
             [children addObject:element];
         }
     };
-    append_text_nodes(host.rootView);
+    if (host.rootView) append_text_nodes(host.rootView);
     append_text_nodes(nullptr);
     return children;
 }
