@@ -215,6 +215,18 @@ def default_ir_path(capture_dir: pathlib.Path) -> pathlib.Path:
     return capture_dir.with_name(name + ".json")
 
 
+def _capture_path(capture_dir: pathlib.Path, relative: str, what: str) -> pathlib.Path:
+    """Resolve a capture-owned path without allowing it to escape the capture."""
+    root = capture_dir.resolve()
+    path = (root / relative).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        raise CaptureInputError(
+            f"{what} {relative!r} escapes capture directory {capture_dir}") from None
+    return path
+
+
 def _walk_ir(node: dict, out: list[dict]) -> None:
     out.append(node)
     for child in node.get("children") or []:
@@ -236,7 +248,8 @@ def _verify_pairing(ir: dict, capture_dir: pathlib.Path) -> int:
         expected = asset.get("content_hash") or ""
         if not uri.startswith(CAPTURE_URI) or not expected:
             continue
-        path = capture_dir / uri[len(CAPTURE_URI):]
+        path = _capture_path(capture_dir, uri[len(CAPTURE_URI):],
+                             "capture asset path")
         if not path.is_file():
             continue
         actual = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -261,7 +274,8 @@ def _load_snapshot(capture_dir: pathlib.Path) -> dict:
         raise CaptureInputError(
             f"unsupported capture schema {envelope.get('schema')!r} (expected {CAPTURE_SCHEMA})")
     documents = envelope.get("documents") or [{}]
-    snapshot_path = capture_dir / (documents[0].get("snapshot_asset") or "dom-snapshot.json")
+    snapshot_asset = documents[0].get("snapshot_asset") or "dom-snapshot.json"
+    snapshot_path = _capture_path(capture_dir, snapshot_asset, "snapshot asset path")
     if not snapshot_path.is_file():
         raise CaptureInputError(f"capture has no DOM snapshot: {snapshot_path}")
     raw = snapshot_path.read_bytes()
