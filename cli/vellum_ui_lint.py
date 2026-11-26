@@ -261,68 +261,110 @@ def _mask_non_markup_regions(text: str, *, strings: bool = True,
     parser. Keeping line breaks and replacing the other bytes with spaces
     prevents markup-looking documentation, string, and template-literal text
     from being mistaken for JSX while preserving source offsets for findings.
-    A template literal is treated as one quoted region; JSX embedded in a
-    ``${...}`` expression is therefore a conservative false negative rather
-    than a false positive.
+    The literal parts of a template literal are masked; the ``${...}``
+    expressions inside it are executable code and are scanned like any other
+    code, so ``${Math.random()}`` is still seen by the nondeterminism scan.
 
     With ``strings=False`` only comments are blanked; quoted regions are
     skipped over (so ``"http://x"`` is not a comment) but kept, for scans such
-    as colour literals whose real values live inside quotes.
+    as colour literals whose real values live inside quotes. ``spans``
+    collects the quoted literal ranges (template expressions excluded).
     """
     masked = list(text)
     length = len(text)
-    index = 0
 
     def blank(start: int, end: int) -> None:
         for position in range(start, end):
             if masked[position] != "\n":
                 masked[position] = " "
 
-    while index < length:
-        if text.startswith("//", index):
-            end = text.find("\n", index)
-            if end < 0:
-                end = length
-            blank(index, end)
-            index = end
-            continue
-        if text.startswith("/*", index):
-            end = text.find("*/", index + 2)
-            end = length if end < 0 else end + 2
-            blank(index, end)
-            index = end
-            continue
-        if text[index] not in "'\"`":
-            index += 1
-            continue
-        if text[index] == "'" and index > 0 and (text[index - 1].isalnum() or text[index - 1] == "_"):
-            # An apostrophe after a word character ("don't" in JSX text) is
-            # prose, not the start of a JavaScript string.
-            index += 1
-            continue
+    def literal_span(start: int, end: int) -> None:
+        if spans is not None:
+            spans.append((start, end))
+        if strings:
+            blank(start, end)
 
-        quote = text[index]
-        end = index + 1
+    def scan_template(index: int) -> int:
+        """Mask the template literal opening at ``index``; return its end."""
+        chunk_start = index
+        position = index + 1
         escaped = False
-        while end < length:
-            character = text[end]
+        while position < length:
+            character = text[position]
             if escaped:
                 escaped = False
             elif character == "\\":
                 escaped = True
-            elif character == quote:
+            elif character == "`":
+                literal_span(chunk_start, position + 1)
+                return position + 1
+            elif character == "$" and text.startswith("${", position):
+                literal_span(chunk_start, position + 2)
+                position = scan_code(position + 2, in_expression=True)
+                # ``position`` is at the closing brace of the expression.
+                chunk_start = position
+            position += 1
+        literal_span(chunk_start, length)
+        return length
+
+    def scan_code(index: int, *, in_expression: bool = False) -> int:
+        """Scan code from ``index``; for an expression stop at its ``}``."""
+        depth = 0
+        while index < length:
+            if text.startswith("//", index):
+                end = text.find("\n", index)
+                if end < 0:
+                    end = length
+                blank(index, end)
+                index = end
+                continue
+            if text.startswith("/*", index):
+                end = text.find("*/", index + 2)
+                end = length if end < 0 else end + 2
+                blank(index, end)
+                index = end
+                continue
+            character = text[index]
+            if in_expression:
+                if character == "{":
+                    depth += 1
+                elif character == "}":
+                    if depth == 0:
+                        return index
+                    depth -= 1
+            if character not in "'\"`":
+                index += 1
+                continue
+            if character == "'" and index > 0 and (text[index - 1].isalnum() or text[index - 1] == "_"):
+                # An apostrophe after a word character ("don't" in JSX text)
+                # is prose, not the start of a JavaScript string.
+                index += 1
+                continue
+            if character == "`":
+                index = scan_template(index)
+                continue
+            end = index + 1
+            escaped = False
+            while end < length:
+                current = text[end]
+                if escaped:
+                    escaped = False
+                elif current == "\\":
+                    escaped = True
+                elif current == character:
+                    end += 1
+                    break
+                elif current == "\n":
+                    # Ordinary JS strings cannot span lines; a stray
+                    # apostrophe in JSX text must not swallow the rest of
+                    # the file.
+                    break
                 end += 1
-                break
-            elif character == "\n" and quote != "`":
-                # Ordinary JS strings cannot span lines; a stray apostrophe in
-                # JSX text must not swallow the rest of the file.
-                break
-            end += 1
-        if spans is not None:
-            spans.append((index, end))
-        if strings:
-            blank(index, end)
-        index = end
+            literal_span(index, end)
+            index = end
+        return index
+
+    scan_code(0)
     return "".join(masked)
 
 

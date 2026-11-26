@@ -117,6 +117,42 @@ export function Notes() {
         self.assertTrue(report["ok"], report)
         self.assertEqual(report["findings"], [])
 
+    def test_template_interpolations_are_scanned_as_code(self):
+        for expression in ("${Math.random()}", "${Date.now()}",
+                           "${items.map(i => `${Math.random()}`)}",
+                           "${{a: 1}.a + Math.random()}"):
+            with self.subTest(expression=expression):
+                report = self._report(
+                    "export function Badge() {\n"
+                    "  const id = `badge-" + expression + "`;\n"
+                    "  return <p data-pulp-action=\"b\">{id}</p>;\n"
+                    "}\n")
+                codes = {finding["code"] for finding in report["findings"]}
+                self.assertIn("nondeterministic-expression", codes, report)
+
+    def test_template_literal_text_beside_interpolation_stays_masked(self):
+        report = self._report(
+            """export function Badge({value}: {value: number}) {
+  const note = `Math.random() and #fff are prose ${value} Date.now() <div onClick={go}>`;
+  const nested = `a ${`Date.now() prose`} b`;
+  return <p data-pulp-action="b">{note}{nested}</p>;
+}
+"""
+        )
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(report["findings"], [])
+
+    def test_colour_literal_inside_template_interpolation_fires(self):
+        report = self._report(
+            """export function Badge({on}: {on: boolean}) {
+  const fill = `${on ? '#fff' : 'none'}`;
+  return <p data-pulp-action="b">{fill}</p>;
+}
+"""
+        )
+        codes = {finding["code"] for finding in report["findings"]}
+        self.assertIn("literal-color", codes, report)
+
     def test_same_line_duplicate_scan_ignores_strings_and_comments(self):
         report = self._report(
             """// <div>x</div><div>x</div>
