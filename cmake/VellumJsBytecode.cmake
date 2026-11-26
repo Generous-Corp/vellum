@@ -157,7 +157,7 @@ function(vellum_add_js_bytecode target)
             add_custom_command(
                 OUTPUT "${_blob}"
                 COMMAND "${CMAKE_COMMAND}" -E copy "${_out_dir}/unavailable.vjsbc" "${_blob}"
-                DEPENDS "${_abs}"
+                DEPENDS "${_abs}" "${_out_dir}/unavailable.vjsbc"
                 VERBATIM)
         endif()
         add_custom_command(
