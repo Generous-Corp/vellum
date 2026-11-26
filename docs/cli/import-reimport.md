@@ -100,10 +100,14 @@ vellum import --source-type design-ir ./panel.ir.json --mode baked --emit cpp --
   the header. Absolute asset paths are copied into `assets/` beside the source.
 - **SwiftUI** writes `<Name>.swift`, `<Name>Theme.swift` and
   `<Name>.bindings.json`. The default is `ImportedPulpView.swift`.
-- Sources are `design-ir`, `figma` (JSON, not a local `.fig`), `figma-plugin`,
+- Sources are `design-ir`, `figma` (JSON), `figma-plugin`, `fig`,
   `pencil` and `v0`. A
   DESIGN.md file is a token spec and is refused with exit 2. For JSX, import with
   `--mode baked --emit ir-json` first and emit that file as `design-ir`.
+- A local `.fig` file (`--source-type fig`, or `figma` with a `.fig` path) needs
+  `--frame <guid|name>` and takes `--page` to narrow a name. It decodes that one
+  frame with Node, then emits it as a Figma plugin envelope. Merging several
+  frames into one multi-state view is not supported.
 - `--emit cpp|swiftui` without `--mode baked` exits 2.
 - `--dry-run` prints the files instead of writing them; with `--json` each
   `data.files` entry carries its `content`.

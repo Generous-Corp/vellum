@@ -1414,7 +1414,7 @@ def illustrator_command(args: argparse.Namespace) -> dict[str, Any]:
 
 
 BAKED_EMITS = ("cpp", "swiftui")
-BAKED_EMIT_SOURCES = ("design-ir", "figma", "figma-plugin", "pencil", "v0", "designmd")
+BAKED_EMIT_SOURCES = ("design-ir", "figma", "figma-plugin", "pencil", "v0", "designmd", "fig")
 DESIGN_EMIT_NAME = "vellum-design-emit.exe" if os.name == "nt" else "vellum-design-emit"
 
 
@@ -1447,9 +1447,16 @@ def validate_baked_emit(args: argparse.Namespace) -> None:
             f"--emit {args.emit} supports --source-type {', '.join(BAKED_EMIT_SOURCES)}.{hint}",
             status="invalid_arguments", exit_code=EXIT_USAGE,
         )
-    if Path(args.source).suffix.casefold() == ".fig":
+    is_fig = is_local_fig(args)
+    if is_fig and args.frame is None:
         raise CliFailure(
-            f"--emit {args.emit} does not read local .fig files yet; pass a Figma JSON or plugin export.",
+            f"--emit {args.emit} from a local .fig file needs --frame <guid|name>"
+            " (list them with `vellum import --outline`); --page narrows a name.",
+            status="invalid_fig_frame", exit_code=EXIT_USAGE,
+        )
+    if not is_fig and args.page is not None:
+        raise CliFailure(
+            "--page applies only to a local .fig file.",
             status="invalid_arguments", exit_code=EXIT_USAGE,
         )
     if args.strict_fidelity and args.emit != "swiftui":
@@ -1459,8 +1466,8 @@ def validate_baked_emit(args: argparse.Namespace) -> None:
         )
     inapplicable = [
         flag for flag, used in (
-            ("--file", bool(args.file)), ("--frame", args.frame is not None),
-            ("--page", args.page is not None), ("--outline", args.outline),
+            ("--file", bool(args.file)), ("--frame", args.frame is not None and not is_fig),
+            ("--outline", args.outline),
             ("--manifest", args.manifest is not None), ("--source-out", args.source_out is not None),
             ("--validate-only", args.validate_only), ("--provenance", args.provenance is not None),
             ("--project", args.project is not None), ("--interaction-plan", args.interaction_plan is not None),
@@ -1471,6 +1478,46 @@ def validate_baked_emit(args: argparse.Namespace) -> None:
             f"{', '.join(inapplicable)} do not apply to --emit {args.emit}.",
             status="invalid_arguments", exit_code=EXIT_USAGE,
         )
+
+
+def is_local_fig(args: argparse.Namespace) -> bool:
+    return args.source_type == "fig" or (
+        args.source_type == "figma" and Path(args.source).suffix.casefold() == ".fig")
+
+
+def fig_decoder() -> tuple[str, Path]:
+    """The Node runtime and fig_decode.mjs: the installed SDK's, else this checkout's."""
+    sdk_root = os.environ.get("VELLUM_SDK_ROOT")
+    roots = ([Path(sdk_root).expanduser()] if sdk_root else [])
+    script = next((root / "design-ir/src/fig-file/fig_decode.mjs" for root in roots
+                   if (root / "design-ir/src/fig-file/fig_decode.mjs").is_file()), None)
+    if script is None:
+        checkout = Path(__file__).resolve().parents[1] / "packages/vellum-design-ir/src/fig-file/fig_decode.mjs"
+        script = checkout if checkout.is_file() else None
+    node = next((str(root / "node/bin/node") for root in roots if (root / "node/bin/node").is_file()),
+                shutil.which("node"))
+    if script is None or node is None:
+        raise CliFailure(
+            "This SDK cannot decode a local .fig file: it has no Node runtime or fig decoder.",
+            status="capability_unavailable", exit_code=EXIT_UNAVAILABLE,
+        )
+    return node, script
+
+
+def decode_fig_frame(source: Path, args: argparse.Namespace, scratch: Path) -> Path:
+    """Decode one .fig frame into a figma-plugin envelope; returns the envelope path."""
+    node, script = fig_decoder()
+    command = [node, str(script), "emit", str(source), "--frame", args.frame, "--out", str(scratch)]
+    if args.page is not None:
+        command.extend(["--page", args.page])
+    completed = subprocess.run(command, check=False, text=True, capture_output=True)
+    if completed.returncode != 0:
+        raise CliFailure(
+            f"Cannot decode {source.name}: {completed.stderr.strip()}",
+            status="fig_decode_failed",
+            exit_code=EXIT_USAGE if completed.returncode == 2 else EXIT_BACKEND,
+        )
+    return scratch / "scene.vellum.json"
 
 
 def baked_emit_import(args: argparse.Namespace) -> dict[str, Any]:
@@ -1487,7 +1534,17 @@ def baked_emit_import(args: argparse.Namespace) -> dict[str, Any]:
             f"Import source does not exist: {source}",
             status="source_not_found", exit_code=EXIT_PROJECT,
         )
-    command = [str(tool), "--source-type", args.source_type, "--input", str(source),
+    with tempfile.TemporaryDirectory(prefix="vellum-fig-") as scratch:
+        if is_local_fig(args):
+            emit_source_type = "figma-plugin"
+            emit_input = decode_fig_frame(source, args, Path(scratch))
+        else:
+            emit_source_type, emit_input = args.source_type, source
+        return run_baked_emitter(args, tool, emit_source_type, emit_input)
+
+
+def run_baked_emitter(args: argparse.Namespace, tool: Path, source_type: str, source: Path) -> dict[str, Any]:
+    command = [str(tool), "--source-type", source_type, "--input", str(source),
                "--emit", args.emit, "--json"]
     if args.output:
         command.extend(["--output", args.output])
