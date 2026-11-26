@@ -441,6 +441,50 @@ class SourceContractsTest(unittest.TestCase):
         for entry in _load_registry()["contracts"]:
             self.assertNotIn("mcp", entry, entry["source"])
 
+    def test_nested_fields_are_type_and_presence_checked(self) -> None:
+        mutations = {
+            "dispatch label removed": lambda e: e["dispatch"].pop("label"),
+            "parser file removed": lambda e: e["parser"].pop("file"),
+            "parser static not a string": lambda e: e["parser"].__setitem__("static", 7),
+            "upstream entry without url": lambda e: e["upstream"][0].pop("url"),
+            "upstream emptied": lambda e: e.__setitem__("upstream", []),
+            "upstream not a list": lambda e: e.__setitem__("upstream", {"url": "x"}),
+            "validation tests not a list": lambda e: e["validation"].__setitem__("tests", "ctest:x"),
+            "validation tests holds a number": lambda e: e["validation"]["tests"].append(3),
+            "validation journey not a string": lambda e: e["validation"].__setitem__("journey", 1),
+            "render reference without status": lambda e: e["validation"]["render_reference"].pop("status"),
+            "compat owner missing": lambda e: e["compat"].pop("parser_version_owner"),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(mutation=name):
+                registry, entry = self.mutate("stitch")
+                mutate(entry)
+                self.assert_has_code(registry, "invalid-field")
+
+    def test_malformed_format_versions_cannot_skip_the_foreign_key_check(self) -> None:
+        for bad in ({"version": "2025.04"}, "2025.04", [{"version": 2025}], [{"fixture_paths": []}]):
+            with self.subTest(value=bad):
+                registry, entry = self.mutate("stitch")
+                entry["format_versions"] = bad
+                self.assert_has_code(registry, "invalid-field")
+
+    def test_malformed_surface_refs_cannot_skip_the_owner_check(self) -> None:
+        for bad in ("framework/core/view", {"ref": "framework/core/view"}, [], [7]):
+            with self.subTest(value=bad):
+                registry, entry = self.mutate("stitch")
+                entry["runtime_requirements"]["surface_refs"] = bad
+                self.assert_has_code(registry, "invalid-field")
+
+    def test_surface_refs_stay_inside_the_checkout(self) -> None:
+        for bad in ("framework/../../outside", "/framework/core/view", "framework/core/view/../../../x"):
+            with self.subTest(ref=bad):
+                registry, entry = self.mutate("stitch")
+                entry["runtime_requirements"]["surface_refs"] = [bad]
+                self.assert_has_code(registry, "invalid-surface-ref")
+        self.assertIsNone(checker.contained_path(ROOT, "/etc"))
+        self.assertIsNone(checker.contained_path(ROOT, "product/../../x"))
+        self.assertIsNotNone(checker.contained_path(ROOT, "product/source-contracts.json"))
+
     def test_strict_real_registry_has_clean_exit(self) -> None:
         cmd = [
             sys.executable,
