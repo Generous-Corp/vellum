@@ -68,6 +68,16 @@ if(VELLUM_BUILD_TESTS)
         MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
     add_test(NAME vellum.import-detect-data COMMAND vellum-import-detect-data-test)
 
+    add_executable(vellum-import-detect-behavior-test tests/import_detect_behavior_test.cpp)
+    target_link_libraries(vellum-import-detect-behavior-test PRIVATE vellum-import-detect)
+    target_compile_definitions(vellum-import-detect-behavior-test PRIVATE
+        VELLUM_SOURCE_DETECTION_JSON="${PROJECT_SOURCE_DIR}/product/source-detection.json"
+        VELLUM_SOURCE_DETECTION_FIXTURES="${PROJECT_SOURCE_DIR}/fixtures/source-detection")
+    set_target_properties(vellum-import-detect-behavior-test PROPERTIES
+        OSX_ARCHITECTURES arm64
+        MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
+    add_test(NAME vellum.import-detect-behavior COMMAND vellum-import-detect-behavior-test)
+
     # Keep one DesignIR fixture set across the native, bridge-JavaScript,
     # baked-C++, and SwiftUI lowerings.
     add_executable(vellum-emitter-conformance-gen
