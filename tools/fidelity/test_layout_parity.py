@@ -387,6 +387,18 @@ class TestCli(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertIn("no usable reference rectangles", result.stderr)
 
+    def test_malformed_layout_dump_is_a_usage_error_without_traceback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = pathlib.Path(tmp)
+            (td / "layout.geometry.json").write_text(json.dumps(
+                geometry(node("empty", None, 0, 0))))
+            dump = td / "layout.json"
+            dump.write_text("{")
+            result = self.run_tool(str(dump))
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("cannot read layout dump", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+
     def test_malformed_capture_inputs_are_usage_errors_without_tracebacks(self):
         with tempfile.TemporaryDirectory() as tmp:
             td = pathlib.Path(tmp)
@@ -414,6 +426,14 @@ class TestCli(unittest.TestCase):
             self.assertEqual(bad_snapshot.returncode, 2)
             self.assertIn("cannot read DOM snapshot", bad_snapshot.stderr)
             self.assertNotIn("Traceback", bad_snapshot.stderr)
+            (td / "observer").mkdir()
+            fx = CaptureFixture(td / "observer", dom=PANEL_DOM, lowered=PANEL_LOWERED,
+                                views=panel_views())
+            (fx.layout).write_text("{")
+            bad_observer = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
+            self.assertEqual(bad_observer.returncode, 2)
+            self.assertIn("cannot read observer layout", bad_observer.stderr)
+            self.assertNotIn("Traceback", bad_observer.stderr)
 
     def test_json_report_is_written_and_is_not_capped_by_max_findings(self):
         with tempfile.TemporaryDirectory() as tmp:

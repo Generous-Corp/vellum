@@ -189,7 +189,9 @@ def load_geometry(path: pathlib.Path) -> tuple[dict[str, Rect], dict[str, dict]]
 
 def load_layout(path: pathlib.Path) -> dict[str, Rect]:
     """The render's laid-out rects, keyed by the source node id each view came from."""
-    doc = json.loads(path.read_text())
+    doc = _read_json(path, "layout dump")
+    if not isinstance(doc, dict) or not isinstance(doc.get("views"), list):
+        raise CaptureInputError(f"layout dump has no views list: {path}")
     rects: dict[str, Rect] = {}
     for view in doc.get("views", []):
         node_id = view.get("node_id")
@@ -438,8 +440,8 @@ def load_capture_geometry(
 def load_observer_layout(path: pathlib.Path) -> dict[str, Rect]:
     """A ``visual-layout-snapshot-v1`` observer layout,
     keyed by view id, which the observer sets to the node's anchor id."""
-    doc = json.loads(path.read_text(encoding="utf-8"))
-    if "nodes" not in doc:
+    doc = _read_json(path, "observer layout")
+    if not isinstance(doc, dict) or not isinstance(doc.get("nodes"), list):
         raise CaptureInputError(
             f"not an observer layout (expected a visual-layout-snapshot 'nodes' list): {path}")
     rects: dict[str, Rect] = {}
