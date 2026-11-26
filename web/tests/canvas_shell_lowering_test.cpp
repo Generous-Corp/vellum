@@ -1,3 +1,4 @@
+#include "backdrop_marks.hpp"
 #include "canvas_shell_lowering.hpp"
 #include "command_digest.hpp"
 
@@ -10,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <cstdint>
 #include <cstdlib>
 #include <functional>
@@ -1371,6 +1373,62 @@ bool text_layout_lowering() {
                    vellum::graphics::kSceneVersionMismatchCode, "para");
 }
 
+// Backdrop marks are validated record by record and fold into the digest.
+bool backdrop_marks() {
+    using vellum::web::backdrop_digest;
+    using vellum::web::count_backdrop_marks;
+    const std::vector<float> dot{0, 10, 20, 1.5F, 1, 1, 1, 0.5F, 0};
+    const std::vector<float> glow{1, 10, 20, 30, 0.2F, 0.3F, 0.4F, 0.1F, 0.02F};
+    const std::vector<float> line{2, 3, 1.1F, 0, 1, 1, 1, 0.2F, 0, 0, 0, 5, 5, 10, 0};
+    std::vector<float> all;
+    for (const auto* part : {&dot, &glow, &line}) all.insert(all.end(), part->begin(), part->end());
+    if (count_backdrop_marks(all) != std::optional<std::size_t>{3} ||
+        count_backdrop_marks({}) != std::optional<std::size_t>{0}) {
+        std::cerr << "a well-formed backdrop was not counted\n";
+        return false;
+    }
+    const auto refused = [](std::vector<float> data, std::size_t index, float value,
+                            const char* what) {
+        data[index] = value;
+        if (count_backdrop_marks(data)) {
+            std::cerr << "a backdrop with " << what << " was accepted\n";
+            return false;
+        }
+        return true;
+    };
+    bool ok = refused(dot, 0, 3, "an unknown kind");
+    ok &= refused(dot, 1, std::nanf(""), "a value that is not finite");
+    ok &= refused(dot, 3, -1, "a negative radius");
+    ok &= refused(dot, 7, 1.5F, "an alpha above 1");
+    ok &= refused(dot, 8, 0.5F, "a dot with a middle alpha");
+    ok &= refused(glow, 8, -0.1F, "a negative middle alpha");
+    ok &= refused(line, 1, 1, "a one point line");
+    ok &= refused(line, 1, 2.5F, "a fractional point count");
+    ok &= refused(line, 2, -1, "a negative width");
+    for (const auto& cut : {std::vector<float>(line.begin(), line.end() - 1),
+                            std::vector<float>(dot.begin(), dot.begin() + 5)}) {
+        if (count_backdrop_marks(cut)) {
+            std::cerr << "a backdrop cut short was accepted\n";
+            ok = false;
+        }
+    }
+    ok &= refused(line, 1, static_cast<float>(vellum::web::kMaxBackdropLinePoints + 1),
+                  "too many points");
+    if (count_backdrop_marks(std::vector<float>(vellum::web::kMaxBackdropFloats + 9, 0.0F))) {
+        std::cerr << "a backdrop past the float budget was accepted\n";
+        ok = false;
+    }
+    auto moved = dot;
+    moved[1] += 1;
+    if (backdrop_digest(7, {}) != 7 || backdrop_digest(7, dot) == 7 ||
+        backdrop_digest(7, dot) != backdrop_digest(7, dot) ||
+        backdrop_digest(7, dot) == backdrop_digest(7, moved)) {
+        std::cerr << "the backdrop digest does not track the marks\n";
+        ok = false;
+    }
+    return ok;
+}
+
 int main() {
     if (!image_refusals()) return 1;
     if (!text_layout_lowering()) return 1;
@@ -1389,6 +1447,7 @@ int main() {
     if (!effect_lowering()) return 1;
     if (!plot_lowering()) return 1;
     if (!plot_device_scale()) return 1;
+    if (!backdrop_marks()) return 1;
     using vellum::graphics::Affine2D;
     using vellum::graphics::CornerRadii;
     using vellum::graphics::SceneNode;
