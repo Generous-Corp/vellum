@@ -43,6 +43,7 @@
       "vellum.frame-pump",
       "vellum.framework.canvas-raster-parity",
       "vellum.framework.design-codegen-web-grid",
+      "vellum.framework.design-import-jsx-runtime",
       "vellum.framework.font-container-route",
       "vellum.framework.gpu-capabilities",
       "vellum.framework.gpu-surface-lease",
@@ -170,6 +171,8 @@
       "vellum.web.layout-contract",
       "vellum.web.no-engine",
       "vellum.web.no-engine-negative-control",
+      "vellum.web.superconvolver-negative-control-status",
+      "vellum.web.superconvolver-view-layout",
       "vellum.web.vector-canvas-builder"
     ],
     "gpu": [
@@ -293,6 +296,9 @@
       "vellum.web.editor-session",
       "vellum.web.editor-session-negative-control",
       "vellum.web.phase3-exact-browser",
+      "vellum.web.superconvolver-view",
+      "vellum.web.superconvolver-view-move-control",
+      "vellum.web.superconvolver-view-swap-control",
       "vellum.web.text-ime-accessibility"
     ]
   },
