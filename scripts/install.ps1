@@ -205,8 +205,8 @@ if ($LocalRoot) {
         $localMetadata = @'
 {
   "schema": "vellum.sdk-artifact.v1",
-  "framework_version": "0.2.3",
-  "cli_version": "0.2.3",
+  "framework_version": "0.2.4",
+  "cli_version": "0.2.4",
   "cli_api": 1,
   "source_commit": null,
   "target": "local-development",
@@ -235,7 +235,7 @@ if ($LocalRoot) {
   "verified": false,
   "artifact": null,
   "artifact_sha256": null,
-  "framework_version": "0.2.3",
+  "framework_version": "0.2.4",
   "target": "local-development",
   "source_commit": null
 }
@@ -250,7 +250,7 @@ if ($LocalRoot) {
 
 throw @"
 Verified archive and release installation are unavailable in PowerShell for
-Vellum v0.2.3. The application SDK currently supports macOS 15.0+ arm64; use
+Vellum v0.2.4. The application SDK currently supports macOS 15.0+ arm64; use
 scripts/install.sh there. That installer delegates archive verification,
 extraction, immutable storage, and activation to the canonical install_core.py.
 PowerShell currently supports only -LocalRoot development installs.
