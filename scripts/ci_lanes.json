@@ -234,6 +234,9 @@
         "script": "scripts/test_check_source_contracts.py"
       },
       {
+        "script": "scripts/test_check_source_contract_refs.py"
+      },
+      {
         "script": "tools/parity/test_parity_harness.py"
       },
       {
