@@ -1389,6 +1389,77 @@ def illustrator_command(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def source_adapter_path() -> Path | None:
+    override = os.environ.get("VELLUM_SOURCE_ADAPTER")
+    if override:
+        return Path(override).expanduser()
+    sdk_root = os.environ.get("VELLUM_SDK_ROOT")
+    if sdk_root:
+        candidate = Path(sdk_root).expanduser() / "sdk/bin/vellum-source-adapter"
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def detect_command(args: argparse.Namespace) -> dict[str, Any]:
+    """Report the source of an export without importing it."""
+    adapter = source_adapter_path()
+    if adapter is None:
+        raise CliFailure(
+            "--detect-only requires the native SDK source adapter.",
+            status="capability_unavailable", exit_code=EXIT_UNAVAILABLE,
+        )
+    source = Path(args.source).expanduser()
+    arguments = [str(adapter), "detect"]
+    if args.compat:
+        arguments += ["--compat", str(Path(args.compat).expanduser())]
+    sdk_root = os.environ.get("VELLUM_SDK_ROOT")
+    if sdk_root:
+        default = Path(sdk_root).expanduser() / "sdk/share/vellum/source-detection.json"
+        if default.is_file():
+            arguments += ["--default-compat", str(default)]
+    if args.report_new_format:
+        arguments.append("--report-new-format")
+    elif args.json:
+        arguments.append("--json")
+    arguments.append(str(source))
+    try:
+        completed = subprocess.run(arguments, text=True, capture_output=True, check=False)
+    except OSError as error:
+        raise CliFailure(
+            f"The source adapter could not start: {error}",
+            status="capability_unavailable", exit_code=EXIT_UNAVAILABLE,
+        ) from error
+    if completed.returncode not in (0, 2):
+        raise CliFailure(
+            completed.stderr.strip() or "Source detection failed.",
+            status="detect_failed", exit_code=EXIT_PROJECT,
+        )
+    text = completed.stdout
+    if args.report_new_format:
+        try:
+            report = json.loads(text)
+        except json.JSONDecodeError as error:
+            raise CliFailure("The source adapter wrote a malformed report.",
+                             status="detect_failed", exit_code=EXIT_PROJECT) from error
+        return result("import", ok=True, status="new_format_report", message=text.rstrip(),
+                      data=report)
+    detected = completed.returncode == 0
+    data: dict[str, Any] = {}
+    message = text.rstrip()
+    if args.json:
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as error:
+            raise CliFailure("The source adapter wrote a malformed detection result.",
+                             status="detect_failed", exit_code=EXIT_PROJECT) from error
+        message = (f"detected source: {data['source']}" if detected
+                   else f"no detected source for {source}")
+    return result("import", ok=detected,
+                  status="detected" if detected else "no_detected_source",
+                  message=message, data=data)
+
+
 def standalone_asset_import(args: argparse.Namespace) -> dict[str, Any]:
     from vellum_import_assets import AssetImportError, import_jsx, validate_preconverted_svg
 
@@ -1558,6 +1629,9 @@ def parser() -> argparse.ArgumentParser:
         "import": [
             ("source", {"nargs": "*"}),
             ("--file", {"action": "append", "help": "add an ordered Figma plugin JSON export"}),
+            ("--detect-only", {"action": "store_true", "help": "report the detected source without importing"}),
+            ("--report-new-format", {"action": "store_true", "help": "print a draft detection entry for an unrecognized export"}),
+            ("--compat", {"help": "detection manifest for --detect-only"}),
             ("--source-type", {"choices": ["fig", "figma", "figma-plugin", "design-ir", "html", "claude-design", "pencil", "designmd", "v0", "jsx", "preconverted-svg"], "default": "figma"}),
             ("--as", {"dest": "source_key", "default": "main"}),
             ("--interaction-plan", {}),
@@ -1609,7 +1683,8 @@ def forwarded_arguments(args: argparse.Namespace) -> list[str]:
     ignored = {"json", "command", "project"}
     if args.command == "import":
         ignored.update({"output", "provenance", "timeout", "illustrator_input", "manifest",
-                        "validate_only", "emit", "mode", "source_out"})
+                        "validate_only", "emit", "mode", "source_out",
+                        "detect_only", "report_new_format", "compat"})
     forwarded: list[str] = []
     for key, value in vars(args).items():
         if key in ignored or value is None or value is False:
@@ -1651,7 +1726,19 @@ def main(argv: Iterable[str] | None = None) -> int:
                     status="invalid_arguments", exit_code=EXIT_USAGE,
                 )
         if args.command == "import":
-            if args.source_type in {"jsx", "preconverted-svg"}:
+            detecting = args.detect_only or args.report_new_format
+            if args.compat is not None and not detecting:
+                raise CliFailure(
+                    "--compat applies only to --detect-only or --report-new-format.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
+            if detecting and (not isinstance(args.source, str) or args.file or args.frame
+                              or args.outline or args.page is not None):
+                raise CliFailure(
+                    "--detect-only takes one file or directory and no import options.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
+            if args.source_type in {"jsx", "preconverted-svg"} and not detecting:
                 if args.source_type == "preconverted-svg" and args.validate_only is False:
                     raise CliFailure(
                         "preconverted-svg requires --validate-only",
@@ -1753,6 +1840,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             payload = design_command(args)
         elif args.command == "compare":
             payload = compare_command(args)
+        elif args.command == "import" and (args.detect_only or args.report_new_format):
+            payload = detect_command(args)
         elif args.command == "import" and args.source_type in {"jsx", "preconverted-svg"}:
             payload = standalone_asset_import(args)
         elif args.command == "import" and is_illustrator:
@@ -1784,6 +1873,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             return 0
         if payload["status"] == "capability_unavailable":
             return EXIT_UNAVAILABLE
+        if payload["status"] == "no_detected_source":
+            return EXIT_PROJECT
         return EXIT_PROJECT if args.command == "doctor" else EXIT_BACKEND
     except CliFailure as error:
         emit(result(command, ok=False, status=error.status, message=str(error), diagnostics=error.diagnostics), json_output=json_output)

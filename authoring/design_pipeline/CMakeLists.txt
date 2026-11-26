@@ -29,14 +29,17 @@ set_target_properties(vellum-import-detect PROPERTIES
     OSX_ARCHITECTURES arm64
     MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
 
-add_executable(vellum-source-adapter src/source_adapter_main.cpp)
+add_executable(vellum-source-adapter src/source_adapter_main.cpp src/source_detect_cli.cpp)
 target_compile_features(vellum-source-adapter PRIVATE cxx_std_20)
-target_link_libraries(vellum-source-adapter PRIVATE Vellum::DesignPipeline)
+target_link_libraries(vellum-source-adapter PRIVATE Vellum::DesignPipeline vellum-import-detect)
 set_target_properties(vellum-source-adapter PROPERTIES
     OSX_ARCHITECTURES arm64
     MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
     INSTALL_RPATH "@loader_path/../mirror/${CMAKE_INSTALL_LIBDIR};@loader_path/../${CMAKE_INSTALL_LIBDIR}")
 install(TARGETS vellum-source-adapter RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+# The detection manifest `vellum-source-adapter detect` falls back to.
+install(FILES "${PROJECT_SOURCE_DIR}/product/source-detection.json"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/vellum")
 
 if(VELLUM_BUILD_TESTS)
     add_executable(vellum-design-pipeline-test tests/design_pipeline_test.cpp)

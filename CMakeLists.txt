@@ -576,6 +576,13 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}"
             cli/tests/test_illustrator_cli.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(TARGET vellum-source-adapter)
+        add_test(NAME vellum.source-adapter-detect
+            COMMAND "${Python3_EXECUTABLE}"
+                authoring/design_pipeline/tests/test_source_adapter_detect.py
+                "$<TARGET_FILE:vellum-source-adapter>"
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    endif()
     add_test(NAME vellum.parity-packaging-unit
         COMMAND "${Python3_EXECUTABLE}"
             tools/parity/packaging/test_packaging_lane.py
