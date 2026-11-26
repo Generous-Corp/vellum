@@ -432,14 +432,6 @@ endforeach()
 # registry contract everywhere else.
 if(TARGET pulp-view-core)
     get_target_property(_vellum_view_core_sources pulp-view-core SOURCES)
-    if(WIN32)
-        list(FILTER _vellum_view_core_sources EXCLUDE REGEX
-            "core/view/platform/win/text_accessibility_windows\\.cpp$")
-        set_property(TARGET pulp-view-core PROPERTY SOURCES
-            ${_vellum_view_core_sources})
-        target_sources(pulp-view-core PRIVATE
-            "${PROJECT_SOURCE_DIR}/framework/core/view/platform/win/text_accessibility_windows.cpp")
-    endif()
     set(_vellum_has_text_accessibility_backend FALSE)
     foreach(_vellum_view_source IN LISTS _vellum_view_core_sources)
         if(_vellum_view_source MATCHES "text_accessibility_(macos|linux|windows)")
