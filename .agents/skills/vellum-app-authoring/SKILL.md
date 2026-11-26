@@ -105,7 +105,7 @@ migration, database, sync, or mobile support from this lane.
   Never vendor or patch framework internals inside an application.
 - For a bounded custom visualization, declare its app-owned source in
   `native/components.toml` and render it with `CustomComponent`. Include only
-  `<vellum/components/abi.h>`. Declare `web = "fallback"` with JSX fallback UI,
+  `<vellum/components/abi.h>`. Declare `web = "fallback"` with a React fallback UI,
   or `web = "wasm"` with a separate `wasm_source`; never imply native code is
   portable without one of those explicit paths.
 

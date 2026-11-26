@@ -2,7 +2,7 @@ if(NOT TARGET Vellum::MirrorDesign_import)
     return()
 endif()
 
-add_library(vellum-design-pipeline STATIC src/design_pipeline.cpp)
+add_library(vellum-design-pipeline STATIC src/design_pipeline.cpp src/tweak_store.cpp)
 add_library(Vellum::DesignPipeline ALIAS vellum-design-pipeline)
 set_target_properties(vellum-design-pipeline PROPERTIES
     EXPORT_NAME DesignPipeline
@@ -40,6 +40,16 @@ set_target_properties(vellum-source-adapter PROPERTIES
     INSTALL_RPATH "@loader_path/../mirror/${CMAKE_INSTALL_LIBDIR};@loader_path/../${CMAKE_INSTALL_LIBDIR}")
 install(TARGETS vellum-source-adapter RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
+# Scores a rendered panel against the design it was meant to realize. Kept a
+# tool rather than a test: it is pointed at whichever pair is being compared.
+add_executable(vellum-design-ab src/design_ab_main.cpp)
+target_compile_features(vellum-design-ab PRIVATE cxx_std_20)
+target_link_libraries(vellum-design-ab PRIVATE Vellum::DesignPipeline)
+set_target_properties(vellum-design-ab PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-skia-dawn-provider>")
+
 if(VELLUM_BUILD_TESTS)
     add_executable(vellum-design-pipeline-test tests/design_pipeline_test.cpp)
     target_link_libraries(vellum-design-pipeline-test PRIVATE Vellum::DesignPipeline)
@@ -61,6 +71,18 @@ if(VELLUM_BUILD_TESTS)
         OSX_ARCHITECTURES arm64
         MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
     add_test(NAME vellum.import-detect-unit COMMAND vellum-import-detect-unit-test)
+
+    # The tweak sidecar store needs only CHOC, so its test links the library
+    # without the design importer's runtime.
+    add_executable(vellum-tweak-store-test tests/tweak_store_test.cpp)
+    target_link_libraries(vellum-tweak-store-test PRIVATE Vellum::DesignPipeline)
+    set_target_properties(vellum-tweak-store-test PROPERTIES
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED ON
+        OSX_ARCHITECTURES arm64
+        MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+        BUILD_RPATH "$<TARGET_FILE_DIR:vellum-skia-dawn-provider>")
+    add_test(NAME vellum.tweak-store COMMAND vellum-tweak-store-test)
 
     # Keep one DesignIR fixture set across the native, bridge-JavaScript,
     # baked-C++, and SwiftUI lowerings.
@@ -124,3 +146,7 @@ if(VELLUM_BUILD_TESTS)
     add_test(NAME vellum.design-emitter-conformance
         COMMAND vellum-design-emitter-conformance)
 endif()
+
+# `vellum design-debug`, kept inside this folder because it consumes the mirrored
+# view, script and state units the way the pipeline does.
+add_subdirectory(design_debug)
