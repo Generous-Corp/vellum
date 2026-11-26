@@ -1,4 +1,4 @@
-// tweak_store.cpp, In-memory inspector tweak table and disk persistence.
+// tweak_store.cpp: In-memory inspector tweak table and disk persistence.
 
 #include <vellum/authoring/tweak_store.hpp>
 
@@ -334,7 +334,7 @@ std::vector<std::string> TweakStore::locked_anchors() const {
 // ── Disk persistence ───────────────────────────────────────────────────
 
 std::string TweakStore::default_tweaks_path() {
-    if (const char* env = std::getenv("PULP_TWEAKS_FILE"); env && *env) {
+    if (const char* env = std::getenv("VELLUM_TWEAKS_FILE"); env && *env) {
         return env;
     }
     namespace fs = std::filesystem;

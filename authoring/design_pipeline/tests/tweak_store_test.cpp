@@ -24,7 +24,7 @@ namespace {
 
 // Each disk test gets its own scratch directory under the system temp root so
 // the suite stays parallel-safe. The destructor removes the directory and any
-// half-written .tmp files. PULP_TWEAKS_FILE is cleared on construction so
+// half-written .tmp files. VELLUM_TWEAKS_FILE is cleared on construction so
 // default_tweaks_path() lookups stay deterministic; tests that need it set and
 // unset it inside the test body.
 struct TempTweaksDir {
@@ -42,9 +42,9 @@ struct TempTweaksDir {
         std::filesystem::create_directories(dir);
         file = dir / "pulp-tweaks.json";
 #ifdef _WIN32
-        _putenv_s("PULP_TWEAKS_FILE", "");
+        _putenv_s("VELLUM_TWEAKS_FILE", "");
 #else
-        ::unsetenv("PULP_TWEAKS_FILE");
+        ::unsetenv("VELLUM_TWEAKS_FILE");
 #endif
     }
 

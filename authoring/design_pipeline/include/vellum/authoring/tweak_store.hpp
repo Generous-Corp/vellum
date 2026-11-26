@@ -1,7 +1,7 @@
-// tweak_store.hpp, In-memory inspector tweak table and disk persistence.
+// tweak_store.hpp: In-memory inspector tweak table and disk persistence.
 //
-// On-disk schema (mirrors @pulp/import-ir/src/tweaks.ts TweaksFile with
-// Pulp's bypass, lock, version, and source-tag extensions):
+// On-disk schema (mirrors the import-ir package's TweaksFile with
+// its bypass, lock, version, and source-tag extensions):
 //
 //   {
 //     "$schema": "pulp-tweaks://v1",
@@ -228,7 +228,7 @@ public:
     std::string auto_save_path() const;
 
     /// Resolve the default `pulp-tweaks.json` location:
-    ///   1. `$PULP_TWEAKS_FILE` env var if set (verbatim, caller's
+    ///   1. `$VELLUM_TWEAKS_FILE` env var if set (verbatim, caller's
     ///      responsibility to make sense of it).
     ///   2. Walk up from cwd looking for `package.json`; if found, use
     ///      `<project_root>/pulp-tweaks.json`.
@@ -251,7 +251,7 @@ public:
     // re-import the live view tree may no longer carry an anchor a
     // stored tweak references, that tweak is "orphaned" and silently
     // does nothing. The drift API surfaces these so the inspector
-    // drawer + `pulp tweaks diff` CLI can warn the user.
+    // drawer and a command line diff can warn the user.
 
     /// Why a tweak failed to apply cleanly.
     enum class DriftReason {
@@ -321,8 +321,8 @@ public:
     std::vector<DriftedTweak>
     find_drifted(const std::vector<std::string>& live_anchors) const;
 
-    /// Render a DriftReport as a JSON string (used by `pulp tweaks
-    /// diff --json` and the protocol layer). Shape:
+    /// Render a DriftReport as a JSON string (used by a tweaks diff command
+    /// and the protocol layer). Shape:
     ///   { "clean": [...], "drifted": [...], "orphaned": [...],
     ///     "summary": { "total", "clean", "drifted", "orphaned" } }
     static std::string drift_report_to_json(const DriftReport& report);
