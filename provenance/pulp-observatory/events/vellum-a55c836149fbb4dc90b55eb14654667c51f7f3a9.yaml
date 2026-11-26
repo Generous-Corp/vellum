@@ -1,0 +1,84 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "capture-primitives",
+    "design-schema-compiler",
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-26T23:16:16Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-a55c836149fbb4dc90b55eb14654667c51f7f3a9",
+  "include_dependency_deltas": [
+    "apps/app-host/CMakeLists.txt",
+    "authoring/design_pipeline/CMakeLists.txt",
+    "authoring/design_pipeline/design_debug/CMakeLists.txt",
+    "authoring/design_pipeline/include/vellum/authoring/tweak_store.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "capture-primitives",
+    "design-schema-compiler",
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "apps/app-host/CMakeLists.txt",
+    "apps/app-host/fixtures/counter.js",
+    "apps/app-host/test_agent_workflow.py",
+    "apps/app-host/test_visual_fixtures.py",
+    "apps/design-tool/README.md",
+    "apps/design-tool/design-tool-core.js",
+    "apps/design-tool/design-tool-export.js",
+    "apps/design-tool/design-tool-popup.js",
+    "apps/design-tool/design-tool-preview.js",
+    "apps/design-tool/design-tool-toolbar.js",
+    "apps/design-tool/moves/base.json",
+    "apps/design-tool/moves/preview.json",
+    "apps/design-tool/moves/toolbar-popup.json",
+    "apps/design-tool/oklch.js",
+    "apps/design-tool/test_verify_verbatim_move.py",
+    "apps/design-tool/verify_verbatim_move.py",
+    "authoring/design_pipeline/CMakeLists.txt",
+    "authoring/design_pipeline/design_debug/CMakeLists.txt",
+    "authoring/design_pipeline/design_debug/src/design_debug_main.cpp",
+    "authoring/design_pipeline/design_debug/tests/design_debug_contracts_test.cpp",
+    "authoring/design_pipeline/include/vellum/authoring/tweak_store.hpp",
+    "authoring/design_pipeline/src/design_ab_main.cpp",
+    "authoring/design_pipeline/src/source_adapter_main.cpp",
+    "authoring/design_pipeline/src/tweak_store.cpp",
+    "authoring/design_pipeline/tests/test_design_ab.py",
+    "authoring/design_pipeline/tests/tweak_store_test.cpp",
+    "packages/vellum-design-ir/bin/backend-native-source.js"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "fceca68ef95e39b284de2a6d34ff875f0c95baed",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "4bc0a996a9b9c5e28a34e3a05fe0f02d954a0907",
+    "to_commit": "a55c836149fbb4dc90b55eb14654667c51f7f3a9"
+  },
+  "schema_api_deltas": [
+    "authoring/design_pipeline/design_debug/tests/design_debug_contracts_test.cpp",
+    "packages/vellum-design-ir/bin/backend-native-source.js"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "a55c836149fbb4dc90b55eb14654667c51f7f3a9",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}
