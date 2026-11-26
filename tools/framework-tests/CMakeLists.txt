@@ -88,19 +88,9 @@ vellum_add_framework_test(react-materialization
     SOURCES react_materialization_test.cpp
     UNITS Vellum::MirrorView_script)
 
-# The generated blobs come from vellum_add_js_bytecode() in the top-level
-# project, which builds the generator and the two fixture libraries.
-vellum_add_framework_test(js-bytecode-embed
-    SOURCES js_bytecode_embed_test.cpp
-    UNITS Vellum::MirrorView_script)
-target_link_libraries(vellum-framework-js-bytecode-embed-test PRIVATE
-    js_bytecode_embed_fixture js_bytecode_embed_bridge_fixture)
-target_compile_definitions(vellum-framework-js-bytecode-embed-test PRIVATE
-    VELLUM_TEST_JS_BYTECODE_FIXTURE="${PROJECT_SOURCE_DIR}/fixtures/js-bytecode/bytecode_fixture.js")
-
-vellum_add_framework_test(jsx-lock
-    SOURCES jsx_lock_test.cpp
-    UNITS Vellum::MirrorDesign_import)
+vellum_add_framework_test(design-import-jsx-runtime
+    SOURCES design_import_jsx_runtime_test.cpp
+    UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import)
 
 vellum_add_framework_test(param-model-binding
     SOURCES param_model_binding_test.cpp

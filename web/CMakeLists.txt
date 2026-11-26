@@ -26,7 +26,8 @@ foreach(_vellum_web_asset index.html style.css demo.js vector-canvas.js)
         COPYONLY)
 endforeach()
 set(_vellum_ui_runtime_modules
-    design.js effects.js index.js jsx-runtime.js runtime.js services.js)
+    design.js effects.js feature-versions.generated.js index.js jsx-runtime.js
+    limits.generated.js runtime.js services.js utf8.js)
 foreach(_vellum_ui_module IN LISTS _vellum_ui_runtime_modules)
     configure_file(
         "${PROJECT_SOURCE_DIR}/packages/vellum-ui/src/${_vellum_ui_module}"
@@ -60,6 +61,16 @@ if(VELLUM_BUILD_TESTS)
     add_test(NAME vellum.web.browser-proof-wait
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_browser_proof_wait.py")
+    add_test(NAME vellum.web.superconvolver-negative-control-status
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_superconvolver_negative_control.py")
+    add_test(NAME vellum.web.dist-imports
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_web_dist_imports.py"
+            --root "$<TARGET_FILE_DIR:vellum-web-core>")
+    add_test(NAME vellum.web.dist-imports-unit
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_web_dist_imports.py")
     add_test(NAME vellum.web.no-engine
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_wasm_no_engine.py"
@@ -84,6 +95,22 @@ if(VELLUM_BUILD_TESTS)
             --capture-dir "${CMAKE_BINARY_DIR}/web-captures/editor-session-negative-control"
             --negative-control)
     set_tests_properties(vellum.web.editor-session vellum.web.editor-session-negative-control
+        PROPERTIES SKIP_RETURN_CODE 77)
+    add_test(NAME vellum.web.superconvolver-view
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_superconvolver_view_browser.py"
+            --core-root "$<TARGET_FILE_DIR:vellum-web-core>"
+            --capture-dir "${CMAKE_BINARY_DIR}/web-captures/superconvolver-view")
+    foreach(control IN ITEMS move swap)
+        add_test(NAME vellum.web.superconvolver-view-${control}-control
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_superconvolver_view_browser.py"
+                --core-root "$<TARGET_FILE_DIR:vellum-web-core>"
+                --capture-dir "${CMAKE_BINARY_DIR}/web-captures/superconvolver-view-${control}-control"
+                --negative-control ${control})
+    endforeach()
+    set_tests_properties(vellum.web.superconvolver-view
+        vellum.web.superconvolver-view-move-control vellum.web.superconvolver-view-swap-control
         PROPERTIES SKIP_RETURN_CODE 77)
     add_test(NAME vellum.web.text-ime-accessibility
         COMMAND "${Python3_EXECUTABLE}"

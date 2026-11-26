@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(Vellum
-    VERSION 0.2.3
+    VERSION 0.2.4
     DESCRIPTION "Experimental audio-free native application kernel"
     LANGUAGES CXX)
 
@@ -193,6 +193,9 @@ if(VELLUM_BUILD_TESTS)
         add_test(NAME vellum.web.editor-gesture
             COMMAND "${VELLUM_NODE_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/web/tests/editor_gesture_test.mjs")
+        add_test(NAME vellum.web.superconvolver-view-layout
+            COMMAND "${VELLUM_NODE_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/web/tests/superconvolver_view_test.mjs")
         add_test(NAME vellum.feature-versions-drift
             COMMAND "${VELLUM_NODE_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/versions/generate_feature_versions.mjs" --check)
