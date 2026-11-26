@@ -513,6 +513,29 @@ def write_localized_capture_assets(staging: Path, envelope: dict[str, Any]) -> N
         destination.write_bytes(payload)
 
 
+# Sources that `vellum import NAME FILE` accepts as a leading name. Illustrator
+# is a separate converter route and is matched on its own.
+IMPORT_SHORTHAND_SOURCES = frozenset({"pencil", "designmd", "v0", "stitch", "jsx", "preconverted-svg"})
+IMPORT_CONVERTER_SOURCES = frozenset({"illustrator"})
+
+
+# Adapters that parse an HTML file natively. A reimport of their source stays on the
+# adapter recorded in the import lock instead of the browser capture route.
+NATIVE_HTML_ADAPTERS = frozenset({"stitch"})
+
+
+def locked_import_adapter(root: Path, source_key: str) -> str | None:
+    """Return the adapter the import lock records for a source key, if readable."""
+    try:
+        lock = json.loads((root / "design/import.lock.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    sources = lock.get("sources") if isinstance(lock, dict) else None
+    source = sources.get(source_key) if isinstance(sources, dict) else None
+    adapter = source.get("adapter") if isinstance(source, dict) else None
+    return adapter if isinstance(adapter, str) else None
+
+
 def invoke_import_backend(
     root: Path,
     lock: dict[str, Any],
@@ -1269,7 +1292,8 @@ def backend_command(args: argparse.Namespace, forwarded: list[str]) -> dict[str,
                 "--file requires Figma plugin JSON inputs.",
                 status="invalid_arguments", exit_code=EXIT_USAGE,
             )
-        if source_path.suffix.casefold() in {".html", ".htm"}:
+        if (source_path.suffix.casefold() in {".html", ".htm"} and
+                locked_import_adapter(root, args.source_key) not in NATIVE_HTML_ADAPTERS):
             backend_payload, return_code = invoke_import_backend(
                 root, lock, "html", source_path, args.source_key,
                 args.interaction_plan, invoke_backend, command="reimport",
@@ -1558,7 +1582,7 @@ def parser() -> argparse.ArgumentParser:
         "import": [
             ("source", {"nargs": "*"}),
             ("--file", {"action": "append", "help": "add an ordered Figma plugin JSON export"}),
-            ("--source-type", {"choices": ["fig", "figma", "figma-plugin", "design-ir", "html", "claude-design", "pencil", "designmd", "v0", "jsx", "preconverted-svg"], "default": "figma"}),
+            ("--source-type", {"choices": ["fig", "figma", "figma-plugin", "design-ir", "html", "claude-design", "pencil", "designmd", "v0", "stitch", "jsx", "preconverted-svg"], "default": "figma"}),
             ("--as", {"dest": "source_key", "default": "main"}),
             ("--interaction-plan", {}),
             ("--frame", {"help": "select a Figma frame by GUID or name"}),
@@ -1675,7 +1699,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         if args.command == "import" and isinstance(args.source, list):
             if len(args.source) == 2 and args.source[0] == "illustrator":
                 args.source, args.illustrator_input = args.source
-            elif len(args.source) == 2 and args.source[0] in {"pencil", "designmd", "v0", "jsx", "preconverted-svg"}:
+            elif len(args.source) == 2 and args.source[0] in IMPORT_SHORTHAND_SOURCES:
                 args.source_type, args.source = args.source
             elif len(args.source) == 1:
                 args.source = args.source[0]
@@ -1724,7 +1748,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                     )
 
             is_illustrator = args.source == "illustrator" and (
-                hasattr(args, "illustrator_input") or args.source_type not in {"pencil", "designmd", "v0"}
+                hasattr(args, "illustrator_input") or args.source_type not in {"pencil", "designmd", "v0", "stitch"}
             )
             is_fig = args.source_type == "fig" or (
                 args.source_type == "figma" and Path(args.source).suffix.lower() == ".fig"
