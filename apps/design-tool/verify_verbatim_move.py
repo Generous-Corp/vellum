@@ -2,9 +2,12 @@
 """Prove the design-tool files moved from Pulp are Pulp's bytes.
 
 Each manifest in apps/design-tool/moves/ names a Pulp commit and, per moved
-file, its Pulp path (`source_path`), the git blob id (`source_blob`) of Pulp's file at that commit, and the
-respelling map applied on the way in: each entry an exact `old` string, its
-`new` spelling and how many times it occurs. The check undoes the respelling
+file, its Pulp path (`source_path`) and the git blob id (`source_blob`) of
+Pulp's file at that commit. The respelling applied on the way in is listed in
+provenance/design-tool/respell.json, one entry per moved path: an exact `old`
+string, its `new` spelling and how many times it occurs. The table lives under
+provenance/, like the framework's respell table, because it has to spell the
+Pulp names that Vellum's native trees refuse. The check undoes the respelling
 (exactly `count` occurrences of each `new`, and no more), hashes the result as
 a git blob, and requires that hash to equal the recorded blob. So any changed
 byte, an unlisted respelling or a wrong count fails.
@@ -28,6 +31,8 @@ import sys
 
 REPO = Path(__file__).resolve().parents[2]
 MOVES = Path(__file__).resolve().parent / "moves"
+RESPELL_TABLE = "provenance/design-tool/respell.json"
+RESPELL_SCHEMA = "vellum.design-tool-respell.v1"
 SCHEMA = "vellum.design-tool-verbatim-move.v1"
 
 
@@ -62,20 +67,40 @@ def load(manifest_path: Path) -> dict:
     for item in manifest["files"]:
         if not {"path", "source_path", "source_blob"} <= set(item):
             raise ManifestError(f"{manifest_path}: each file needs path, source_path and source_blob")
-        for entry in item.get("respell", []):
-            if not {"old", "new", "count"} <= set(entry) or not entry["new"]:
-                raise ManifestError(f"{manifest_path}: each respelling needs old, new and count")
     return manifest
+
+
+def load_respellings(root: Path) -> dict[str, list[dict]]:
+    """The respelling table, by moved path. A missing table means no respelling."""
+    path = root / RESPELL_TABLE
+    if not path.is_file():
+        return {}
+    try:
+        table = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ManifestError(f"{path}: {error}") from error
+    if table.get("schema") != RESPELL_SCHEMA or not isinstance(table.get("entries"), list):
+        raise ManifestError(f"{path}: schema must be {RESPELL_SCHEMA} with an entries list")
+    by_path: dict[str, list[dict]] = {}
+    for entry in table["entries"]:
+        if not {"path", "old", "new", "count"} <= set(entry) or not entry["new"]:
+            raise ManifestError(f"{path}: each respelling needs path, old, new and count")
+        by_path.setdefault(entry["path"], []).append(entry)
+    return by_path
 
 
 def verify(root: Path, manifests: list[Path], pulp_repo: Path | None) -> list[str]:
     problems: list[str] = []
+    respellings = load_respellings(root)
+    moved = {item["path"] for manifest_path in manifests for item in load(manifest_path)["files"]}
+    for stray in sorted(set(respellings) - moved):
+        problems.append(f"{RESPELL_TABLE}: {stray} is respelled but no manifest moves it")
     for manifest_path in manifests:
         manifest = load(manifest_path)
         commit = manifest["source_commit"]
         for item in manifest["files"]:
             path = root / item["path"]
-            respell = item.get("respell", [])
+            respell = respellings.get(item["path"], [])
             try:
                 original = undo_respelling(path.read_bytes(), respell)
             except (OSError, ValueError) as error:
