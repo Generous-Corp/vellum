@@ -163,7 +163,7 @@ fs::path find_repo_root() {
     auto dir = fs::current_path();
     while (!dir.empty()) {
         if (fs::exists(dir / "CMakeLists.txt")
-            && fs::exists(dir / "examples" / "design-tool" / kDesignToolEntry)) {
+            && fs::exists(dir / "apps" / "design-tool" / kDesignToolEntry)) {
             return dir;
         }
         auto parent = dir.parent_path();
@@ -174,7 +174,7 @@ fs::path find_repo_root() {
 }
 
 fs::path find_default_script(const fs::path& repo_root) {
-    auto path = repo_root / "examples" / "design-tool" / kDesignToolEntry;
+    auto path = repo_root / "apps" / "design-tool" / kDesignToolEntry;
     if (fs::exists(path)) return path;
     return {};
 }
@@ -206,7 +206,7 @@ void load_design_tool(const fs::path& script_path, WidgetBridge& bridge) {
 void print_usage() {
     std::cerr << "Usage: vellum-design-debug --prompt <text> [options]\n";
     std::cerr << "  --target <id|all>            Scope prompt to a widget like k1, slider1, t1\n";
-    std::cerr << "  --script <file.js>           Design tool entry module (default: examples/design-tool/design-tool-core.js)\n";
+    std::cerr << "  --script <file.js>           Design tool entry module (default: apps/design-tool/design-tool-core.js)\n";
     std::cerr << "  --output-dir <dir>           Artifact directory (default: build/design-debug)\n";
     std::cerr << "  --response-file <file.txt>   Use a saved model response instead of calling AI\n";
     std::cerr << "  --provider <name>            Metadata provider name (default: claude)\n";

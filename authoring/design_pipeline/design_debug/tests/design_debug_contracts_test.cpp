@@ -105,7 +105,7 @@ TEST_CASE("design-debug repo discovery finds the design tool from nested directo
           "[tools][design-debug]") {
     auto temp = make_temp_dir("repo-root");
     auto repo = temp / "repo";
-    auto design_dir = repo / "examples" / "design-tool";
+    auto design_dir = repo / "apps" / "design-tool";
     auto build_dir = repo / "build" / "examples" / "design-tool";
     REQUIRE(std::filesystem::create_directories(design_dir));
     REQUIRE(std::filesystem::create_directories(build_dir));
