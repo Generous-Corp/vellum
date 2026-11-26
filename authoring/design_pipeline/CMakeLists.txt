@@ -151,3 +151,6 @@ if(VELLUM_BUILD_TESTS)
         BUILD_RPATH "$<TARGET_FILE_DIR:vellum-skia-dawn-provider>")
     add_test(NAME vellum.design-emit-compile COMMAND vellum-design-emit-compile-test)
 endif()
+# `vellum design-debug`, kept inside this folder because it consumes the mirrored
+# view, script and state units the way the pipeline does.
+add_subdirectory(design_debug)
