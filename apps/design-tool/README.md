@@ -7,7 +7,7 @@ The modules share one global scope and load in order: `oklch.js`, then
 the whole set headlessly.
 
 Each file is Pulp's bytes at the commit its manifest in `moves/` names, apart
-from that manifest's listed respelling. Verify with:
+from the respelling listed in `provenance/design-tool/respell.json`. Verify with:
 
 ```sh
 python3 apps/design-tool/verify_verbatim_move.py --pulp-repo <pulp checkout>

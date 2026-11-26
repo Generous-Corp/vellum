@@ -18,10 +18,12 @@ assert SPEC and SPEC.loader
 check = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(check)
 
-PULP_TEXT = b"// sample\nvar cpp = 'pulp::Color(' + hex + ')';\nvar n = 'pulp_theme';\n"
-MOVED_TEXT = b"// sample\nvar cpp = 'vellum::Color(' + hex + ')';\nvar n = 'vellum_theme';\n"
-RESPELL = [{"old": "pulp::", "new": "vellum::", "count": 1},
-           {"old": "pulp_theme", "new": "vellum_theme", "count": 1}]
+# Plain file contents: one line of text naming each spelling once.
+PULP_TEXT = b"// sample\nuses pulp::Color and pulp_theme here\n"
+MOVED_TEXT = b"// sample\nuses vellum::Color and vellum_theme here\n"
+MOVED_PATH = "apps/design-tool/tool.js"
+RESPELL = [{"path": MOVED_PATH, "old": "pulp::", "new": "vellum::", "count": 1},
+           {"path": MOVED_PATH, "old": "pulp_theme", "new": "vellum_theme", "count": 1}]
 
 
 def git(repo: Path, *args: str) -> str:
@@ -53,9 +55,13 @@ class VerbatimMoveTests(unittest.TestCase):
     def write_manifest(self, respell: list[dict], blob: str | None = None) -> None:
         self.manifest.write_text(json.dumps({
             "schema": check.SCHEMA, "source_commit": self.commit,
-            "files": [{"path": "apps/design-tool/tool.js", "source_path": "examples/design-tool/tool.js",
-                       "source_blob": blob or check.git_blob_id(PULP_TEXT), "respell": respell}],
+            "files": [{"path": MOVED_PATH, "source_path": "examples/design-tool/tool.js",
+                       "source_blob": blob or check.git_blob_id(PULP_TEXT)}],
         }), encoding="utf-8")
+        table = self.root / check.RESPELL_TABLE
+        table.parent.mkdir(parents=True, exist_ok=True)
+        table.write_text(json.dumps({"schema": check.RESPELL_SCHEMA, "entries": respell}),
+                         encoding="utf-8")
 
     def run_check(self, *extra: str) -> int:
         return check.main(["--root", str(self.root), *extra, str(self.manifest)])
@@ -90,6 +96,10 @@ class VerbatimMoveTests(unittest.TestCase):
         self.moved.write_bytes(MOVED_TEXT + b"// vellum_theme\n")
         self.write_manifest([RESPELL[0], dict(RESPELL[1], count=2)], blob=check.git_blob_id(text))
         self.assertEqual(self.run_check("--pulp-repo", str(self.pulp)), 1)
+
+    def test_respelling_for_a_path_no_manifest_moves_fails(self) -> None:
+        self.write_manifest(RESPELL + [dict(RESPELL[0], path="apps/design-tool/other.js")])
+        self.assertEqual(self.run_check(), 1)
 
     def test_malformed_manifest_is_a_usage_error(self) -> None:
         self.manifest.write_text('{"schema": "other"}', encoding="utf-8")

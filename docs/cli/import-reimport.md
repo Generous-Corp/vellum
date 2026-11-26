@@ -69,11 +69,13 @@ Zstd-compressed saves require Node.js 22.15 or newer. Decoded content follows
 the materialization limits described above.
 
 The macOS native SDK also imports local v0 TSX, Pencil and OpenPencil node-tree
-JSON (including `.pen` files), and Google DESIGN.md token specifications.
+JSON (including `.pen` files), Google Stitch screens, and Google DESIGN.md token
+specifications.
 
 ```sh
 vellum import v0 ./panel.tsx
 vellum import pencil ./panel.pen
+vellum import stitch ./code.html
 vellum import designmd ./DESIGN.md
 vellum reimport --source ./DESIGN.md
 ```
@@ -81,6 +83,15 @@ vellum reimport --source ./DESIGN.md
 The v0 route uses the static JSX parser for host elements, inline styles and
 supported Tailwind layout classes. It preserves class strings and reports
 partial capture for dynamic JSX. Pass a local TSX export.
+
+The Stitch route accepts a recorded Stitch screen payload (DesignIR-shaped JSON)
+or a Stitch `code.html` export. A screen payload keeps its node tree. An HTML
+export goes through a text-only fallback that keeps visible element text, drops
+script, style and head content, records referenced asset URLs, and reports
+`ir.fallback-used`. Stitch is reached only through `vellum import stitch` or
+`--source-type stitch`; an untyped `.html` file is never treated as Stitch. A
+reimport of a Stitch `code.html` stays on the Stitch adapter recorded in the
+import lock. The route makes no Stitch service call.
 
 Import one source per project. Pencil produces a retained tree and a token
 file. DESIGN.md produces tokens and parser diagnostics without generating a

@@ -98,9 +98,26 @@ vellum_add_framework_test(native-materializer-part1
     SOURCES native_materializer_part1_test.cpp
     UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import Vellum::MirrorCanvas)
 
+vellum_add_framework_test(native-materializer-part2
+    SOURCES native_materializer_part2_test.cpp
+    UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import Vellum::MirrorCanvas)
 vellum_add_framework_test(design-import-jsx-runtime
     SOURCES design_import_jsx_runtime_test.cpp
     UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import)
+
+vellum_add_framework_test(runtime-import-parsers
+    SOURCES runtime_import_parsers_test.cpp
+    UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import)
+target_compile_definitions(vellum-framework-runtime-import-parsers-test PRIVATE
+    VELLUM_REPO_ROOT="${PROJECT_SOURCE_DIR}")
+
+vellum_add_framework_test(native-materializer-part3
+    SOURCES native_materializer_part3_test.cpp
+    UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import Vellum::MirrorCanvas)
+
+vellum_add_framework_test(native-materializer-part4
+    SOURCES native_materializer_part4_test.cpp
+    UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import Vellum::MirrorCanvas)
 
 vellum_add_framework_test(param-model-binding
     SOURCES param_model_binding_test.cpp
@@ -317,6 +334,14 @@ else()
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES ${_vellum_linux_host_sources})
 endif()
 
+# The cross-platform accessibility tree snapshot and the platform provider seam.
+vellum_add_framework_test(accessibility-tree
+    SOURCES accessibility_tree_test.cpp
+    UNITS Vellum::MirrorView_core)
+vellum_add_framework_test(accessibility-provider
+    SOURCES accessibility_provider_test.cpp
+    UNITS Vellum::MirrorView_core)
+
 vellum_add_framework_test(scripted-ui-param-model
     SOURCES scripted_ui_param_model_test.cpp
     UNITS Vellum::MirrorView_script Vellum::Value)
@@ -341,9 +366,28 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
         UNITS Vellum::MirrorFoundation)
     target_link_libraries(vellum-framework-native-dialog-delivery-test PRIVATE "-framework CoreFoundation")
     set_tests_properties(vellum.framework.native-dialog-delivery PROPERTIES TIMEOUT 15)
+
+    # The plug-in view host parents a native child; never placed in a window.
+    vellum_add_framework_test(plugin-view-host-native-child
+        SOURCES plugin_view_host_native_child_test.mm
+        UNITS Vellum::MirrorView_core)
+    target_link_libraries(vellum-framework-plugin-view-host-native-child-test PRIVATE
+        "-framework AppKit")
+    set_tests_properties(vellum.framework.plugin-view-host-native-child PROPERTIES TIMEOUT 60)
+
+    # The plug-in view host's cursor decision over a native child; the window
+    # is never ordered in.
+    vellum_add_framework_test(plugin-view-host-cursor
+        SOURCES plugin_view_host_cursor_test.mm
+        UNITS Vellum::MirrorView_core)
+    target_link_libraries(vellum-framework-plugin-view-host-cursor-test PRIVATE
+        "-framework AppKit")
+    set_tests_properties(vellum.framework.plugin-view-host-cursor PROPERTIES TIMEOUT 60)
 else()
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
-        main_thread_timer_test.mm native_dialog_delivery_test.cpp)
+        main_thread_timer_test.mm native_dialog_delivery_test.cpp
+        plugin_view_host_cursor_test.mm
+        plugin_view_host_native_child_test.mm)
 endif()
 
 # iOS-only: compiled by tools/mirror/consumer/ios-auv3 against the iOS simulator
