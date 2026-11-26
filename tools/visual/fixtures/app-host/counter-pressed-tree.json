@@ -1,0 +1,8 @@
+{
+  "id": "app-host/counter-pressed-tree",
+  "capture": {
+    "format": "json",
+    "driver": "command",
+    "argv": ["python3", "tools/visual/capture_app_host.py", "--bundle", "apps/app-host/fixtures/counter.js", "--press", "go", "--output", "tree"]
+  }
+}
