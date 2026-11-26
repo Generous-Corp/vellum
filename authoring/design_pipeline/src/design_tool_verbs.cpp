@@ -746,7 +746,14 @@ int run_export_tokens(const std::vector<std::string>& rest) {
             std::cerr << "Error: cannot read " << input << "\n";
             return 1;
         }
-        theme = vellum::view::Theme::from_json(content);
+        try {
+            theme = vellum::view::Theme::from_json(content);
+        } catch (...) {
+            // Bare catch: Yoga's -fno-rtti typeinfo shadows std::exception (see
+            // the ledger guard), so a typed catch would miss choc's ParseError.
+            std::cerr << "Error: " << input << " is not valid theme JSON\n";
+            return 1;
+        }
     }
     const std::string body = format == "css-variables"
                                  ? vellum::view::export_css_variables(theme)

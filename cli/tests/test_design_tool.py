@@ -144,6 +144,12 @@ class DesignToolCliTests(unittest.TestCase):
         self.assertNotEqual(refused.returncode, 0)
         self.assertEqual(ledger.read_text(encoding="utf-8"), '{"assets":"corrupt"}')
 
+    def test_export_tokens_rejects_malformed_theme_json(self) -> None:
+        bad = self.write("bad.json", "{not json")
+        completed = self.design("export-tokens", "--file", str(bad), "--dry-run")
+        self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
+        self.assertIn("not valid theme JSON", completed.stderr)
+
     def test_lint_adherence(self) -> None:
         clean = self.write("ui.js", "export const el = 1;\n")
         passed = self.design("lint-adherence", str(clean))
