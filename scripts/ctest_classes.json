@@ -51,6 +51,7 @@
       "vellum.framework.linux-sdl-window-x11-control",
       "vellum.framework.macos-accessibility-roles",
       "vellum.framework.macos-text-accessibility",
+      "vellum.framework.macos-window-host-accessibility",
       "vellum.framework.main-thread-timer",
       "vellum.framework.native-dialog-delivery",
       "vellum.framework.native-materializer-part1",

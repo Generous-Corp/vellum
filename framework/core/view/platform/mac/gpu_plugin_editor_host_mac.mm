@@ -67,22 +67,34 @@ NSArray* editor_accessibility_children(VellumMirrorMetalView* host) {
     return children;
 }
 
-// The editor view presents as one group whose children are the view tree's
-// accessible elements and the registered text elements.
-void install_accessibility(Class cls) {
-    auto add = [cls](SEL selector, const char* return_type, id block) {
-        char types[8];
-        std::snprintf(types, sizeof types, "%s@:", return_type);
-        class_addMethod(cls, selector, imp_implementationWithBlock(block), types);
-    };
-    add(@selector(isAccessibilityElement), @encode(BOOL), ^BOOL(id) { return YES; });
-    add(@selector(accessibilityRole), @encode(id), ^NSAccessibilityRole(id) {
+// Every Metal view the framework creates, the window host's and the plug-in
+// editor's, presents as one group whose children are the view tree's accessible
+// elements and the registered text elements. The methods are added to the shared
+// class once, when this image loads, so the window host needs no accessibility
+// code of its own.
+void add_method(Class cls, SEL selector, const char* return_type, id block) {
+    char types[8];
+    std::snprintf(types, sizeof types, "%s@:", return_type);
+    class_addMethod(cls, selector, imp_implementationWithBlock(block), types);
+}
+
+void install_view_accessibility() {
+    Class cls = [VellumMirrorMetalView class];
+    add_method(cls, @selector(isAccessibilityElement), @encode(BOOL), ^BOOL(id) { return YES; });
+    add_method(cls, @selector(accessibilityRole), @encode(id), ^NSAccessibilityRole(id) {
         return NSAccessibilityGroupRole;
     });
-    add(@selector(accessibilityLabel), @encode(id), ^NSString*(id) { return @"Plugin UI"; });
-    add(@selector(accessibilityChildren), @encode(id), ^NSArray*(VellumMirrorMetalView* host) {
+    add_method(cls, @selector(accessibilityLabel), @encode(id), ^NSString*(NSView* host) {
+        NSString* title = host.window.title;
+        return title.length > 0 ? title : @"UI";
+    });
+    add_method(cls, @selector(accessibilityChildren), @encode(id), ^NSArray*(VellumMirrorMetalView* host) {
         return editor_accessibility_children(host);
     });
+}
+
+__attribute__((constructor)) void install_view_accessibility_at_load() {
+    install_view_accessibility();
 }
 
 class MacPluginViewHost final : public PluginViewHost {
@@ -253,7 +265,8 @@ private:
 Class host_class() {
     static Class c=[] { char n[96]; std::snprintf(n,sizeof n,"VellumPluginViewHost_%p",reinterpret_cast<void*>(&host_class));
         if (Class old=objc_getClass(n)) return old; Class x=objc_allocateClassPair([VellumMirrorMetalView class],n,0);
-        install_accessibility(x); objc_registerClassPair(x); return x; }(); return c;
+        add_method(x, @selector(accessibilityLabel), @encode(id), ^NSString*(id) { return @"Plugin UI"; });
+        objc_registerClassPair(x); return x; }(); return c;
 }
 }
 
