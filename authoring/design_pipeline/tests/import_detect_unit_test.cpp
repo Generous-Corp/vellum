@@ -6,6 +6,8 @@
 
 #include <vellum/authoring/import_detect.hpp>
 
+#include "strict_json.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -369,6 +371,116 @@ TEST_CASE("clause matcher covers frontmatter fence and required key clauses",
 
     required.required = "layout";
     CHECK_FALSE(det::match_clause(required, snap));
+}
+
+TEST_CASE("parse_compat_json rejects malformed JSON instead of reading a prefix",
+          "[import-detect]") {
+    const std::string valid =
+        R"({"compat-schema-version": "0.3", "imports": {"x": {"parser-version": "1.0", "detected-formats": []}}})";
+    REQUIRE(det::parse_compat_json(valid).has_value());
+    // An unterminated string.
+    CHECK_FALSE(det::parse_compat_json(
+        R"({"compat-schema-version": "0.3", "imports": {}, "note": "unterminated)").has_value());
+    // A missing separator between members, and between array elements.
+    CHECK_FALSE(det::parse_compat_json(
+        R"({"compat-schema-version": "0.3" "imports": {}})").has_value());
+    CHECK_FALSE(det::parse_compat_json(
+        R"({"compat-schema-version": "0.3", "imports": {"x": {"detected-formats": [{} {}]}}})").has_value());
+    // Trailing non-whitespace after a complete document.
+    CHECK_FALSE(det::parse_compat_json(valid + " trailing").has_value());
+    CHECK_FALSE(det::parse_compat_json(valid + "}").has_value());
+    // Trailing whitespace is fine.
+    CHECK(det::parse_compat_json(valid + " \n\t").has_value());
+}
+
+TEST_CASE("json-key-equals ignores malformed JSON inputs", "[import-detect]") {
+    det::FingerprintClause c;
+    c.kind = det::FingerprintClause::Kind::json_key_equals;
+    c.path = "provenance.adapter";
+    c.value = "figma-plugin";
+    det::InputSnapshot snap;
+    snap.html_text = R"({"provenance": {"adapter": "figma-plugin"}})";
+    CHECK(det::match_clause(c, snap));
+    snap.html_text = R"({"provenance": {"adapter": "figma-plugin"}} trailing)";
+    CHECK_FALSE(det::match_clause(c, snap));
+    snap.html_text = R"({"provenance": {"adapter": "figma-plugin)";
+    CHECK_FALSE(det::match_clause(c, snap));
+}
+
+TEST_CASE("the strict JSON wrapper finds the end of the top-level value",
+          "[import-detect]") {
+    namespace sj = vellum::authoring::strict_json;
+    CHECK(sj::end_of_top_level_value(R"(  {"a": "}"} x)") == 12);
+    CHECK(sj::end_of_top_level_value(R"({"a": "say \"}\" now"})") == 22);
+    CHECK(sj::end_of_top_level_value(R"([1, [2, {"b": []}]])") == 19);
+    CHECK(sj::end_of_top_level_value(R"({"a": [1, 2})") == std::string_view::npos);
+    CHECK(sj::end_of_top_level_value(R"("bare string")") == std::string_view::npos);
+    CHECK(sj::end_of_top_level_value("") == std::string_view::npos);
+    CHECK(sj::parse_document(R"({"a": "}"} )").has_value());
+    CHECK_FALSE(sj::parse_document(R"({"a": "}"} x)").has_value());
+    CHECK_FALSE(sj::parse_document(R"({"a": 1,})").has_value());
+    CHECK_FALSE(sj::parse_document(R"([1 2])").has_value());
+}
+
+TEST_CASE("directory-files never matches a single file", "[import-detect]") {
+    ScratchDir scratch("directory-files-on-file");
+    write_text(scratch.path / "code.html", "<html></html>");
+    det::FingerprintClause c;
+    c.kind = det::FingerprintClause::Kind::directory_files;
+    c.files = {"code.html"};
+    CHECK(det::match_clause(c, det::snapshot_input(scratch.path)));
+    auto file = det::snapshot_input(scratch.path / "code.html");
+    REQUIRE_FALSE(file.is_directory);
+    // A file snapshot that somehow carries member names still does not match.
+    file.directory_basenames = {"code.html"};
+    CHECK_FALSE(det::match_clause(c, file));
+}
+
+TEST_CASE("frontmatter-fence honors its value", "[import-detect]") {
+    det::InputSnapshot snap;
+    snap.has_frontmatter_fence = true;
+    det::FingerprintClause c;
+    c.kind = det::FingerprintClause::Kind::frontmatter_fence;
+    CHECK(det::match_clause(c, snap));
+    c.value = "---";
+    CHECK(det::match_clause(c, snap));
+    c.value = "+++";
+    CHECK_FALSE(det::match_clause(c, snap));
+    snap.has_frontmatter_fence = false;
+    c.value = "---";
+    CHECK_FALSE(det::match_clause(c, snap));
+}
+
+TEST_CASE("json-key-equals follows dotted paths like the figma-plugin clauses",
+          "[import-detect]") {
+    det::FingerprintClause adapter;
+    adapter.kind = det::FingerprintClause::Kind::json_key_equals;
+    adapter.path = "provenance.adapter";
+    adapter.value = "figma-plugin";
+    det::FingerprintClause version = adapter;
+    version.path = "format_version";
+    version.value = "2026.05-figma-plugin-v1";
+
+    det::InputSnapshot snap;
+    snap.html_text = R"({"format_version": "2026.05-figma-plugin-v1",
+                        "provenance": {"adapter": "figma-plugin", "version": "0.2.0"}})";
+    CHECK(det::match_clause(adapter, snap));
+    CHECK(det::match_clause(version, snap));
+
+    snap.html_text = R"({"format_version": "2025.01", "provenance": {"adapter": "pencil"}})";
+    CHECK_FALSE(det::match_clause(adapter, snap));
+    CHECK_FALSE(det::match_clause(version, snap));
+    // A path through a non-object, a missing key, and a non-string leaf.
+    snap.html_text = R"({"provenance": "figma-plugin", "format_version": 2026})";
+    CHECK_FALSE(det::match_clause(adapter, snap));
+    CHECK_FALSE(det::match_clause(version, snap));
+    snap.html_text = R"({"provenance": {}})";
+    CHECK_FALSE(det::match_clause(adapter, snap));
+    // An empty path or value never matches.
+    det::FingerprintClause empty = adapter;
+    empty.path.clear();
+    snap.html_text = R"({"provenance": {"adapter": "figma-plugin"}})";
+    CHECK_FALSE(det::match_clause(empty, snap));
 }
 
 int main() { return import_detect_test::run_all(); }
