@@ -67,7 +67,11 @@ NSArray* editor_accessibility_children(VellumMirrorMetalView* host) {
             auto* element = (__bridge NSAccessibilityElement*)
                 vellum_text_accessibility_lookup_macos_for_owner(owner, node.id.c_str());
             if (!element) continue;
-            [element setAccessibilityParent:host];
+            // Owner-scoped elements belong to this editor's root. A
+            // process-wide registration can appear in more than one host's
+            // children array, so leave its parent unset rather than making
+            // one shared AppKit object claim multiple parents.
+            if (owner) [element setAccessibilityParent:host];
             [children addObject:element];
             [element release];
         }
