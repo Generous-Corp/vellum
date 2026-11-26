@@ -718,7 +718,7 @@ TEST_CASE("snapshot_input prefers code html over sorted html fallbacks",
     fs::remove_all(dir);
 }
 
-TEST_CASE("new-format reports keep empty additions when no baseline tokens exist",
+TEST_CASE("new-format reports list new tokens even when the format has no token clause",
           "[import-detect]") {
     det::ImportsManifest manifest;
     det::SourceEntry source;
@@ -744,11 +744,13 @@ TEST_CASE("new-format reports keep empty additions when no baseline tokens exist
     CHECK(report.candidate_format_version == "2024.10+next");
     CHECK(report.based_on_source == "claude");
     CHECK(report.based_on_format_version == "2024.10");
-    CHECK(report.additions.empty());
+    // A Tailwind category the closest format does not fingerprint is still a
+    // new-format signal, so every token is listed.
+    CHECK(report.additions == std::vector<std::string>{"unexpected-a", "unexpected-b"});
 
     auto json = det::render_new_format_json(report);
-    CHECK(json.find("\"fingerprint-additions\": []") != std::string::npos);
-    CHECK(json.find("unexpected-a") == std::string::npos);
+    CHECK(json.find(R"({"kind": "tailwind-config-token", "any-of": ["unexpected-a", "unexpected-b"]})")
+          != std::string::npos);
 }
 
 
