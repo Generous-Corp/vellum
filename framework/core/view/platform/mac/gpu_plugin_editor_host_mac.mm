@@ -33,12 +33,13 @@ Class host_class();
 // Mirrors the order build_accessibility_elements() walks: every descendant of
 // the root, parents before children, keeping the views that pass the shared
 // exposure gate. Each entry records whether the view and all its ancestors are
-// visible, so a hidden panel's contents stay out of the tree a screen reader
+// visible and not aria-hidden, so a hidden panel's contents stay out of the tree a screen reader
 // reads.
 void collect_exposure_flags(const View& parent, bool parent_visible, std::vector<bool>& out) {
     for (std::size_t i = 0; i < parent.child_count(); ++i) {
         const View* child = parent.child_at(i);
-        const bool visible = parent_visible && child->visible();
+        const bool visible = parent_visible && child->visible() &&
+                             child->access_hidden() != "true";
         if (is_accessibility_element(*child)) out.push_back(visible);
         collect_exposure_flags(*child, visible, out);
     }
@@ -49,7 +50,7 @@ NSArray* editor_accessibility_children(VellumMirrorMetalView* host) {
     if (View* root = host.rootView) {
         NSArray* elements = build_accessibility_elements(*root, host);
         std::vector<bool> shown;
-        collect_exposure_flags(*root, root->visible(), shown);
+        collect_exposure_flags(*root, root->visible() && root->access_hidden() != "true", shown);
         const bool aligned = shown.size() == elements.count;
         for (NSUInteger i = 0; i < elements.count; ++i) {
             if (aligned && !shown[i]) continue;
