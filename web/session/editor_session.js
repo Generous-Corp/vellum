@@ -48,7 +48,9 @@
 import {addVectorAsset} from '../shell/vector-canvas.js';
 import {createCanvas2DBackend} from './canvas2d_backend.js';
 import {sha256} from './content_hash.js';
-import {GestureTracker, clampToParameter, trackValue} from './gesture_tracker.js';
+import {
+    GestureTracker, clampToParameter, toggleFlipped, toggleIsOn, trackValue,
+} from './gesture_tracker.js';
 
 const INK_DISTANCE = 8;
 const DEFAULT_COLORS = {
@@ -338,7 +340,7 @@ export async function createEditorSession({container, adapter, view, createCore}
                 }
             }
         } else if (node.kind === 'toggle') {
-            const on = values.get(node.param) >= 0.5;
+            const on = toggleIsOn(infos.get(node.param), values.get(node.param));
             if (!node.vector) {
                 rect(node.id, box.x, box.y, box.width, box.height, box.height / 2,
                     ...rgba(on ? COLORS.toggleOn : COLORS.toggleOff));
@@ -437,7 +439,7 @@ export async function createEditorSession({container, adapter, view, createCore}
             const info = infos.get(node.param);
             if (node.kind === 'toggle') {
                 // A press flips the toggle as one complete gesture.
-                const flipped = values.get(node.param) >= 0.5 ? 0 : 1;
+                const flipped = toggleFlipped(info, values.get(node.param));
                 if (!tracker.begin(event.pointerId, node.id, info, values.get(node.param), 0,
                     () => flipped)) {
                     return;

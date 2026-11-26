@@ -39,6 +39,7 @@ SCRIPT_FILES = (
     "verify_sdk_artifact.py",
 )
 SUPPORT_FILES = (
+    "cli/vellum_browser.py",
     "apps/minimal-scene/CMakeLists.txt",
     "apps/minimal-scene/main.cpp",
     "fixtures/design-ir/revision-a.source.json",

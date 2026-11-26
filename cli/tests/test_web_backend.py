@@ -30,6 +30,7 @@ validate_component_source = BACKEND_MODULE["validate_component_source"]
 build_component_modules = BACKEND_MODULE["build_component_modules"]
 contains_sdk_install_path = BACKEND_MODULE["contains_sdk_install_path"]
 lower_dom_snapshot = BACKEND_MODULE["lower_dom_snapshot"]
+_pair_canvas_captures = BACKEND_MODULE["_pair_canvas_captures"]
 lower_computed_material = BACKEND_MODULE["_lower_computed_material"]
 computed_gradient = BACKEND_MODULE["_computed_gradient"]
 CAPTURE_STYLE_NAMES = BACKEND_MODULE["CAPTURE_STYLE_NAMES"]
@@ -244,6 +245,52 @@ class ChromeDiscoveryTests(unittest.TestCase):
 
 
 class BrowserCaptureLoweringTests(unittest.TestCase):
+    CANVAS_PNG = base64.b64encode(
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+    ).decode("ascii")
+
+    @staticmethod
+    def canvas_snapshot() -> dict:
+        # document > html > canvas > "fallback" text
+        return {
+            "strings": ["#document", "HTML", "CANVAS", "#text", "fallback"],
+            "documents": [{
+                "nodes": {
+                    "nodeType": [9, 1, 1, 3], "nodeName": [0, 1, 2, 3],
+                    "nodeValue": [-1, -1, -1, 4], "parentIndex": [-1, 0, 1, 2],
+                    "attributes": [[], [], [], []],
+                },
+                "layout": {"nodeIndex": [0, 1, 2, 3], "styles": [[], [], [], []],
+                           "bounds": [[0, 0, 100, 100], [0, 0, 100, 100],
+                                      [10, 20, 40, 30], [10, 20, 40, 10]]},
+            }],
+        }
+
+    def test_canvas_capture_becomes_a_hash_named_image_without_fallback_children(self) -> None:
+        snapshot = self.canvas_snapshot()
+        root, assets, _evidence = lower_dom_snapshot(
+            snapshot, settled_snapshot=snapshot, screenshot={},
+            canvas_captures={2: {"mimeType": "image/png", "data": self.CANVAS_PNG}},
+        )
+        canvas = root["children"][0]["children"][0]
+        self.assertEqual(canvas["kind"], "image")
+        self.assertEqual(canvas["properties"]["image"],
+                         {"source": assets[0]["contentHash"], "fit": "fill"})
+        self.assertEqual(canvas["properties"]["assetRefs"], [assets[0]["uri"]])
+        self.assertEqual(canvas["children"], [])
+        control_root, _control_assets, _ = lower_dom_snapshot(
+            snapshot, settled_snapshot=snapshot, screenshot={},
+        )
+        control = control_root["children"][0]["children"][0]
+        self.assertEqual(control["kind"], "view")
+        self.assertEqual([child["text"] for child in control["children"]], ["fallback"])
+
+    def test_canvas_pairing_skips_unreadable_canvases_and_ambiguous_counts(self) -> None:
+        capture = {"mimeType": "image/png", "data": self.CANVAS_PNG}
+        self.assertEqual(_pair_canvas_captures([4, 9], [None, capture]), {9: capture})
+        self.assertEqual(_pair_canvas_captures([4, 9], [capture]), {})
+
     def test_dom_snapshot_treats_absent_node_value_as_empty(self) -> None:
         snapshot = {
             "strings": ["#document", "HTML"],

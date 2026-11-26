@@ -32,6 +32,22 @@ export function clampToParameter(info, value) {
     return result;
 }
 
+// Whether a toggle's value reads as on: at or above the midpoint of the
+// parameter's declared range (0 to 1 when the range is not declared).
+export function toggleIsOn(info, value) {
+    const minimum = Number.isFinite(info.minValue) ? info.minValue : 0;
+    const maximum = Number.isFinite(info.maxValue) ? info.maxValue : 1;
+    return value >= (minimum + maximum) / 2;
+}
+
+// The declared endpoint a press moves a toggle to: the minimum when it is on,
+// the maximum when it is off.
+export function toggleFlipped(info, value) {
+    const minimum = Number.isFinite(info.minValue) ? info.minValue : 0;
+    const maximum = Number.isFinite(info.maxValue) ? info.maxValue : 1;
+    return toggleIsOn(info, value) ? minimum : maximum;
+}
+
 // The value a drag reaches after moving `deltaY` CSS pixels from its start.
 // Moving up raises the value.
 export function dragValue(info, startValue, deltaY) {
