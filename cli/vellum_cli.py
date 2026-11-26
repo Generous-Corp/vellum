@@ -1627,8 +1627,44 @@ def forwarded_arguments(args: argparse.Namespace) -> list[str]:
     return forwarded
 
 
+DESIGN_DEBUG_NAME = "vellum-design-debug.exe" if os.name == "nt" else "vellum-design-debug"
+
+
+def design_debug_path() -> Path | None:
+    """The native design-debug runner: $VELLUM_DESIGN_DEBUG, else the installed SDK's."""
+    explicit = os.environ.get("VELLUM_DESIGN_DEBUG")
+    if explicit:
+        path = Path(explicit).expanduser()
+        return path if path.is_file() else None
+    sdk_root = os.environ.get("VELLUM_SDK_ROOT")
+    if not sdk_root:
+        return None
+    path = Path(sdk_root).expanduser() / "sdk" / "bin" / DESIGN_DEBUG_NAME
+    return path if path.is_file() else None
+
+
+def design_debug_command(arguments: list[str], *, json_output: bool) -> int:
+    """Run `vellum design-debug` in the native runner with its own arguments.
+
+    The runner prints its own artifact paths and writes its report JSON, so its
+    output is the result. A missing runner reports capability_unavailable.
+    """
+    tool = design_debug_path()
+    if tool is None:
+        emit(result(
+            "design-debug", ok=False, status="capability_unavailable",
+            message="This SDK does not provide 'design-debug'.",
+        ), json_output=json_output)
+        return EXIT_UNAVAILABLE
+    return subprocess.run([str(tool), *arguments], check=False).returncode
+
+
 def main(argv: Iterable[str] | None = None) -> int:
     raw = list(argv if argv is not None else sys.argv[1:])
+    if raw[:1] == ["design-debug"]:
+        return design_debug_command(raw[1:], json_output=False)
+    if raw[:2] == ["--json", "design-debug"]:
+        return design_debug_command(raw[2:], json_output=True)
     json_output = "--json" in raw
     if json_output:
         raw.remove("--json")

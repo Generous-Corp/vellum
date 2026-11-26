@@ -105,6 +105,7 @@ stable outer schema.
 | `dev --target macos|web` | yes (supervisor) | watches, builds, and drives a target reload adapter; see [Development loop](dev.md) |
 | `import` / `reimport` | no | implemented by the installed `@vellum/design-ir` backend |
 | `design check` / `design diff` | no | deterministically regenerate the active source and authored overlay without writing; `check` fails on generated drift and `diff` reports it |
+| `design-debug --prompt TEXT --script FILE [--response-file FILE]` | no | macOS: runs the installed `vellum-design-debug` (or `$VELLUM_DESIGN_DEBUG`) with its arguments unchanged. It loads the design-chat script into a headless widget bridge, applies a recorded response (or runs the `--ai-cli` / `VELLUM_AI_CLI` template), and writes before/after/diff PNGs plus `latest-report.json`. A missing runner reports `capability_unavailable` (exit 4). |
 | `build` / `run` | no | macOS builds/launches a real `.app`; web builds a static app and reports its local serve command; finite headless runs are available |
 | `test` | no | macOS executes bounded native scenarios; web executes the shared scenario contract in Chrome |
 | `capture` | no | macOS captures PNGs and composes bounded capture matrices/montages; web runs a bounded interaction plan in Chrome and writes the settled page as a PNG |
