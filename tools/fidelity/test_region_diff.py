@@ -628,6 +628,17 @@ class TestInkCoverage(unittest.TestCase):
         cov = regions_mod.ink_coverage(_toolbar(True, band_level=9), _toolbar(True, band_level=4))
         self.assertEqual(cov["largest_uncovered_px"], 400 * 4)
 
+    def test_uncovered_components_do_not_wrap_between_image_edges(self) -> None:
+        # The top and bottom pixels are separate components in a 2x2 image.
+        # A flood fill that omits the y bound connects them through Python's
+        # negative indexing and reports one component of four pixels.
+        ref = FakeImage([(0, 0, 0), (255, 255, 255),
+                         (0, 0, 0), (0, 0, 0),
+                         (0, 0, 0), (255, 255, 255)], size=(2, 3))
+        cand = FakeImage([(0, 0, 0)] * 6, size=(2, 3))
+        cov = regions_mod.ink_coverage(ref, cand)
+        self.assertEqual(cov["largest_uncovered_px"], 1)
+
     def test_blank_candidate_fails_the_coverage_floor(self) -> None:
         blank = Image(400, 60, [(0, 0, 0)] * (400 * 60), "RGB")
         result = regions_mod.region_score(_toolbar(True), blank, dict(FULL, threshold=0.0, coverage_floor=0.5))

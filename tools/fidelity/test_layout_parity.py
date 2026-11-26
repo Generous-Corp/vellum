@@ -387,6 +387,34 @@ class TestCli(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertIn("no usable reference rectangles", result.stderr)
 
+    def test_malformed_capture_inputs_are_usage_errors_without_tracebacks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = pathlib.Path(tmp)
+            fx = CaptureFixture(td, dom=PANEL_DOM, lowered=PANEL_LOWERED,
+                                views=panel_views())
+            (fx.ir).write_text("{")
+            bad_ir = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
+            self.assertEqual(bad_ir.returncode, 2)
+            self.assertIn("cannot read DesignIR", bad_ir.stderr)
+            (td / "envelope").mkdir()
+            fx = CaptureFixture(td / "envelope", dom=PANEL_DOM, lowered=PANEL_LOWERED,
+                                views=panel_views())
+            (fx.capture / "capture.json").write_text("{")
+            bad_envelope = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
+            self.assertEqual(bad_envelope.returncode, 2)
+            self.assertIn("cannot read capture envelope", bad_envelope.stderr)
+            (td / "snapshot").mkdir()
+            fx = CaptureFixture(td / "snapshot", dom=PANEL_DOM, lowered=PANEL_LOWERED,
+                                views=panel_views())
+            envelope = json.loads((fx.capture / "capture.json").read_text())
+            envelope["documents"][0].pop("snapshot_sha256")
+            (fx.capture / "capture.json").write_text(json.dumps(envelope))
+            (fx.capture / "dom-snapshot.json").write_text("{")
+            bad_snapshot = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
+            self.assertEqual(bad_snapshot.returncode, 2)
+            self.assertIn("cannot read DOM snapshot", bad_snapshot.stderr)
+            self.assertNotIn("Traceback", bad_snapshot.stderr)
+
     def test_json_report_is_written_and_is_not_capped_by_max_findings(self):
         with tempfile.TemporaryDirectory() as tmp:
             td = pathlib.Path(tmp)

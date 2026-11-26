@@ -290,6 +290,10 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if not math.isfinite(args.threshold) or not 0.0 <= args.threshold <= 1.0:
+        print("error: --threshold must be a finite number in 0..1", file=sys.stderr)
+        return 2
+
     for p in (args.reference, args.candidate):
         if not p.exists():
             print(f"error: file not found: {p}", file=sys.stderr)
