@@ -205,6 +205,8 @@ std::string registry_key(const void* owner, std::string_view id) {
     return std::to_string(value) + ":" + std::string(id);
 }
 
+}  // namespace
+
 std::string_view accessibility_backend_name() noexcept {
 #if TARGET_OS_OSX
     return "macos-ax";
@@ -266,6 +268,8 @@ void register_text_accessibility_node(const TextAccessibilityNode& node) {
     [nsKey release];
 #endif
 }
+
+namespace {
 
 void unregister_nodes(const void* owner, std::string_view id, bool owner_only) {
     auto& r = registry();
