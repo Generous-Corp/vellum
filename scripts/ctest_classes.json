@@ -20,7 +20,6 @@
       "vellum.capture-stats",
       "vellum.ci-runner-policy",
       "vellum.cli-illustrator-to-svg",
-      "vellum.cli-ui-lint",
       "vellum.clock-and-source",
       "vellum.component-registry-bounds",
       "vellum.damage",
