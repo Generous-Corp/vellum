@@ -218,7 +218,11 @@ def default_ir_path(capture_dir: pathlib.Path) -> pathlib.Path:
 def _capture_path(capture_dir: pathlib.Path, relative: str, what: str) -> pathlib.Path:
     """Resolve a capture-owned path without allowing it to escape the capture."""
     root = capture_dir.resolve()
-    path = (root / relative).resolve()
+    relative_path = pathlib.Path(relative)
+    if relative_path.is_absolute():
+        raise CaptureInputError(
+            f"{what} {relative!r} escapes capture directory {capture_dir}")
+    path = (root / relative_path).resolve()
     try:
         path.relative_to(root)
     except ValueError:
