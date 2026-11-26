@@ -1423,6 +1423,11 @@ def validate_baked_emit(args: argparse.Namespace) -> None:
             f"--emit {args.emit} supports --source-type {', '.join(BAKED_EMIT_SOURCES)}.{hint}",
             status="invalid_arguments", exit_code=EXIT_USAGE,
         )
+    if Path(args.source).suffix.casefold() == ".fig":
+        raise CliFailure(
+            f"--emit {args.emit} does not read local .fig files yet; pass a Figma JSON or plugin export.",
+            status="invalid_arguments", exit_code=EXIT_USAGE,
+        )
     inapplicable = [
         flag for flag, used in (
             ("--file", bool(args.file)), ("--frame", args.frame is not None),

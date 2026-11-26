@@ -134,6 +134,15 @@ class BakedEmitTests(unittest.TestCase):
         self.assertEqual(code, 2, payload)
         self.assertIn("--source-type design-ir", payload["message"])
 
+    def test_local_fig_is_refused_before_the_emitter_runs(self) -> None:
+        fig = self.out / "panel.fig"
+        fig.write_bytes(b"synthetic")
+        code, payload = vellum("--source-type", "figma", str(fig), "--mode", "baked", "--emit", "cpp",
+                               "--out", str(self.out / "ui.cpp"))
+        self.assertEqual(code, 2, payload)
+        self.assertIn(".fig", payload["message"])
+        self.assertFalse((self.out / "ui.cpp").exists())
+
     def test_missing_emitter_is_unavailable(self) -> None:
         code, payload = vellum("--source-type", "design-ir", str(IR_FIXTURE), "--mode", "baked",
                                "--emit", "cpp", "--out", str(self.out / "ui.cpp"),
