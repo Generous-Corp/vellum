@@ -851,7 +851,7 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             normalize_static_archive(archive)
         if skia_archive and target == "darwin-arm64":
             normalize_macho_dylibs(install_tree, commit, target)
-            for name in ("vellum-app-host", "vellum-source-adapter"):
+            for name in ("vellum-app-host", "vellum-source-adapter", "vellum-design-emit"):
                 normalize_macho_executable(install_tree / "bin" / name, commit, target)
         if skia_archive:
             images = installed_runtime_images(install_tree, required=True)

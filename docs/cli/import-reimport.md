@@ -82,6 +82,31 @@ The v0 route uses the static JSX parser for host elements, inline styles and
 supported Tailwind layout classes. It preserves class strings and reports
 partial capture for dynamic JSX. Pass a local TSX export.
 
+### Baked C++ and SwiftUI views
+
+`--mode baked --emit cpp` or `--emit swiftui` writes an ownable view artifact
+instead of importing into a project, so it needs no `--project`:
+
+```sh
+vellum import --source-type figma-plugin ./panel.json --mode baked --emit cpp --out src/panel_ui.cpp
+vellum import pencil ./panel.pen --mode baked --emit swiftui --out Sources/Panel.swift
+vellum import --source-type design-ir ./panel.ir.json --mode baked --emit cpp --out generated/
+```
+
+- **C++** writes `<name>.cpp`, `<name>.hpp` and `<name>.bindings.json`. A
+  directory or extensionless `--out` gets `imported_ui.cpp`; a header path names
+  the header. Absolute asset paths are copied into `assets/` beside the source.
+- **SwiftUI** writes `<Name>.swift`, `<Name>Theme.swift` and
+  `<Name>.bindings.json`. The default is `ImportedPulpView.swift`.
+- Sources are `design-ir`, `figma`, `figma-plugin`, `pencil` and `v0`. A
+  DESIGN.md file is a token spec and is refused with exit 2. For JSX, import with
+  `--mode baked --emit ir-json` first and emit that file as `design-ir`.
+- `--emit cpp|swiftui` without `--mode baked` exits 2.
+- Fidelity losses are reported as diagnostics and in `data.losses`.
+
+The installed SDK runs `sdk/bin/vellum-design-emit`; `VELLUM_DESIGN_EMIT`
+overrides it. Without it the command exits 4 (`capability_unavailable`).
+
 Import one source per project. Pencil produces a retained tree and a token
 file. DESIGN.md produces tokens and parser diagnostics without generating a
 screen. A reference to an unknown token stops the import before project files
