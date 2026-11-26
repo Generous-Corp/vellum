@@ -137,6 +137,7 @@
       "vellum.service-bridge",
       "vellum.skia-dawn-platform-selection",
       "vellum.source-adapter-detect",
+      "vellum.source-contracts",
       "vellum.swift-host-proof-prefix",
       "vellum.swift-host-proof-unit",
       "vellum.text-layout",
