@@ -27,6 +27,7 @@
       "vellum.dawn-bootstrap-source-audit",
       "vellum.dawn-provider-bootstrap",
       "vellum.dawn-provider-topology",
+      "vellum.design-ab",
       "vellum.design-debug-contracts",
       "vellum.design-pipeline",
       "vellum.design-tool-verbatim-move",
