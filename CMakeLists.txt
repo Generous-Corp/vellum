@@ -576,6 +576,9 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}"
             cli/tests/test_illustrator_cli.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.fidelity-layout-parity
+        COMMAND "${Python3_EXECUTABLE}" tools/fidelity/test_layout_parity.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.fidelity-montage
         COMMAND "${Python3_EXECUTABLE}" tools/fidelity/test_montage.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

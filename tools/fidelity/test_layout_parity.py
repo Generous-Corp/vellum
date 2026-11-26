@@ -1,0 +1,669 @@
+#!/usr/bin/env python3
+"""Tests for tools/fidelity/layout_parity.py.
+
+The tool's value is not "it computes a subtraction"; it is that a real layout
+bug produces ONE readable finding that names the node to look at. So the tests
+concentrate on the two behaviors that deliver that, and which a naive
+per-node diff gets wrong:
+
+* **parent-relative attribution**: a misplaced container drags every descendant
+  with it. Reporting all of them buries the one node that broke, so a node's
+  delta has its parent's subtracted out and only the origin of the error is
+  reported.
+* **clustering**: one dropped alignment moves every child of one frame. The
+  group collapses to a single finding naming the parent, and the shared-offset
+  case (the CENTER/MAX signature) is called out by name.
+
+Plus a PASS control. A checker that can only ever report failure is
+indistinguishable from a broken one, so "it caught the bug" means nothing
+without proving it stays silent on a good import.
+
+Pure stdlib apart from the sibling reference scorer, with nothing to skip for.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import json
+import pathlib
+import subprocess
+import sys
+import tempfile
+import unittest
+
+TOOL = pathlib.Path(__file__).resolve().parent / "layout_parity.py"
+
+_spec = importlib.util.spec_from_file_location("layout_parity", TOOL)
+layout_parity = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(layout_parity)
+
+
+def geometry(*nodes: dict) -> dict:
+    """A design-side document. Each node: (id, parent, x, y, w, h[, name])."""
+    return {"units": "design-px", "nodes": list(nodes)}
+
+
+def node(node_id: str, parent_id, x: float, y: float,
+         w: float = 10, h: float = 10, name: str | None = None) -> dict:
+    return {"node_id": node_id, "parent_id": parent_id,
+            "name": name or f"node-{node_id}", "type": "FRAME",
+            "x": x, "y": y, "width": w, "height": h}
+
+
+def view(node_id: str, x: float, y: float, w: float = 10, h: float = 10) -> dict:
+    return {"anchor_id": f"figma-plugin:{node_id}", "node_id": node_id,
+            "type": "View", "visible": True,
+            "x": x, "y": y, "width": w, "height": h}
+
+
+def layout(*views: dict) -> dict:
+    return {"units": "design-px", "views": list(views)}
+
+
+class ParityTestCase(unittest.TestCase):
+    def _paths(self, geom: dict, lay: dict) -> tuple[pathlib.Path, pathlib.Path]:
+        """Write a geometry/layout pair to disk and return their paths.
+
+        The temp dir is anchored to the TestCase so it outlives this call:
+        compare() reads the files itself.
+        """
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        gp = pathlib.Path(td.name) / "g.json"
+        lp = pathlib.Path(td.name) / "l.json"
+        gp.write_text(json.dumps(geom))
+        lp.write_text(json.dumps(lay))
+        return gp, lp
+
+    def compare(self, geom: dict, lay: dict, tol: float = 2.0) -> dict:
+        return layout_parity.compare(*self._paths(geom, lay), tol)
+
+
+class TestPassControl(ParityTestCase):
+    """Prove the tool can report success before trusting it to report failure."""
+
+    def test_matching_layout_reports_no_findings(self):
+        geom = geometry(node("0:1", None, 0, 0, 100, 100),
+                        node("0:2", "0:1", 10, 10),
+                        node("0:3", "0:1", 40, 10))
+        lay = layout(view("0:1", 0, 0, 100, 100), view("0:2", 10, 10), view("0:3", 40, 10))
+        report = self.compare(geom, lay)
+        self.assertEqual(report["findings"], [])
+        self.assertEqual(report["dropped"], [])
+        self.assertEqual(report["extra"], [])
+        self.assertEqual(report["matched"], 3)
+        self.assertIn("PASS", layout_parity.render_report(report, 25))
+
+    def test_sub_tolerance_rounding_is_not_a_finding(self):
+        # styleFor rounds via Math.round and Yoga snaps to the pixel grid; a 1px
+        # disagreement is arithmetic. A tool that flags it cries wolf and gets
+        # ignored, which is the failure mode that matters here.
+        geom = geometry(node("0:1", None, 0, 0, 100, 100), node("0:2", "0:1", 10.4, 10.4))
+        lay = layout(view("0:1", 0, 0, 100, 100), view("0:2", 11, 11))
+        self.assertEqual(self.compare(geom, lay)["findings"], [])
+
+
+class TestClustering(ParityTestCase):
+    def test_shared_offset_collapses_to_one_finding_naming_the_parent(self):
+        # The CENTER/MAX signature: the parent is placed correctly, and dropping
+        # its alignment moves every child by the SAME amount. Eight findings
+        # would bury it; one naming the parent is the whole point.
+        geom = geometry(
+            node("0:1", None, 0, 0, 500, 100, name="Frame"),
+            node("0:2", "0:1", 214, 10, name="MiniSeqLane"),
+            *[node(f"0:{10 + i}", "0:2", 214 + i * 20, 10, name=f"step{i}") for i in range(8)],
+        )
+        lay = layout(
+            view("0:1", 0, 0, 500, 100), view("0:2", 214, 10),
+            *[view(f"0:{10 + i}", i * 20, 10) for i in range(8)],
+        )
+        report = self.compare(geom, lay)
+        self.assertEqual(len(report["findings"]), 1, "eight children, one finding")
+        finding = report["findings"][0]
+        self.assertEqual(finding["kind"], "cluster")
+        self.assertEqual(finding["parent_id"], "0:2")
+        self.assertTrue(finding["shared_offset"])
+        self.assertEqual(finding["child_count"], 8)
+        self.assertIn("MiniSeqLane", finding["message"])
+        self.assertIn("dx=-214", finding["message"])
+        self.assertIn("alignment/padding dropped", finding["message"])
+
+    def test_divergent_deltas_cluster_but_are_not_called_a_shared_offset(self):
+        # The dropped-flex signature: children pile at the parent's origin, each
+        # off by however far it should have flowed. Still one parent to blame,
+        # but calling this a shared offset would name the wrong cause.
+        geom = geometry(
+            node("0:1", None, 0, 0, 500, 100, name="Root"),
+            node("0:2", "0:1", 0, 0, name="Transport"),
+            node("0:3", "0:2", 0, 0), node("0:4", "0:2", 38, 0), node("0:5", "0:2", 76, 0),
+        )
+        lay = layout(view("0:1", 0, 0, 500, 100), view("0:2", 0, 0),
+                     view("0:3", 0, 0), view("0:4", 0, 0), view("0:5", 0, 0))
+        report = self.compare(geom, lay)
+        self.assertEqual(len(report["findings"]), 1)
+        finding = report["findings"][0]
+        self.assertEqual(finding["kind"], "cluster")
+        self.assertFalse(finding["shared_offset"])
+        self.assertIn("Transport", finding["message"])
+        self.assertIn("layout contract", finding["message"])
+        # The per-child deltas stay available; the cluster summarises, it does
+        # not discard the evidence.
+        self.assertEqual(sorted(c["dx"] for c in finding["children"]), [-76, -38])
+
+    def test_a_lone_offender_is_reported_as_itself_not_as_its_parent(self):
+        # Clustering a single child under a parent that placed every other child
+        # correctly would point at the wrong node.
+        geom = geometry(node("0:1", None, 0, 0, 500, 100, name="Root"),
+                        node("0:2", "0:1", 10, 10, name="ok"),
+                        node("0:3", "0:1", 40, 10, name="broken"))
+        lay = layout(view("0:1", 0, 0, 500, 100), view("0:2", 10, 10), view("0:3", 90, 10))
+        report = self.compare(geom, lay)
+        self.assertEqual(len(report["findings"]), 1)
+        self.assertEqual(report["findings"][0]["kind"], "node")
+        self.assertEqual(report["findings"][0]["node_id"], "0:3")
+        self.assertIn("broken", report["findings"][0]["message"])
+
+    def test_findings_are_ordered_worst_first(self):
+        # Separate parents, so each offender stays its own finding; two
+        # offenders under ONE parent would (correctly) cluster into one.
+        geom = geometry(node("0:1", None, 0, 0, 500, 500, name="Root"),
+                        node("0:2", "0:1", 0, 0, 200, 200, name="boxA"),
+                        node("0:3", "0:1", 0, 200, 200, 200, name="boxB"),
+                        node("0:4", "0:2", 0, 0, name="small"),
+                        node("0:5", "0:3", 0, 200, name="huge"))
+        lay = layout(view("0:1", 0, 0, 500, 500),
+                     view("0:2", 0, 0, 200, 200), view("0:3", 0, 200, 200, 200),
+                     view("0:4", 5, 0), view("0:5", 200, 200))
+        report = self.compare(geom, lay)
+        self.assertEqual([f["node_id"] for f in report["findings"]], ["0:5", "0:4"])
+
+
+class TestParentRelativeAttribution(ParityTestCase):
+    def test_a_shifted_container_reports_once_not_once_per_descendant(self):
+        # A panel 214px off drags its 50 children with it. Each child is placed
+        # perfectly WITHIN the panel, so the panel is the only bug; and a report
+        # with 51 lines in it is a report nobody reads.
+        geom = geometry(node("0:1", None, 0, 0, 800, 400, name="Root"),
+                        node("0:2", "0:1", 300, 0, name="Panel"),
+                        *[node(f"1:{i}", "0:2", 300 + i, 0) for i in range(50)])
+        lay = layout(view("0:1", 0, 0, 800, 400), view("0:2", 86, 0),
+                     *[view(f"1:{i}", 86 + i, 0) for i in range(50)])
+        report = self.compare(geom, lay)
+        self.assertEqual(len(report["findings"]), 1, "one bug, one finding")
+        self.assertEqual(report["findings"][0]["node_id"], "0:2")
+        self.assertEqual(report["findings"][0]["dx"], -214)
+
+    def test_a_child_misplaced_inside_a_shifted_parent_is_still_reported(self):
+        # The counterpart bound: subtracting the parent's delta must not swallow
+        # a genuine error of the child's own.
+        geom = geometry(node("0:1", None, 0, 0, 800, 400, name="Root"),
+                        node("0:2", "0:1", 300, 0, name="Panel"),
+                        node("0:3", "0:2", 300, 0, name="Inner"))
+        lay = layout(view("0:1", 0, 0, 800, 400), view("0:2", 86, 0), view("0:3", 120, 0))
+        report = self.compare(geom, lay)
+        by_id = {f["node_id"]: f for f in report["findings"]}
+        self.assertEqual(sorted(by_id), ["0:2", "0:3"])
+        self.assertEqual(by_id["0:2"]["dx"], -214, "the panel owns its own shift")
+        self.assertEqual(by_id["0:3"]["dx"], 34, "the child owns only the remainder")
+
+    def test_a_size_delta_is_never_parent_relative(self):
+        # A parent being the wrong size does not make its child the wrong size;
+        # inheriting the delta here would hide real size bugs.
+        geom = geometry(node("0:1", None, 0, 0, 100, 100, name="Root"),
+                        node("0:2", "0:1", 0, 0, 50, 50, name="Child"))
+        lay = layout(view("0:1", 0, 0, 60, 100), view("0:2", 0, 0, 50, 50))
+        report = self.compare(geom, lay)
+        self.assertEqual(len(report["findings"]), 1)
+        self.assertEqual(report["findings"][0]["node_id"], "0:1")
+        self.assertEqual(report["findings"][0]["dw"], -40)
+
+
+class TestGateFloor(ParityTestCase):
+    """`--gate-px`: what BLOCKS, as distinct from what is worth reporting.
+
+    The rejected alternative was gating on finding KIND; clusters block,
+    individuals advise. It separates nothing, and both failure directions are
+    pinned below so nobody re-proposes it: a clean import HAS clusters, and its
+    single worst error was a lone node. Kind and magnitude are different axes.
+    """
+
+    def test_drift_below_the_floor_reports_but_does_not_gate(self):
+        geom = geometry(node("0:1", None, 0, 0, 500, 100, name="Root"),
+                        node("0:2", "0:1", 10, 10, name="drifted"))
+        lay = layout(view("0:1", 0, 0, 500, 100), view("0:2", 17, 10))
+        report = self.compare(geom, lay)  # 7px
+        gated = layout_parity.compare(*self._paths(geom, lay), 2.0, 16.0)
+        self.assertEqual(len(report["findings"]), 1)
+        self.assertFalse(layout_parity.report_fails(gated))
+        self.assertEqual(len(gated["findings"]), 1, "still reported, just not gating")
+        self.assertIn("ADVISORY", layout_parity.render_report(gated, 25))
+
+    def test_displacement_above_the_floor_gates(self):
+        geom = geometry(node("0:1", None, 0, 0, 500, 100, name="Root"),
+                        node("0:2", "0:1", 10, 10, name="broken"))
+        lay = layout(view("0:1", 0, 0, 500, 100), view("0:2", 60, 10))
+        gated = layout_parity.compare(*self._paths(geom, lay), 2.0, 16.0)
+        self.assertTrue(layout_parity.report_fails(gated))
+
+    def test_a_lone_node_far_out_of_place_still_gates(self):
+        # The false NEGATIVE that sank kind-based gating: on the real design the
+        # single worst error was a lone node 112px out. "Clusters gate,
+        # individuals advise" waves a misplaced panel straight through.
+        geom = geometry(node("0:1", None, 0, 0, 800, 400, name="Root"),
+                        node("0:2", "0:1", 462, 0, name="Bg PAnel"))
+        lay = layout(view("0:1", 0, 0, 800, 400), view("0:2", 350, 0))
+        gated = layout_parity.compare(*self._paths(geom, lay), 2.0, 16.0)
+        self.assertEqual(gated["findings"][0]["kind"], "node")
+        self.assertTrue(layout_parity.report_fails(gated), "112px is a bug at any kind")
+
+    def test_a_cluster_of_small_drift_does_not_gate(self):
+        # The false POSITIVE: sibling knobs drifting a few px cluster by nature,
+        # so "has a cluster" would fail a clean import forever.
+        geom = geometry(node("0:1", None, 0, 0, 500, 100, name="Root"),
+                        node("0:2", "0:1", 0, 0, name="knob row"),
+                        node("0:3", "0:2", 10, 0), node("0:4", "0:2", 50, 0))
+        lay = layout(view("0:1", 0, 0, 500, 100), view("0:2", 0, 0),
+                     view("0:3", 6, 0), view("0:4", 43, 0))
+        gated = layout_parity.compare(*self._paths(geom, lay), 2.0, 16.0)
+        self.assertEqual(gated["findings"][0]["kind"], "cluster")
+        self.assertFalse(layout_parity.report_fails(gated), "7px drift is not a bug")
+
+    def test_dropped_nodes_gate_regardless_of_the_floor(self):
+        # Structural completeness has no magnitude to compare, so no floor
+        # applies: a node the render never produced is wrong at any setting.
+        geom = geometry(node("0:1", None, 0, 0, 100, 100), node("0:2", "0:1", 10, 10))
+        lay = layout(view("0:1", 0, 0, 100, 100))
+        gated = layout_parity.compare(*self._paths(geom, lay), 2.0, 10_000.0)
+        self.assertTrue(layout_parity.report_fails(gated))
+
+    def test_the_default_floor_gates_everything_above_tolerance(self):
+        # Interactive behavior must not change: a bare run is still strict.
+        geom = geometry(node("0:1", None, 0, 0, 500, 100), node("0:2", "0:1", 10, 10))
+        lay = layout(view("0:1", 0, 0, 500, 100), view("0:2", 17, 10))
+        self.assertTrue(layout_parity.report_fails(self.compare(geom, lay)))
+
+
+class TestStructuralCompleteness(ParityTestCase):
+    def test_a_node_the_render_never_produced_is_reported_as_dropped(self):
+        geom = geometry(node("0:1", None, 0, 0, 100, 100),
+                        node("0:2", "0:1", 10, 10, name="vanished"))
+        lay = layout(view("0:1", 0, 0, 100, 100))
+        report = self.compare(geom, lay)
+        self.assertEqual(len(report["dropped"]), 1)
+        self.assertIn("vanished", report["dropped"][0]["label"])
+        self.assertIn("DROPPED", layout_parity.render_report(report, 25))
+
+    def test_a_view_with_no_counterpart_in_the_design_is_reported_as_extra(self):
+        geom = geometry(node("0:1", None, 0, 0, 100, 100))
+        lay = layout(view("0:1", 0, 0, 100, 100), view("0:9", 0, 0))
+        report = self.compare(geom, lay)
+        self.assertEqual(report["extra"], ["0:9"])
+
+    def test_a_synthetic_mask_scope_view_is_not_counted_as_extra(self):
+        # The mask lowering wraps masked siblings in a clip frame the design
+        # never declared (node_id `<key>/mask-scope`). Reporting it as EXTRA
+        # made every FX file carry ~16 fixed false positives, which is a signal
+        # nobody reads. It is tallied separately instead; visible, not gating.
+        geom = geometry(node("0:1", None, 0, 0, 100, 100))
+        lay = layout(view("0:1", 0, 0, 100, 100), view("0:4/mask-scope", 0, 0))
+        report = self.compare(geom, lay)
+        self.assertEqual(report["extra"], [])
+        self.assertEqual(report["synthetic_extra"], ["0:4/mask-scope"])
+        self.assertFalse(layout_parity.report_fails(report))
+        rendered = layout_parity.render_report(report, 25)
+        self.assertIn("1 synthetic", rendered)
+        self.assertIn("PASS", rendered)
+
+    def test_the_synthetic_whitelist_is_a_suffix_match_not_a_substring_grep(self):
+        # A real design node whose id merely CONTAINS the marker must still be
+        # EXTRA; over-whitelisting would let the render invent nodes for free.
+        geom = geometry(node("0:1", None, 0, 0, 100, 100))
+        lay = layout(view("0:1", 0, 0, 100, 100),
+                     view("0:4/mask-scope/0:9", 0, 0))
+        report = self.compare(geom, lay)
+        self.assertEqual(report["extra"], ["0:4/mask-scope/0:9"])
+        self.assertEqual(report["synthetic_extra"], [])
+        self.assertTrue(layout_parity.report_fails(report))
+
+    def test_an_unanchored_view_is_ignored_rather_than_counted_as_extra(self):
+        # Codegen emits scaffolding the design never named (wrappers, spacers).
+        # It carries no node_id, so it joins to nothing and must not be noise.
+        geom = geometry(node("0:1", None, 0, 0, 100, 100))
+        lay = {"views": [view("0:1", 0, 0, 100, 100),
+                         {"anchor_id": "", "type": "View", "x": 0, "y": 0,
+                          "width": 1, "height": 1}]}
+        report = self.compare(geom, lay)
+        self.assertEqual(report["extra"], [])
+        self.assertEqual(report["findings"], [])
+
+
+class TestCli(unittest.TestCase):
+    """The exit code IS the gate, so it gets tested through the real binary."""
+
+    def run_tool(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, str(TOOL), *args],
+                              capture_output=True, text=True)
+
+    def write_pair(self, td: pathlib.Path, geom: dict, lay: dict) -> pathlib.Path:
+        # Named the way --dump-layout names them, so the sibling default is
+        # exercised rather than assumed.
+        (td / "layout.geometry.json").write_text(json.dumps(geom))
+        dump = td / "layout.json"
+        dump.write_text(json.dumps(lay))
+        return dump
+
+    def test_exit_zero_on_parity_and_one_on_findings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = pathlib.Path(tmp)
+            good = geometry(node("0:1", None, 0, 0, 100, 100), node("0:2", "0:1", 10, 10))
+            dump = self.write_pair(td, good, layout(view("0:1", 0, 0, 100, 100),
+                                                    view("0:2", 10, 10)))
+            ok = self.run_tool(str(dump))
+            self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
+            self.assertIn("PASS", ok.stdout)
+
+            self.write_pair(td, good, layout(view("0:1", 0, 0, 100, 100), view("0:2", 99, 10)))
+            bad = self.run_tool(str(dump))
+            self.assertEqual(bad.returncode, 1)
+            self.assertIn("MISPLACED", bad.stdout)
+
+    def test_a_missing_geometry_sidecar_is_a_usage_error_with_a_hint(self):
+        # Exit 2, not 0: a parity run that silently checks nothing is worse than
+        # no parity run, because it reports success.
+        with tempfile.TemporaryDirectory() as tmp:
+            dump = pathlib.Path(tmp) / "layout.json"
+            dump.write_text(json.dumps(layout(view("0:1", 0, 0))))
+            result = self.run_tool(str(dump))
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("--dump-layout", result.stderr)
+
+    def test_json_report_is_written_and_is_not_capped_by_max_findings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = pathlib.Path(tmp)
+            geom = geometry(node("0:1", None, 0, 0, 500, 500),
+                            *[node(f"0:{i}", "0:1", i * 10, 0, name=f"n{i}") for i in range(2, 8)])
+            dump = self.write_pair(td, geom, layout(
+                view("0:1", 0, 0, 500, 500),
+                *[view(f"0:{i}", i * 10 + i * 7, 0) for i in range(2, 8)]))
+            out = td / "report.json"
+            result = self.run_tool(str(dump), "--max-findings", "1", "--json", str(out))
+            self.assertEqual(result.returncode, 1)
+            report = json.loads(out.read_text())
+            self.assertGreater(len(report["findings"]), 0)
+            self.assertEqual(report["tolerance_px"], 2.0)
+
+
+
+# --- HTML imports: the browser capture is the design side ------------------
+
+REFERENCE_PNG = b"\x89PNG reference bytes"
+
+
+class CaptureFixture:
+    """A minimal HTML import on disk: capture dir, its IR, an observer layout.
+
+    ``dom`` lists (backend_id, parent_dom_index, box-or-None) in DOM order; the
+    IR lowers ``lowered`` (anchor, backend_id-or-None) FLAT under its root, the
+    way a native panel is lowered, so any hierarchy the tool uses must come
+    from the DOM.
+    """
+
+    def __init__(self, td: pathlib.Path, dom, lowered, views,
+                 frame_origin=(0.0, 0.0), ir_png=REFERENCE_PNG):
+        self.capture = td / "panel.pulp-browser-capture"
+        self.capture.mkdir()
+        self.ir = td / "panel.pulp.json"
+        self.layout = td / "observed.json"
+        nodes = {"backendNodeId": [b for b, _, _ in dom],
+                 "parentIndex": [p for _, p, _ in dom]}
+        boxes = [(i, box) for i, (_, _, box) in enumerate(dom) if box is not None]
+        snapshot = json.dumps({"documents": [{
+            "nodes": nodes,
+            "layout": {"nodeIndex": [i for i, _ in boxes], "bounds": [b for _, b in boxes]},
+        }]}).encode()
+        (self.capture / "dom-snapshot.json").write_bytes(snapshot)
+        (self.capture / "browser-static.png").write_bytes(REFERENCE_PNG)
+        (self.capture / "capture.json").write_text(json.dumps({
+            "schema": "pulp-browser-capture-v1",
+            "documents": [{"snapshot_asset": "dom-snapshot.json",
+                           "snapshot_sha256": hashlib.sha256(snapshot).hexdigest()}],
+        }), encoding="utf-8")
+        children = []
+        for anchor, backend in lowered:
+            attrs = {} if backend is None else {"backend_node_id": str(backend)}
+            children.append({"type": "frame", "name": anchor.rsplit("/", 1)[-1],
+                             "stable_anchor_id": anchor, "attributes": attrs})
+        self.ir.write_text(json.dumps({
+            "root": {"type": "frame", "stable_anchor_id": "browser:root",
+                     "attributes": {"browser_authored_frame_x": str(frame_origin[0]),
+                                    "browser_authored_frame_y": str(frame_origin[1])},
+                     "children": children},
+            "assetManifest": {"assets": [{
+                "original_uri": "pulp-capture:///browser-static.png",
+                "content_hash": hashlib.sha256(ir_png).hexdigest()}]},
+        }), encoding="utf-8")
+        self.layout.write_text(json.dumps({
+            "schema_version": "visual-layout-snapshot-v1",
+            "nodes": [{"id": i, "rect": {"x": x, "y": y, "w": w, "h": h}}
+                      for i, x, y, w, h in views]}), encoding="utf-8")
+
+    def compare(self) -> dict:
+        return layout_parity.compare_capture(self.capture, self.ir, self.layout)
+
+
+# A panel: html > body > card > (label, icon). Backend ids are deliberately not
+# in DOM order, so a join by position cannot pass.
+PANEL_DOM = [
+    (40, -1, [0, 0, 400, 300]),      # 0 html
+    (41, 0, [0, 0, 400, 300]),       # 1 body
+    (7, 1, [20, 30, 200, 100]),      # 2 card
+    (93, 2, [30, 40, 80, 20]),       # 3 label
+    (12, 2, [150, 40, 24, 24]),      # 4 icon
+]
+PANEL_LOWERED = [("html", 40), ("html/body", 41), ("card", 7), ("card/label", 93),
+                 ("card/icon", 12), ("canvas/layer", None)]
+
+
+def panel_views(dx_card=0.0, dx_label=0.0, dx_children=0.0, origin=(0.0, 0.0)):
+    ox, oy = origin
+    return [("browser:root", 0, 0, 400, 300), ("html", -ox, -oy, 400, 300),
+            ("html/body", -ox, -oy, 400, 300),
+            ("card", 20 + dx_card - ox, 30 - oy, 200, 100),
+            ("card/label", 30 + dx_card + dx_children + dx_label - ox, 40 - oy, 80, 20),
+            ("card/icon", 150 + dx_card + dx_children - ox, 40 - oy, 24, 24),
+            ("canvas/layer", 0, 0, 10, 10)]
+
+
+class CaptureTestCase(unittest.TestCase):
+    def fixture(self, **kwargs) -> CaptureFixture:
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        kwargs.setdefault("dom", PANEL_DOM)
+        kwargs.setdefault("lowered", PANEL_LOWERED)
+        kwargs.setdefault("views", panel_views())
+        return CaptureFixture(pathlib.Path(td.name), **kwargs)
+
+
+class TestCaptureJoin(CaptureTestCase):
+    def test_matching_capture_passes_and_scaffolding_is_synthetic(self):
+        report = self.fixture().compare()
+        self.assertEqual(report["matched"], 5)
+        self.assertEqual(report["findings"], [])
+        self.assertEqual(report["extra"], [])
+        self.assertEqual(report["synthetic_extra"], ["browser:root", "canvas/layer"])
+        self.assertFalse(layout_parity.report_fails(report))
+        self.assertIn("pairing verified on 1 capture file", layout_parity.render_report(report, 25))
+
+    def test_one_misplaced_leaf_is_exactly_one_finding(self):
+        report = self.fixture(views=panel_views(dx_label=3)).compare()
+        self.assertEqual(len(report["findings"]), 1)
+        finding = report["findings"][0]
+        self.assertEqual(finding["node_id"], "card/label")
+        self.assertEqual((finding["dx"], finding["dy"]), (3.0, 0.0))
+        self.assertEqual(finding["parent_id"], "card")
+
+    def test_a_moved_container_is_reported_once_through_the_dom_hierarchy(self):
+        # The IR is flat, so only the DOM knows label and icon sit inside card.
+        # Taking parents from the IR would report all three nodes.
+        report = self.fixture(views=panel_views(dx_card=9)).compare()
+        self.assertEqual([f["node_id"] for f in report["findings"]], ["card"])
+
+    def test_the_parent_is_the_nearest_lowered_dom_ancestor(self):
+        # A wrapper the import did not lower sits between card and its label.
+        # The label's parent must resolve through it to card, or a moved card
+        # is reported twice.
+        dom = PANEL_DOM[:3] + [(55, 2, [20, 30, 200, 100]), (93, 3, [30, 40, 80, 20]),
+                               (12, 2, [150, 40, 24, 24])]
+        report = self.fixture(dom=dom, views=panel_views(dx_card=9)).compare()
+        self.assertEqual([f["node_id"] for f in report["findings"]], ["card"])
+
+    def test_children_off_inside_a_correct_parent_cluster_under_it(self):
+        report = self.fixture(views=panel_views(dx_children=6)).compare()
+        self.assertEqual(len(report["findings"]), 1)
+        self.assertEqual(report["findings"][0]["kind"], "cluster")
+        self.assertEqual(report["findings"][0]["parent_id"], "card")
+        self.assertTrue(report["findings"][0]["shared_offset"])
+
+    def test_the_authored_frame_origin_is_subtracted(self):
+        # The import frames the panel at its authored surface; a DOM box at that
+        # surface's corner is a view at (0, 0).
+        origin = (100.0, 50.0)
+        report = self.fixture(frame_origin=origin, views=panel_views(origin=origin)).compare()
+        self.assertEqual(report["findings"], [])
+
+    def test_a_rendered_node_chromium_laid_out_no_box_for_is_extra(self):
+        dom = PANEL_DOM + [(77, 2, None)]
+        lowered = PANEL_LOWERED + [("card/hidden", 77)]
+        views = panel_views() + [("card/hidden", 0, 0, 5, 5)]
+        report = self.fixture(dom=dom, lowered=lowered, views=views).compare()
+        self.assertEqual(report["extra"], ["card/hidden"])
+        self.assertEqual(report["source"]["unlaid_out"], ["card/hidden"])
+        self.assertTrue(layout_parity.report_fails(report))
+
+
+class TestChromeBoxListing(CaptureTestCase):
+    """The per-node record against Chromium's getBoundingClientRect boxes."""
+
+    def test_clean_fixture_lists_every_node_within_tolerance(self):
+        report = self.fixture().compare()
+        self.assertEqual([b["node_id"] for b in report["boxes"]],
+                         sorted(["html", "html/body", "card", "card/label", "card/icon"]))
+        self.assertTrue(all(b["within_tolerance"] for b in report["boxes"]))
+        self.assertEqual(report["findings"], [])
+        self.assertFalse(layout_parity.report_fails(report))
+
+    def test_planted_move_names_node_and_pixel_delta(self):
+        report = self.fixture(views=panel_views(dx_label=7)).compare()
+        by_id = {b["node_id"]: b for b in report["boxes"]}
+        label = by_id["card/label"]
+        self.assertEqual(label["reference"], {"x": 30.0, "y": 40.0, "w": 80.0, "h": 20.0})
+        self.assertEqual(label["native"], {"x": 37.0, "y": 40.0, "w": 80.0, "h": 20.0})
+        self.assertEqual(label["delta"]["dx"], 7.0)
+        self.assertFalse(label["within_tolerance"])
+        self.assertEqual([b["node_id"] for b in report["boxes"] if not b["within_tolerance"]],
+                         ["card/label"])
+        self.assertTrue(layout_parity.report_fails(report))
+
+    def test_planted_resize_is_caught(self):
+        views = [v if v[0] != "card/icon" else (v[0], v[1], v[2], v[3] + 6, v[4])
+                 for v in panel_views()]
+        report = self.fixture(views=views).compare()
+        icon = {b["node_id"]: b for b in report["boxes"]}["card/icon"]
+        self.assertEqual(icon["delta"]["dw"], 6.0)
+        self.assertTrue(layout_parity.report_fails(report))
+
+    def test_sub_tolerance_drift_stays_silent(self):
+        # Negative control for the tolerance: a 1px rounding difference passes.
+        report = self.fixture(views=panel_views(dx_label=1)).compare()
+        self.assertFalse(layout_parity.report_fails(report))
+
+    def test_a_shift_the_pixel_score_cannot_see_is_caught_by_boxes(self):
+        # The pixel comparison is a histogram plus mean distance. A 4px move of
+        # a small element changes a handful of pixels: the score stays above
+        # its pass threshold while the box check fails with the node id.
+        spec = importlib.util.spec_from_file_location(
+            "reference_diff", TOOL.parent / "reference_diff.py")
+        dar = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(dar)
+        Image = dar.Image
+
+        def render(label_x: int):
+            width, height = 400, 300
+            pixels = [(24, 24, 28)] * (width * height)
+
+            def rectangle(x0, y0, x1, y1, fill):
+                for y in range(y0, y1 + 1):
+                    for x in range(x0, x1 + 1):
+                        pixels[y * width + x] = fill
+
+            rectangle(20, 30, 220, 130, (60, 60, 70))
+            rectangle(label_x, 40, label_x + 80, 60, (200, 200, 200))
+            return Image(width, height, pixels, "RGB")
+
+        self.assertEqual(dar.similarity_score(render(30), render(30)), 1.0)
+        pixel_score = dar.similarity_score(render(30), render(34))
+        self.assertGreater(pixel_score, 0.95, "pixel score should not notice 4px")
+
+        report = self.fixture(views=panel_views(dx_label=4)).compare()
+        self.assertTrue(layout_parity.report_fails(report))
+        self.assertEqual(report["findings"][0]["node_id"], "card/label")
+
+
+class TestCaptureCli(CaptureTestCase):
+    def run_tool(self, *args) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, str(TOOL), *map(str, args)],
+                              capture_output=True, text=True, encoding="utf-8")
+
+    def test_exit_codes_and_the_default_ir_sibling(self):
+        good = self.fixture()
+        ok = self.run_tool("--capture", good.capture, "--observer-layout", good.layout)
+        self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
+        self.assertIn("PASS", ok.stdout)
+        bad = self.fixture(views=panel_views(dx_label=5))
+        failed = self.run_tool("--capture", bad.capture, "--observer-layout", bad.layout)
+        self.assertEqual(failed.returncode, 1)
+        self.assertIn("card/label", failed.stdout)
+
+    def test_an_ir_from_another_capture_session_is_refused(self):
+        # Backend ids are small sequential integers, so a foreign capture of the
+        # same page joins cleanly and yields a believable report; only the
+        # recorded content hashes tell the sessions apart.
+        fx = self.fixture(ir_png=b"another session's reference")
+        result = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("different capture session", result.stderr)
+
+    def test_an_edited_dom_snapshot_is_refused(self):
+        fx = self.fixture()
+        snapshot = fx.capture / "dom-snapshot.json"
+        snapshot.write_bytes(snapshot.read_bytes() + b" ")
+        result = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("snapshot_sha256", result.stderr)
+
+    def test_an_ir_with_nothing_to_verify_pairing_against_is_refused(self):
+        fx = self.fixture()
+        (fx.capture / "browser-static.png").unlink()
+        result = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("cannot prove", result.stderr)
+
+    def test_a_non_numeric_backend_id_is_a_usage_error(self):
+        lowered = PANEL_LOWERED + [("card/odd", "not-a-number")]
+        fx = self.fixture(lowered=lowered)
+        result = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("non-numeric backend_node_id", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_modes_do_not_mix(self):
+        fx = self.fixture()
+        self.assertEqual(self.run_tool("--capture", fx.capture).returncode, 2)
+        mixed = self.run_tool(fx.layout, "--capture", fx.capture,
+                              "--observer-layout", fx.layout)
+        self.assertEqual(mixed.returncode, 2)
+        self.assertEqual(self.run_tool(fx.layout, "--ir", fx.ir).returncode, 2)
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
