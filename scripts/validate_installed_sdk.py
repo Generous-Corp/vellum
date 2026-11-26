@@ -210,6 +210,55 @@ def validate_installed_stitch_import(prefix: Path, root: Path, env: dict[str, st
         raise ValidationError("Changed Stitch HTML did not advance the import lock")
 
 
+BAKED_EMIT_JOURNEYS = (
+    ("design-ir", "fixtures/emitter-conformance/keyed-list-18.ir.json", "cpp", "ui.cpp",
+     ("ui.cpp", "ui.hpp", "ui.bindings.json")),
+    ("figma-plugin", "fixtures/emitter-conformance/fidelity-scene-no-display.pulp.json", "swiftui",
+     "Mixer.swift", ("Mixer.swift", "MixerTheme.swift", "Mixer.bindings.json")),
+)
+
+
+def validate_installed_baked_emit(prefix: Path, root: Path, env: dict[str, str]) -> None:
+    """Emit baked C++ and SwiftUI through the installed CLI, with no emitter override.
+
+    The installed `vellum` must find the SDK's own vellum-design-emit. When
+    VELLUM_DESIGN_EMIT_REFERENCE names an emitter built from the same tree, the
+    checkout CLI runs it on the same inputs and every written file must match
+    the installed result byte for byte.
+    """
+    installed_env = {key: value for key, value in env.items() if key != "VELLUM_DESIGN_EMIT"}
+    reference_emitter = os.environ.get("VELLUM_DESIGN_EMIT_REFERENCE")
+    for source_type, fixture, emit, name, files in BAKED_EMIT_JOURNEYS:
+        def emit_with(label: str, argv: list[str], run_env: dict[str, str]) -> Path:
+            out = root / "baked-emit" / label / source_type
+            result = subprocess.run(
+                [*argv, "--json", "import", "--source-type", source_type, str(SUPPORT_ROOT / fixture),
+                 "--mode", "baked", "--emit", emit, "--out", str(out / name)],
+                cwd=root, env=run_env, text=True, capture_output=True, check=False,
+            )
+            payload = json.loads(result.stdout)
+            if result.returncode != 0 or payload.get("status") != "emitted":
+                raise ValidationError(f"{label} baked {emit} emit of {source_type} failed: {result.stdout}{result.stderr}")
+            return out
+
+        installed = emit_with("installed", [str(prefix / "bin/vellum")], installed_env)
+        for written in files:
+            path = installed / written
+            if not path.is_file() or not path.read_text(encoding="utf-8").strip():
+                raise ValidationError(f"The installed baked {emit} emit of {source_type} did not write {written}")
+            if str(root) in path.read_text(encoding="utf-8"):
+                raise ValidationError(f"{written} embeds the build directory of the installed emit")
+        if reference_emitter:
+            reference = emit_with(
+                "reference", [sys.executable, str(REPO / "cli/vellum_cli.py")],
+                {**installed_env, "VELLUM_DESIGN_EMIT": reference_emitter},
+            )
+            for written in files:
+                if (installed / written).read_bytes() != (reference / written).read_bytes():
+                    raise ValidationError(
+                        f"{written} from the installed {source_type} {emit} emit differs from the in-tree result")
+
+
 def installed_command(prefix: Path, env: dict[str, str]):
     """Return a runner that checks one installed CLI result's status and exit code."""
 
@@ -1150,6 +1199,7 @@ def validate(
             validate_installed_source_imports(prefix, root, journey_env)
             validate_installed_frame_import(prefix, root, journey_env, "v0")
             validate_installed_stitch_import(prefix, root, journey_env)
+            validate_installed_baked_emit(prefix, root, journey_env)
             for name, arguments in {
                 "build": ["build"],
                 "run": ["run", "--self-test", "--no-build"],
