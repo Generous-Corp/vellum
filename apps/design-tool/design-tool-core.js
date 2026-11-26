@@ -464,3 +464,4 @@ function refreshPreviewLayoutSection() {
     setTextColor("spinner-text", previewThemeColor("text.secondary", APP_TEXT_DIM));
     setPreviewActiveTab(activePreviewTab, true);
 }
+

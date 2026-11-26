@@ -593,7 +593,7 @@ if(VELLUM_BUILD_TESTS)
                 "$<TARGET_FILE:vellum-source-adapter>"
             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     endif()
-if(TARGET vellum-design-ab)
+    if(TARGET vellum-design-ab)
         add_test(NAME vellum.design-ab
             COMMAND "${Python3_EXECUTABLE}"
                 authoring/design_pipeline/tests/test_design_ab.py
