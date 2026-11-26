@@ -19,6 +19,16 @@ target_include_directories(vellum-design-pipeline
         "${VELLUM_MIRROR_CHOC_ROOT}")
 target_link_libraries(vellum-design-pipeline PUBLIC Vellum::MirrorDesign_import)
 
+# The design-import source detector: matches a file or directory against the
+# fingerprints in a detection manifest. It links nothing from the view layer.
+add_library(vellum-import-detect STATIC src/import_detect.cpp)
+target_include_directories(vellum-import-detect PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+target_compile_features(vellum-import-detect PUBLIC cxx_std_20)
+set_target_properties(vellum-import-detect PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
+
 add_executable(vellum-source-adapter src/source_adapter_main.cpp)
 target_compile_features(vellum-source-adapter PRIVATE cxx_std_20)
 target_link_libraries(vellum-source-adapter PRIVATE Vellum::DesignPipeline)
@@ -40,6 +50,13 @@ if(VELLUM_BUILD_TESTS)
         MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
         BUILD_RPATH "$<TARGET_FILE_DIR:vellum-skia-dawn-provider>")
     add_test(NAME vellum.design-pipeline COMMAND vellum-design-pipeline-test)
+
+    add_executable(vellum-import-detect-unit-test tests/import_detect_unit_test.cpp)
+    target_link_libraries(vellum-import-detect-unit-test PRIVATE vellum-import-detect)
+    set_target_properties(vellum-import-detect-unit-test PROPERTIES
+        OSX_ARCHITECTURES arm64
+        MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
+    add_test(NAME vellum.import-detect-unit COMMAND vellum-import-detect-unit-test)
 
     # Keep one DesignIR fixture set across the native, bridge-JavaScript,
     # baked-C++, and SwiftUI lowerings.
