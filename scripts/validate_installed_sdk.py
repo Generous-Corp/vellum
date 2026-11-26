@@ -210,6 +210,106 @@ def validate_installed_stitch_import(prefix: Path, root: Path, env: dict[str, st
         raise ValidationError("Changed Stitch HTML did not advance the import lock")
 
 
+def installed_command(prefix: Path, env: dict[str, str]):
+    """Return a runner that checks one installed CLI result's status and exit code."""
+
+    def command(cwd: Path, *args: str, status: str) -> dict:
+        result = subprocess.run(
+            [str(prefix / "bin/vellum"), *args, "--json"], cwd=cwd, env=env,
+            text=True, capture_output=True, check=False,
+        )
+        payload = json.loads(result.stdout)
+        if payload.get("status") != status or (result.returncode == 0) != payload.get("ok"):
+            raise ValidationError(f"Expected {status}, got {result.stdout}{result.stderr}")
+        return payload
+
+    return command
+
+
+def validate_installed_design_ir_import(prefix: Path, root: Path, env: dict[str, str]) -> None:
+    """Import canonical DesignIR that the installed SDK itself produced, then reimport it."""
+    command = installed_command(prefix, env)
+    producer = root / "design-ir-producer"
+    command(root, "create", "design ir producer", "--directory", str(producer), status="created")
+    command(producer, "import", str(SUPPORT_ROOT / "fixtures/design-ir/revision-a.source.json"),
+            "--source-type", "figma", status="imported")
+    canonical = json.loads(
+        (producer / "design/ir/sources/main.designir.json").read_text(encoding="utf-8")
+    )
+    if canonical.get("$schema") != "https://vellum.dev/schemas/design-ir/v1":
+        raise ValidationError("The installed SDK did not write canonical DesignIR v1")
+    source = root / "canonical.designir.json"
+    source.write_text(json.dumps(canonical), encoding="utf-8")
+
+    refused = root / "design-ir-refused"
+    command(root, "create", "design ir refused", "--directory", str(refused), status="created")
+    command(refused, "import", str(source), "--source-type", "design-ir", "--as", "other",
+            status="source_key_mismatch")
+    if (refused / "design/import.lock.json").exists():
+        raise ValidationError("A mismatched DesignIR source key created an import lock")
+
+    project = root / "design-ir-project"
+    command(root, "create", "design ir sample", "--directory", str(project), status="created")
+    command(project, "import", str(source), "--source-type", "design-ir", status="imported")
+    lock = project / "design/import.lock.json"
+    materialized = json.loads(
+        (project / "ui/generated/main.materialized.json").read_text(encoding="utf-8")
+    )
+    if materialized["root"]["name"] != canonical["root"]["name"]:
+        raise ValidationError("Canonical DesignIR import did not keep the root node")
+    command(project, "design", "check", status="design_clean")
+    command(project, "reimport", "--source", str(source), status="reimport_unchanged")
+    before = lock.read_bytes()
+    changed = json.loads(json.dumps(canonical))
+    changed["root"]["name"] = "Renamed Root"
+    changed["source"]["revision"] = f"{canonical['source']['revision']}-renamed"
+    source.write_text(json.dumps(changed), encoding="utf-8")
+    command(project, "reimport", "--source", str(source), status="reimported")
+    command(project, "design", "check", status="design_clean")
+    if lock.read_bytes() == before:
+        raise ValidationError("Changed canonical DesignIR did not advance the import lock")
+
+
+def validate_installed_asset_imports(prefix: Path, root: Path, env: dict[str, str]) -> None:
+    """Emit a standalone JSX import both ways and validate a preconverted SVG sidecar."""
+    command = installed_command(prefix, env)
+    jsx = root / "panel.jsx"
+    jsx.write_text("export default function Panel() { return <div>Sample</div>; }\n", encoding="utf-8")
+    live = root / "panel.live.js"
+    baked = root / "panel.baked.json"
+    command(root, "import", "jsx", str(jsx), "--mode", "live", "--emit", "js",
+            "--out", str(live), status="imported")
+    command(root, "import", "jsx", str(jsx), "--mode", "baked", "--emit", "ir-json",
+            "--out", str(baked), status="imported")
+    if not live.is_file() or not live.read_text(encoding="utf-8").strip():
+        raise ValidationError("JSX live import did not write JavaScript")
+    json.loads(baked.read_text(encoding="utf-8"))
+    command(root, "import", "jsx", str(jsx), "--validate-only", status="asset_import_refused")
+
+    svg = root / "panel.svg"
+    svg.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="80">'
+        '<rect id="mix" x="10" y="10" width="20" height="20"/></svg>', encoding="utf-8",
+    )
+    controls = root / "controls.json"
+
+    def sidecar(digest: str) -> None:
+        controls.write_text(json.dumps({
+            "provenance": {"source": "synthetic"},
+            "svg_sha256": digest,
+            "canvas": {"width": 100, "height": 80},
+            "elements": [{"selector": "#mix", "kind": "knob",
+                          "geometry": {"cx": 20, "cy": 20, "hit_radius": 10}}],
+        }), encoding="utf-8")
+
+    sidecar(hashlib.sha256(svg.read_bytes()).hexdigest())
+    command(root, "import", "preconverted-svg", str(svg), "--validate-only",
+            "--manifest", str(controls), status="validated")
+    sidecar(hashlib.sha256(b"different").hexdigest())
+    command(root, "import", "preconverted-svg", str(svg), "--validate-only",
+            "--manifest", str(controls), status="asset_import_refused")
+
+
 def validate_installed_frame_import(prefix: Path, root: Path, env: dict[str, str], lane: str) -> None:
     def command(project: Path, *args: str, status: str) -> None:
         result = subprocess.run(
@@ -1029,6 +1129,8 @@ def validate(
 
         for lane in ("figma-plugin", "figma-states"):
             validate_installed_frame_import(prefix, root, journey_env, lane)
+        validate_installed_design_ir_import(prefix, root, journey_env)
+        validate_installed_asset_imports(prefix, root, journey_env)
 
         native_enabled = all(
             verification["claims"]["targets"]["macos"]["commands"][name]
