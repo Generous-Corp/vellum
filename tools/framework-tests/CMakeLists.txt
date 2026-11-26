@@ -337,7 +337,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
         SOURCES web_view_test.mm
         UNITS Vellum::MirrorView_core)
     target_link_libraries(vellum-framework-web-view-test PRIVATE
-        "-framework CoreFoundation" "-framework CoreGraphics" "-framework ImageIO")
+        "-framework AppKit" "-framework CoreFoundation")
     set_tests_properties(vellum.framework.web-view PROPERTIES TIMEOUT 120)
 else()
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES

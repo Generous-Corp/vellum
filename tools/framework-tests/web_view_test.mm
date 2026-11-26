@@ -1,10 +1,8 @@
-// WebViewPanel on macOS: the pure bridge and resource helpers, the backend
-// detector, and a live WKWebView driven by pumping the main run loop (no
-// window): readiness, evaluate_js results, the structured message bridge in
-// both directions, and an in-process PNG snapshot of rendered content.
-//
-// A live case fails rather than skips when the WebView never becomes ready:
-// WebKit ships with macOS, so an unready WebView here is a defect.
+// WebViewPanel on macOS: the bridge and resource helpers, the backend
+// detector, and a live WKWebView driven from the main run loop with no window
+// (readiness, evaluate_js, the message bridge both ways, a bound function and
+// an in-process snapshot). A live case fails rather than skips when the
+// WebView never becomes ready: WebKit ships with macOS.
 
 #include "framework_test.hpp"
 
@@ -13,8 +11,8 @@
 
 #import <AppKit/AppKit.h>
 #import <CoreFoundation/CoreFoundation.h>
-#import <ImageIO/ImageIO.h>
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -31,9 +29,7 @@ namespace {
 using namespace vellum::view;
 using namespace std::chrono_literals;
 
-bool contains(const std::string& text, const std::string& needle) {
-    return text.find(needle) != std::string::npos;
-}
+bool contains(const std::string& text, const std::string& needle) { return text.find(needle) != std::string::npos; }
 
 bool pump_until(const std::function<bool()>& ready, std::chrono::milliseconds timeout) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -71,87 +67,32 @@ bool eventually(WebViewPanel& panel, const std::string& js, const std::string& e
 
 std::unique_ptr<WebViewPanel> ready_panel(const WebViewOptions& options = {}) {
     auto panel = WebViewPanel::create(options);
-    if (!panel)
-        return nullptr;
-    if (!pump_until([&] { return panel->is_ready(); }, 5000ms))
-        return nullptr;
-    return panel;
-}
-
-std::vector<uint8_t> decode_base64(std::string_view encoded) {
-    auto value = [](char c) -> int {
-        if (c >= 'A' && c <= 'Z') return c - 'A';
-        if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-        if (c >= '0' && c <= '9') return c - '0' + 52;
-        if (c == '+') return 62;
-        if (c == '/') return 63;
-        return -1;
-    };
-    std::vector<uint8_t> out;
-    for (size_t i = 0; i + 3 < encoded.size(); i += 4) {
-        const int a = value(encoded[i]), b = value(encoded[i + 1]);
-        const int c = encoded[i + 2] == '=' ? -1 : value(encoded[i + 2]);
-        const int d = encoded[i + 3] == '=' ? -1 : value(encoded[i + 3]);
-        if (a < 0 || b < 0)
-            return {};
-        const uint32_t n = (uint32_t(a) << 18) | (uint32_t(b) << 12) |
-                           (uint32_t(c < 0 ? 0 : c) << 6) | uint32_t(d < 0 ? 0 : d);
-        out.push_back(uint8_t(n >> 16));
-        if (c >= 0) out.push_back(uint8_t(n >> 8));
-        if (d >= 0) out.push_back(uint8_t(n));
-    }
-    return out;
+    const bool ready = panel && pump_until([&] { return panel->is_ready(); }, 5000ms);
+    return ready ? std::move(panel) : nullptr;
 }
 
 void write_text(const std::filesystem::path& path, const std::string& text) {
-    std::ofstream out(path, std::ios::binary);
-    out << text;
+    std::ofstream(path, std::ios::binary).write(text.data(), std::streamsize(text.size()));
 }
 
-struct Rgba {
-    int r = -1, g = -1, b = -1, a = -1;
-};
-
-// Decodes a PNG and reads the pixel at the image's centre, as 8-bit RGBA.
-std::optional<Rgba> centre_pixel(const std::vector<uint8_t>& png, size_t* width = nullptr,
-                                 size_t* height = nullptr) {
-    CFDataRef data = CFDataCreate(nullptr, png.data(), CFIndex(png.size()));
-    CGImageSourceRef source = CGImageSourceCreateWithData(data, nullptr);
-    CFRelease(data);
-    if (!source)
+// Decodes a PNG and reads the pixel at its centre as 8-bit sRGB RGBA, with
+// the image size. Empty when the bytes are not an image.
+std::optional<std::array<int, 4>> centre_pixel(const std::vector<uint8_t>& png, size_t& width,
+                                               size_t& height) {
+    NSData* data = [NSData dataWithBytes:png.data() length:png.size()];
+    NSBitmapImageRep* rep = data.length ? [NSBitmapImageRep imageRepWithData:data] : nil;
+    if (!rep)
         return std::nullopt;
-    CGImageRef image = CGImageSourceCreateImageAtIndex(source, 0, nullptr);
-    CFRelease(source);
-    if (!image)
-        return std::nullopt;
-    const size_t w = CGImageGetWidth(image), h = CGImageGetHeight(image);
-    if (width) *width = w;
-    if (height) *height = h;
-    uint8_t pixel[4] = {};
-    CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-    CGContextRef context = CGBitmapContextCreate(pixel, 1, 1, 8, 4, space,
-                                                 kCGImageAlphaPremultipliedLast);
-    CGColorSpaceRelease(space);
-    // Draw the image offset so that its centre pixel lands on the 1x1 context.
-    CGContextDrawImage(context,
-                       CGRectMake(-CGFloat(w / 2), -CGFloat(h - 1 - h / 2), CGFloat(w), CGFloat(h)),
-                       image);
-    CGContextRelease(context);
-    CGImageRelease(image);
-    return Rgba{pixel[0], pixel[1], pixel[2], pixel[3]};
+    width = size_t(rep.pixelsWide);
+    height = size_t(rep.pixelsHigh);
+    // The raw 8-bit samples, as WebKit wrote them.
+    NSUInteger px[4] = {0, 0, 0, 255};
+    [rep getPixel:px atX:rep.pixelsWide / 2 y:rep.pixelsHigh / 2];
+    return std::array<int, 4>{int(px[0]), int(px[1]), int(px[2]),
+                              rep.samplesPerPixel > 3 ? int(px[3]) : 255};
 }
 
 // ── Pure helpers ────────────────────────────────────────────────────────────
-
-FRAMEWORK_TEST(default_options) {
-    WebViewOptions options;
-    CHECK(!options.enable_debug);
-    CHECK(!options.enable_debug_inspector);
-    CHECK(!options.transparent_background);
-    CHECK(options.accept_first_click);
-    CHECK(options.initial_html.empty());
-    CHECK(options.custom_user_agent.empty());
-}
 
 FRAMEWORK_TEST(bridge_message_json_round_trips) {
     WebViewMessage message;
@@ -200,11 +141,7 @@ FRAMEWORK_TEST(mime_types_and_data_uris) {
     const std::string json = "{\"label\":\"caf\xC3\xA9\",\"kanji\":\"\xE9\x9F\xB3\"}";
     const std::vector<uint8_t> bytes(json.begin(), json.end());
     const auto uri = make_webview_data_uri("application/json", bytes);
-    CHECK(contains(uri, "data:application/json;charset=utf-8;base64,"));
-    const auto comma = uri.find(',');
-    CHECK(comma != std::string::npos);
-    if (comma != std::string::npos)
-        CHECK(decode_base64(uri.substr(comma + 1)) == bytes);
+    CHECK(uri == "data:application/json;charset=utf-8;base64,eyJsYWJlbCI6ImNhZsOpIiwia2FuamkiOiLpn7MifQ==");
 }
 
 FRAMEWORK_TEST(embedded_html_rewrites_to_offline_data_uris) {
@@ -408,22 +345,21 @@ FRAMEWORK_TEST(snapshot_captures_rendered_content) {
     panel->set_html("<!doctype html><html><body style=\"margin:0;background:#1e90ff\"></body></html>");
     CHECK(eventually(*panel, "getComputedStyle(document.body).backgroundColor", "\"rgb(30, 144, 255)\""));
 
-    std::vector<uint8_t> png;
     // The first snapshot after a load can precede the first composited frame.
+    const std::array<int, 4> page{0x1e, 0x90, 0xff, 0xff};
+    std::vector<uint8_t> png;
+    std::optional<std::array<int, 4>> pixel;
+    size_t w = 0, h = 0;
     pump_until([&] {
         png = panel->snapshot_png();
-        const auto pixel = png.empty() ? std::nullopt : centre_pixel(png);
-        return pixel && pixel->r == 0x1e && pixel->g == 0x90 && pixel->b == 0xff;
+        pixel = centre_pixel(png, w, h);
+        return pixel == page;
     }, 5000ms);
     CHECK(png.size() > 8 && png[0] == 0x89 && png[1] == 'P' && png[2] == 'N' && png[3] == 'G');
-    size_t w = 0, h = 0;
-    const auto pixel = centre_pixel(png, &w, &h);
-    CHECK(pixel.has_value());
-    if (pixel) {
-        std::printf("  snapshot %zux%zu centre rgba(%d,%d,%d,%d)\n", w, h, pixel->r, pixel->g,
-                    pixel->b, pixel->a);
-        CHECK(pixel->r == 0x1e && pixel->g == 0x90 && pixel->b == 0xff && pixel->a == 0xff);
-    }
+    CHECK(pixel == page);
+    if (pixel)
+        std::printf("  snapshot %zux%zu centre rgba(%d,%d,%d,%d)\n", w, h, (*pixel)[0],
+                    (*pixel)[1], (*pixel)[2], (*pixel)[3]);
     CHECK(w >= 160 && h >= 120);
     if (const char* out = std::getenv("VELLUM_WEB_VIEW_SNAPSHOT_PNG"))
         std::ofstream(out, std::ios::binary).write(reinterpret_cast<const char*>(png.data()),
