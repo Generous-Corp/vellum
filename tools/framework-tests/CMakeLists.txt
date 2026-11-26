@@ -105,6 +105,12 @@ vellum_add_framework_test(design-import-jsx-runtime
     SOURCES design_import_jsx_runtime_test.cpp
     UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import)
 
+vellum_add_framework_test(runtime-import-parsers
+    SOURCES runtime_import_parsers_test.cpp
+    UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import)
+target_compile_definitions(vellum-framework-runtime-import-parsers-test PRIVATE
+    VELLUM_REPO_ROOT="${PROJECT_SOURCE_DIR}")
+
 vellum_add_framework_test(param-model-binding
     SOURCES param_model_binding_test.cpp
     UNITS Vellum::MirrorView_core Vellum::Value)
