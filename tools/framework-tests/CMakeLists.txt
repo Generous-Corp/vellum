@@ -98,6 +98,9 @@ vellum_add_framework_test(native-materializer-part1
     SOURCES native_materializer_part1_test.cpp
     UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import Vellum::MirrorCanvas)
 
+vellum_add_framework_test(native-materializer-part2
+    SOURCES native_materializer_part2_test.cpp
+    UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import Vellum::MirrorCanvas)
 vellum_add_framework_test(design-import-jsx-runtime
     SOURCES design_import_jsx_runtime_test.cpp
     UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import)
@@ -349,9 +352,18 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     target_link_libraries(vellum-framework-web-view-test PRIVATE
         "-framework AppKit" "-framework CoreFoundation")
     set_tests_properties(vellum.framework.web-view PROPERTIES TIMEOUT 120)
+
+    # The plug-in view host parents a native child; never placed in a window.
+    vellum_add_framework_test(plugin-view-host-native-child
+        SOURCES plugin_view_host_native_child_test.mm
+        UNITS Vellum::MirrorView_core)
+    target_link_libraries(vellum-framework-plugin-view-host-native-child-test PRIVATE
+        "-framework AppKit")
+    set_tests_properties(vellum.framework.plugin-view-host-native-child PROPERTIES TIMEOUT 60)
 else()
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
-        main_thread_timer_test.mm native_dialog_delivery_test.cpp web_view_test.mm)
+        main_thread_timer_test.mm native_dialog_delivery_test.cpp
+        web_view_test.mm plugin_view_host_native_child_test.mm)
 endif()
 
 # iOS-only: compiled by tools/mirror/consumer/ios-auv3 against the iOS simulator
