@@ -523,6 +523,20 @@ def canonicalize_macho_temp_root(path: Path) -> None:
     path.write_bytes(data)
 
 
+# Executables every native SDK installs, and those a configuration may leave
+# out (vellum-design-debug needs the mirrored script unit, and its CMake skips
+# it without one).
+REQUIRED_NATIVE_EXECUTABLES = ("vellum-app-host", "vellum-source-adapter")
+OPTIONAL_NATIVE_EXECUTABLES = ("vellum-design-debug",)
+
+
+def executables_to_normalize(bin_dir: Path) -> list[Path]:
+    """The installed executables to normalize: every required one, and each optional one present."""
+    paths = [bin_dir / name for name in REQUIRED_NATIVE_EXECUTABLES]
+    paths += [bin_dir / name for name in OPTIONAL_NATIVE_EXECUTABLES if (bin_dir / name).is_file()]
+    return paths
+
+
 def normalize_macho_executable(path: Path, commit: str, target: str) -> None:
     """Give an installed executable a deterministic UUID and ad-hoc signature."""
 
@@ -851,8 +865,8 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             normalize_static_archive(archive)
         if skia_archive and target == "darwin-arm64":
             normalize_macho_dylibs(install_tree, commit, target)
-            for name in ("vellum-app-host", "vellum-source-adapter", "vellum-design-debug"):
-                normalize_macho_executable(install_tree / "bin" / name, commit, target)
+            for path in executables_to_normalize(install_tree / "bin"):
+                normalize_macho_executable(path, commit, target)
         if skia_archive:
             images = installed_runtime_images(install_tree, required=True)
             if not (
