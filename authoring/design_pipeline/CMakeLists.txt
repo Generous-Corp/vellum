@@ -21,9 +21,11 @@ target_link_libraries(vellum-design-pipeline PUBLIC Vellum::MirrorDesign_import)
 
 # The design-import source detector: matches a file or directory against the
 # fingerprints in a detection manifest. It links nothing from the view layer.
-add_library(vellum-import-detect STATIC src/import_detect.cpp)
+add_library(vellum-import-detect STATIC src/import_detect.cpp src/import_detect_report.cpp)
 target_include_directories(vellum-import-detect PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+# The detector reads JSON with CHOC, behind a strict whole-document wrapper.
+target_include_directories(vellum-import-detect PRIVATE "${VELLUM_MIRROR_CHOC_ROOT}")
 target_compile_features(vellum-import-detect PUBLIC cxx_std_20)
 set_target_properties(vellum-import-detect PROPERTIES
     OSX_ARCHITECTURES arm64
@@ -56,13 +58,24 @@ if(VELLUM_BUILD_TESTS)
 
     add_executable(vellum-import-detect-unit-test tests/import_detect_unit_test.cpp)
     target_link_libraries(vellum-import-detect-unit-test PRIVATE vellum-import-detect)
+    target_include_directories(vellum-import-detect-unit-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src" "${VELLUM_MIRROR_CHOC_ROOT}")
     set_target_properties(vellum-import-detect-unit-test PROPERTIES
         OSX_ARCHITECTURES arm64
         MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
     add_test(NAME vellum.import-detect-unit COMMAND vellum-import-detect-unit-test)
 
+    add_executable(vellum-import-detect-report-test tests/import_detect_report_test.cpp)
+    target_link_libraries(vellum-import-detect-report-test PRIVATE vellum-import-detect)
+    set_target_properties(vellum-import-detect-report-test PROPERTIES
+        OSX_ARCHITECTURES arm64
+        MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
+    add_test(NAME vellum.import-detect-report COMMAND vellum-import-detect-report-test)
+
     add_executable(vellum-import-detect-data-test tests/import_detect_data_test.cpp)
     target_link_libraries(vellum-import-detect-data-test PRIVATE vellum-import-detect)
+    target_include_directories(vellum-import-detect-data-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src" "${VELLUM_MIRROR_CHOC_ROOT}")
     target_compile_definitions(vellum-import-detect-data-test PRIVATE
         VELLUM_SOURCE_DETECTION_JSON="${PROJECT_SOURCE_DIR}/product/source-detection.json"
         VELLUM_SOURCE_DETECTION_FIXTURES="${PROJECT_SOURCE_DIR}/fixtures/source-detection")

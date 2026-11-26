@@ -4,8 +4,9 @@
 
 #include "import_detect_test_support.hpp"
 
-#include <vellum/authoring/detail/json_parser.hpp>
-#include <vellum/authoring/import_detect.hpp>
+#include <vellum/authoring/import_detect_report.hpp>
+
+#include "strict_json.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -37,10 +38,20 @@ fs::path fixtures_root() {
     return fs::path(VELLUM_SOURCE_DETECTION_FIXTURES);
 }
 
-vellum::authoring::json::JsonValue parse_expected(const fs::path& p) {
-    auto text = slurp(p);
-    vellum::authoring::json::JsonParser parser{text, 0};
-    return parser.parse();
+choc::value::Value parse_expected(const fs::path& p) {
+    auto document = vellum::authoring::strict_json::parse_document(slurp(p));
+    REQUIRE(document.has_value());
+    return *document;
+}
+
+std::string text_member(const choc::value::ValueView& v, const char* name) {
+    return v.isObject() && v.hasObjectMember(name) && v[name].isString()
+        ? std::string(v[name].getString()) : std::string();
+}
+
+int int_member(const choc::value::ValueView& v, const char* name) {
+    return v.isObject() && v.hasObjectMember(name) && v[name].isInt()
+        ? static_cast<int>(v[name].getInt64()) : 0;
 }
 
 }  // namespace
@@ -146,13 +157,12 @@ struct Expected {
 Expected load_expected(const fs::path& p) {
     Expected e;
     auto v = parse_expected(p);
-    if (v.type != vellum::authoring::json::JsonValue::Object) return e;
-    if (auto* s = v.get("source"); s) e.source = s->as_string();
-    if (auto* fv = v.get("format-version"); fv) e.format_version = fv->as_string();
-    if (auto* pv = v.get("parser-version"); pv) e.parser_version = pv->as_string();
-    if (auto* m = v.get("matched-clauses"); m) e.matched_clauses = m->as_int();
-    if (auto* t = v.get("total-clauses"); t) e.total_clauses = t->as_int();
-    if (auto* c = v.get("min-confidence-pct"); c) e.min_confidence_pct = c->as_int();
+    e.source = text_member(v, "source");
+    e.format_version = text_member(v, "format-version");
+    e.parser_version = text_member(v, "parser-version");
+    e.matched_clauses = int_member(v, "matched-clauses");
+    e.total_clauses = int_member(v, "total-clauses");
+    e.min_confidence_pct = int_member(v, "min-confidence-pct");
     return e;
 }
 
@@ -181,7 +191,9 @@ void run_fixture(const fs::path& fixture_dir,
             std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
-            if (entry.is_regular_file() && (ext == ".html" || ext == ".htm"))
+            // A JSON export (a Figma plug-in scene) is scanned like an HTML
+            // payload; json-key-equals clauses read the file's text.
+            if (entry.is_regular_file() && (ext == ".html" || ext == ".htm" || ext == ".json"))
                 html_payloads.push_back(entry.path());
         }
         std::sort(html_payloads.begin(), html_payloads.end());
@@ -241,5 +253,27 @@ TEST_CASE("import-detect fixtures match expected.json sidecars", "[import-detect
     CHECK(fixture_count >= 3);  // stitch + claude + _unknown
 }
 
+
+TEST_CASE("figma-plugin manifest clauses tell plug-in exports apart", "[import-detect]") {
+    auto manifest = det::parse_compat_json(slurp(locate_compat_json()));
+    REQUIRE(manifest.has_value());
+    auto scene = det::snapshot_input(fixtures_root() / "figma-plugin" / "2026.05" / "scene.pulp.json");
+    auto r = det::detect(*manifest, scene);
+    CHECK(r.source == "figma-plugin");
+    CHECK(r.matched_clauses == 2);
+    CHECK(r.matched_kinds == std::vector<std::string>{"json-key-equals"});
+
+    // The same scene from another adapter, or another format version, is
+    // rejected by the all-of gate rather than half-matched.
+    for (const auto& [from, to] : std::vector<std::pair<std::string, std::string>>{
+             {"\"adapter\": \"figma-plugin\"", "\"adapter\": \"pencil\""},
+             {"2026.05-figma-plugin-v1", "2025.01-figma-plugin-v0"}}) {
+        auto other = scene;
+        auto at = other.html_text.find(from);
+        REQUIRE(at != std::string::npos);
+        other.html_text.replace(at, from.size(), to);
+        CHECK(det::detect(*manifest, other).source.empty());
+    }
+}
 
 int main() { return import_detect_test::run_all(); }

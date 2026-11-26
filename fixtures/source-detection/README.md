@@ -9,6 +9,8 @@ synthetic and contains no design-tool data:
 - `stitch/2025.04/`: a Stitch directory export (`code.html`, `DESIGN.md`, and
   a text placeholder named `screen.png`, since only its name is checked).
 - `designmd/alpha/`: a DESIGN.md token specification.
+- `figma-plugin/2026.05/`: a Figma plug-in scene export, matched by its
+  `provenance.adapter` and `format_version` keys.
 
 They are copied from the Pulp detector's fixtures. The DESIGN.md here is the
 hand-authored one, not the upstream Google example.
