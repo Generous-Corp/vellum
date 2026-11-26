@@ -24,6 +24,8 @@ target_link_libraries(vellum-design-pipeline PUBLIC Vellum::MirrorDesign_import)
 add_library(vellum-import-detect STATIC src/import_detect.cpp)
 target_include_directories(vellum-import-detect PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+# The detector reads JSON with CHOC, behind a strict whole-document wrapper.
+target_include_directories(vellum-import-detect PRIVATE "${VELLUM_MIRROR_CHOC_ROOT}")
 target_compile_features(vellum-import-detect PUBLIC cxx_std_20)
 set_target_properties(vellum-import-detect PROPERTIES
     OSX_ARCHITECTURES arm64
@@ -53,6 +55,8 @@ if(VELLUM_BUILD_TESTS)
 
     add_executable(vellum-import-detect-unit-test tests/import_detect_unit_test.cpp)
     target_link_libraries(vellum-import-detect-unit-test PRIVATE vellum-import-detect)
+    target_include_directories(vellum-import-detect-unit-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src" "${VELLUM_MIRROR_CHOC_ROOT}")
     set_target_properties(vellum-import-detect-unit-test PROPERTIES
         OSX_ARCHITECTURES arm64
         MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
