@@ -6,11 +6,13 @@ sources:
     accepted_artifact: canonical Vellum DesignIR v1 JSON
     provider_access: none
     reimport: supported
+    journey: scripts/validate_installed_sdk.py::validate_installed_design_ir_import
   figma:
     channel: supported
     accepted_artifact: audio-free Pulp Figma plugin JSON or .pulp.zip export
     provider_access: none
     reimport: supported
+    journey: scripts/validate_installed_sdk.py::validate[figma]
     pinned_contract:
       format_version: 2026.05-figma-plugin-v1
       parser_version: 0.1.0
@@ -66,34 +68,79 @@ sources:
       - rejects audio-widget nodes and audio-specific binding fields
       - image and vector assets are preserved but not painted by the native host
       - unsupported properties and fields remain explicit diagnostics and extensions
+  figma-plugin:
+    channel: experimental
+    accepted_artifact: Pulp Figma plugin JSON, a repeated --file state sequence, or a --frame selection
+    provider_access: none
+    reimport: supported
+    journey: scripts/validate_installed_sdk.py::validate_installed_frame_import[figma-plugin]
+  fig:
+    channel: experimental
+    accepted_artifact: local Figma .fig file, with --outline, --page and --frame
+    provider_access: none
+    reimport: supported
+    journey: cli/tests/test_import_backend.py::test_fig_outline_select_by_name_and_reimport
+    limitations:
+      - zstd-compressed saves require Node.js 22.15 or newer
+  jsx:
+    channel: experimental
+    accepted_artifact: standalone JSX instrument file emitted as live JS or baked DesignIR JSON
+    provider_access: none
+    reimport: none
+    journey: scripts/validate_installed_sdk.py::validate_installed_asset_imports[jsx]
+  preconverted-svg:
+    channel: experimental
+    accepted_artifact: preconverted SVG plus a control-map sidecar, validated with --validate-only
+    provider_access: none
+    reimport: none
+    journey: scripts/validate_installed_sdk.py::validate_installed_asset_imports[preconverted-svg]
+  illustrator:
+    channel: unavailable
+    reason: "conversion needs a developer-supplied pdftocairo, and no journey runs a real converter; tests use a fake converter only"
   v0:
     channel: experimental
     accepted_artifact: local v0 TSX with host JSX and supported Tailwind layout classes
     provider_access: none
     reimport: supported
     requires: macOS native SDK
+    journey: scripts/validate_installed_sdk.py::validate_installed_frame_import[v0]
   pencil:
     channel: experimental
     accepted_artifact: Pencil or OpenPencil node-tree JSON or .pen
     provider_access: none
     reimport: supported
     requires: macOS native SDK
+    journey: scripts/validate_installed_sdk.py::validate_installed_source_imports[pencil]
+  stitch:
+    channel: experimental
+    accepted_artifact: recorded Stitch screen payload JSON or Stitch code.html export
+    provider_access: none
+    reimport: supported
+    requires: macOS native SDK
+    journey: scripts/validate_installed_sdk.py::validate_installed_stitch_import
+    limitations:
+      - an HTML export is reduced to visible text by a fallback parser and reports ir.fallback-used
+      - reached only through an explicit stitch source type, never inferred from .html
   designmd:
     channel: experimental
     accepted_artifact: Google DESIGN.md token specification
     provider_access: none
     reimport: supported
     requires: macOS native SDK
+    journey: scripts/validate_installed_sdk.py::validate_installed_source_imports[designmd]
   figma-rest:
     channel: unavailable
+    reason: Vellum does not call the Figma REST API
   figma-file:
     channel: unavailable
+    reason: "the Figma REST file endpoint is not called; a local .fig file is the fig source"
   claude-design:
     channel: unavailable
     preflight_contract: vellum.html-source-preflight.v1
     note: "The public import path now performs contained Chromium capture and DesignIR materialization; the route remains unavailable until a real browser plus same-run Skia/Dawn proof is recorded."
   react-project:
     channel: unavailable
+    reason: no React project importer exists
   html:
     channel: unavailable
     preflight_contract: vellum.html-source-preflight.v1
@@ -108,3 +155,5 @@ invariants:
   - experimental routes require an explicit source type and capability checks
   - unavailable routes are never advertised as working quick starts
   - every accepted source is normalized into versioned inspectable DesignIR
+  - every CLI import source has an entry here, and every supported or experimental entry names a journey
+  - an unavailable entry states a reason or a preflight contract
