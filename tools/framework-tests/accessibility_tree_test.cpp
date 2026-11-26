@@ -542,7 +542,7 @@ TEST_CASE("no exposed node announces a role with nothing to say",
 
 TEST_CASE("painted-row containers do not claim a container role",
           "[view][accessibility][roles]") {
-    // Deliberate: ListBox / TableListBox / TabPanel paint their rows and tabs —
+    // Deliberate: ListBox / TableListBox / TabPanel paint their rows and tabs -
     // they hold no child Views for them. A `list` / `table` / `tab_list` role
     // would export an empty AXList / AXTable / AXTabGroup ("list, 0 items"), and
     // a tab group whose children are content panels is worse than none at all.

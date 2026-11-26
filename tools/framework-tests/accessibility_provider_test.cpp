@@ -63,7 +63,7 @@ TEST_CASE("shutdown_accessibility: repeated init+shutdown cycles are safe",
         REQUIRE(h != nullptr);
         // Exercise the event-raise helpers while the session is live
         // so they go through the atomic acquire-load path at least
-        // once per cycle. They must also be a no-op after shutdown —
+        // once per cycle. They must also be a no-op after shutdown -
         // see the follow-up invariant check below.
         accessibility_tree_changed(h);
         notify_accessibility_value_changed(h, root);
