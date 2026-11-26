@@ -115,6 +115,10 @@ int main(int argc, char** argv) {
     second_text.id = "second-editor-text";
     second_text.text = "Second editor";
     vellum::view::register_text_accessibility_node_for_owner(&second_probe, second_text);
+    vellum::view::TextAccessibilityNode global_text;
+    global_text.id = "global-editor-text";
+    global_text.text = "All editors";
+    vellum::view::register_text_accessibility_node(global_text);
     auto named_button = std::make_unique<vellum::view::View>();
     named_button->set_access_role(vellum::view::View::AccessRole::button);
     named_button->set_access_label("Bypass");
@@ -175,23 +179,27 @@ int main(int argc, char** argv) {
     if (!host_view.isAccessibilityElement ||
         ![host_view.accessibilityRole isEqualToString:NSAccessibilityGroupRole])
         return fail("the editor view is not an accessibility group");
-    if (accessible.count != 2U)
+    if (accessible.count != 3U)
         return fail("the editor view exposed another instance's painted text");
     BOOL has_button = NO;
     BOOL has_first_text = NO;
+    BOOL has_global_text = NO;
     for (NSAccessibilityElement* element in accessible) {
         has_button = has_button ||
             ([[element accessibilityLabel] isEqualToString:@"Bypass"] &&
              [[element accessibilityRole] isEqualToString:NSAccessibilityButtonRole]);
         has_first_text = has_first_text ||
             [[element accessibilityLabel] isEqualToString:@"First editor"];
+        has_global_text = has_global_text ||
+            [[element accessibilityLabel] isEqualToString:@"All editors"];
         if ([[element accessibilityLabel] isEqualToString:@"Second editor"])
             return fail("the editor view exposed another instance's painted text");
     }
-    if (!has_button || !has_first_text)
+    if (!has_button || !has_first_text || !has_global_text)
         return fail("the editor view did not expose its named button");
     vellum::view::unregister_text_accessibility_node("first-editor-text");
     vellum::view::unregister_text_accessibility_node("second-editor-text");
+    vellum::view::unregister_text_accessibility_node("global-editor-text");
 
     using vellum::view::Point;
     using vellum::view::Rect;

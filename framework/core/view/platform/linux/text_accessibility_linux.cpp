@@ -32,6 +32,7 @@
 
 #include <vellum/view/text_accessibility.hpp>
 
+#include <cstdint>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -72,6 +73,11 @@ Registry& registry() {
 
 }  // namespace
 
+std::string registry_key(const void* owner, std::string_view id) {
+    const auto value = reinterpret_cast<std::uintptr_t>(owner);
+    return std::to_string(value) + ":" + std::string(id);
+}
+
 std::string_view accessibility_backend_name() noexcept {
     // Explicitly distinguishes the Linux backend stub from the default
     // "none" backend, so external tooling can detect that the platform
@@ -84,7 +90,7 @@ std::string_view accessibility_backend_name() noexcept {
 void register_text_accessibility_node(const TextAccessibilityNode& node) {
     auto& r = registry();
     std::lock_guard<std::mutex> lock(r.mu);
-    r.nodes[node.id] = node;
+    r.nodes[registry_key(node.owner, node.id)] = node;
     // Real backend: build accesskit_tree_update with one node carrying
     // accesskit_role_for(node.role) + node.text as its Name, then call
     // accesskit_unix_adapter_update_if_active(...) — see the file-header
@@ -95,7 +101,10 @@ void register_text_accessibility_node(const TextAccessibilityNode& node) {
 void unregister_text_accessibility_node(std::string_view id) {
     auto& r = registry();
     std::lock_guard<std::mutex> lock(r.mu);
-    r.nodes.erase(std::string(id));
+    for (auto it = r.nodes.begin(); it != r.nodes.end();) {
+        if (it->second.id == id) it = r.nodes.erase(it);
+        else ++it;
+    }
     // Real backend: emit a TreeUpdate that removes the node by id, then
     // call accesskit_unix_adapter_update_if_active(...).
 }
