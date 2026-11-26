@@ -15,8 +15,8 @@ target_link_options(vellum-web-core PRIVATE
     "-sINITIAL_MEMORY=16777216"
     "-sFILESYSTEM=0"
     "-sASSERTIONS=1"
-    "-sEXPORTED_FUNCTIONS=['_vellum_web_start','_vellum_web_stop','_vellum_web_begin_frame','_vellum_web_set_scale','_vellum_web_add_rectangle','_vellum_web_add_text','_vellum_web_begin_vector','_vellum_web_vector_group','_vellum_web_vector_end_group','_vellum_web_vector_path','_vellum_web_vector_dash','_vellum_web_vector_gradient','_vellum_web_vector_stop','_vellum_web_end_vector','_vellum_web_render','_vellum_web_command_count','_vellum_web_lowering_loss_count','_vellum_web_refused','_vellum_web_refusal_reason','_vellum_web_diagnostic_count','_vellum_web_diagnostic_code','_vellum_web_diagnostic_node_id','_vellum_web_diagnostic_message','_vellum_web_command_digest','_vellum_web_backend_name']"
-    "-sEXPORTED_RUNTIME_METHODS=['cwrap']")
+    "-sEXPORTED_FUNCTIONS=['_vellum_web_start','_vellum_web_stop','_vellum_web_begin_frame','_vellum_web_set_scale','_vellum_web_add_rectangle','_vellum_web_add_text','_vellum_web_set_backdrop','_malloc','_free','_vellum_web_begin_vector','_vellum_web_vector_group','_vellum_web_vector_end_group','_vellum_web_vector_path','_vellum_web_vector_dash','_vellum_web_vector_gradient','_vellum_web_vector_stop','_vellum_web_end_vector','_vellum_web_render','_vellum_web_command_count','_vellum_web_lowering_loss_count','_vellum_web_refused','_vellum_web_refusal_reason','_vellum_web_diagnostic_count','_vellum_web_diagnostic_code','_vellum_web_diagnostic_node_id','_vellum_web_diagnostic_message','_vellum_web_command_digest','_vellum_web_backend_name']"
+    "-sEXPORTED_RUNTIME_METHODS=['cwrap','HEAPF32']")
 
 file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/web-dist/vellum-ui")
 foreach(_vellum_web_asset index.html style.css demo.js vector-canvas.js)
@@ -61,6 +61,9 @@ if(VELLUM_BUILD_TESTS)
     add_test(NAME vellum.web.browser-proof-wait
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_browser_proof_wait.py")
+    add_test(NAME vellum.web.superconvolver-negative-control-status
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_superconvolver_negative_control.py")
     add_test(NAME vellum.web.dist-imports
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_web_dist_imports.py"
@@ -92,6 +95,22 @@ if(VELLUM_BUILD_TESTS)
             --capture-dir "${CMAKE_BINARY_DIR}/web-captures/editor-session-negative-control"
             --negative-control)
     set_tests_properties(vellum.web.editor-session vellum.web.editor-session-negative-control
+        PROPERTIES SKIP_RETURN_CODE 77)
+    add_test(NAME vellum.web.superconvolver-view
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_superconvolver_view_browser.py"
+            --core-root "$<TARGET_FILE_DIR:vellum-web-core>"
+            --capture-dir "${CMAKE_BINARY_DIR}/web-captures/superconvolver-view")
+    foreach(control IN ITEMS move swap)
+        add_test(NAME vellum.web.superconvolver-view-${control}-control
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_superconvolver_view_browser.py"
+                --core-root "$<TARGET_FILE_DIR:vellum-web-core>"
+                --capture-dir "${CMAKE_BINARY_DIR}/web-captures/superconvolver-view-${control}-control"
+                --negative-control ${control})
+    endforeach()
+    set_tests_properties(vellum.web.superconvolver-view
+        vellum.web.superconvolver-view-move-control vellum.web.superconvolver-view-swap-control
         PROPERTIES SKIP_RETURN_CODE 77)
     add_test(NAME vellum.web.text-ime-accessibility
         COMMAND "${Python3_EXECUTABLE}"

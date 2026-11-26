@@ -496,7 +496,42 @@ FRAMEWORK_TEST(render_patch_golden_a_knob_s_needle_visibly_rotates_with_value_p3
     require(!hi.empty());
     const auto cmp = compare_screenshots(lo, hi);
     require(cmp.valid);
-    if (cmp.similarity >= 0.999f) SKIP("native raster unavailable in this build");
+    // Independent control: two frames whose SVGs differ by construction (black vs
+    // white fill) must render differently. The backend is
+    // unavailable only when it returns no image (skipped above); once it renders,
+    // an indistinguishable control or a similarity >= 0.999 between lo and hi is
+    // a real failure, never a skip.
+    auto render_control = [&](const char* fill) {
+        const std::string csvg =
+            std::string(R"(<svg width="100" height="100" xmlns="http://www.w3.org/2000/svg">)"
+                        R"(<rect x="0" y="0" width="100" height="100" fill=")") +
+            fill + R"("/></svg>)";
+        DesignIR cir;
+        cir.root.type = "frame";
+        cir.root.render_mode = NodeRenderMode::faithful_svg;
+        cir.root.svg_asset_id = "svg1";
+        IRAssetRef casset;
+        casset.asset_id = "svg1";
+        casset.original_uri = "data:image/svg+xml;base64," + vellum::runtime::base64_encode(csvg);
+        casset.mime = "image/svg+xml";
+        cir.asset_manifest.assets.push_back(casset);
+        auto croot = build_native_view_tree(cir, cir.asset_manifest, {});
+        auto* cframe = dynamic_cast<DesignFrameView*>(croot.get());
+        require(cframe != nullptr);
+        cframe->set_bounds({0, 0, cframe->panel_width(), cframe->panel_height()});
+        cframe->layout_children();
+        return render_to_png(*cframe, static_cast<int>(cframe->panel_width()),
+                             static_cast<int>(cframe->panel_height()), 2.0f,
+                             ScreenshotBackend::skia);
+    };
+    const auto black = render_control("#000000");
+    const auto white = render_control("#ffffff");
+    if (black.empty() || white.empty()) SKIP("Skia raster screenshot backend unavailable");
+    const auto control = compare_screenshots(black, white);
+    // Backend availability is established by non-empty renders above; a backend
+    // that returns images but cannot tell black from white is broken, not absent.
+    require(control.valid);
+    CHECK(control.similarity < 0.999f);
     CHECK(cmp.similarity < 0.999f);   // the needle visibly rotated between the two values
 }
 
