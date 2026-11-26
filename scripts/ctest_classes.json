@@ -53,6 +53,8 @@
       "vellum.framework.native-dialog-delivery",
       "vellum.framework.native-materializer-part1",
       "vellum.framework.native-materializer-part2",
+      "vellum.framework.native-materializer-part3",
+      "vellum.framework.native-materializer-part4",
       "vellum.framework.param-model-binding",
       "vellum.framework.plugin-view-host-native-child",
       "vellum.framework.react-materialization",
