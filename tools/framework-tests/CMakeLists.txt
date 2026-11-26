@@ -311,6 +311,14 @@ else()
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES ${_vellum_linux_host_sources})
 endif()
 
+# The cross-platform accessibility tree snapshot and the platform provider seam.
+vellum_add_framework_test(accessibility-tree
+    SOURCES accessibility_tree_test.cpp
+    UNITS Vellum::MirrorView_core)
+vellum_add_framework_test(accessibility-provider
+    SOURCES accessibility_provider_test.cpp
+    UNITS Vellum::MirrorView_core)
+
 vellum_add_framework_test(scripted-ui-param-model
     SOURCES scripted_ui_param_model_test.cpp
     UNITS Vellum::MirrorView_script Vellum::Value)
