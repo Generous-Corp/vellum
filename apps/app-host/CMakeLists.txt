@@ -34,6 +34,12 @@ if(VELLUM_BUILD_TESTS)
             "$<TARGET_FILE:vellum-app-host>")
     set_tests_properties(vellum.app-host-manual-clock-capture PROPERTIES
         ENVIRONMENT "MTL_DEBUG_LAYER=0")
+    add_test(NAME vellum.app-host-visual-fixtures
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/test_visual_fixtures.py"
+            "$<TARGET_FILE:vellum-app-host>")
+    set_tests_properties(vellum.app-host-visual-fixtures PROPERTIES
+        ENVIRONMENT "MTL_DEBUG_LAYER=0")
     # The browser is resolved when the test runs, so a pin supplied or an
     # escape hatch enabled after configure still reaches the test. With no
     # browser named it reports a skip; a named browser that does not resolve
