@@ -114,6 +114,89 @@ def _check_entry_shape(findings: list[Finding], entry: dict[str, Any]) -> None:
              f"invalid render_reference.status: {ref.get('status')!r}")
 
 
+# The nested shape every contract must have: field -> expected type, where a
+# dict describes an object's own fields and a one-element list describes a
+# list of that item type. `str?` allows null.
+STR, OPT_STR, BOOL = "str", "str?", "bool"
+NESTED_SHAPE: dict[str, Any] = {
+    "source": STR, "display_name": STR, "kind": STR, "trust": STR,
+    "compat": {"mode": STR, "source": OPT_STR, "parser_version_owner": STR},
+    "dispatch": {"kind": STR},
+    "upstream": [{"url": STR, "kind": STR, "proves": STR}],
+    "detected_artifact_shape": STR, "runtime_export_shape": STR,
+    "runtime_requirements": {"sdk_min": STR, "surface_refs": [STR]},
+    "parser": {"file": STR},
+    "format_versions": [{"version": STR, "fixture_paths": [STR], "expected_paths": [STR]}],
+    "validation": {"tests": [STR], "fixtures": [STR], "journey": OPT_STR,
+                   "render_reference": {"status": STR, "path": OPT_STR}},
+}
+NON_EMPTY = {"upstream", "runtime_requirements.surface_refs"}
+
+
+def _shape_problems(value: Any, shape: Any, where: str) -> list[str]:
+    if shape == STR:
+        return [] if isinstance(value, str) and value.strip() else [f"{where} must be a non-empty string"]
+    if shape == OPT_STR:
+        return [] if value is None or (isinstance(value, str) and value.strip()) else \
+            [f"{where} must be a non-empty string or null"]
+    if shape == BOOL:
+        return [] if isinstance(value, bool) else [f"{where} must be true or false"]
+    if isinstance(shape, list):
+        if not isinstance(value, list):
+            return [f"{where} must be a list"]
+        if not value and where.removeprefix("contract.") in NON_EMPTY:
+            return [f"{where} must not be empty"]
+        problems = []
+        for index, item in enumerate(value):
+            problems += _shape_problems(item, shape[0], f"{where}[{index}]")
+        return problems
+    if not isinstance(value, dict):
+        return [f"{where} must be an object"]
+    problems = []
+    for key, inner in shape.items():
+        if key not in value:
+            problems.append(f"{where}.{key} is missing")
+        else:
+            problems += _shape_problems(value[key], inner, f"{where}.{key}")
+    return problems
+
+
+def _check_nested_shape(findings: list[Finding], entry: dict[str, Any]) -> None:
+    source = _source(entry)
+    for key, shape in NESTED_SHAPE.items():
+        if key in entry:
+            for problem in _shape_problems(entry[key], shape, f"contract.{key}"):
+                _add(findings, "invalid-field", source, problem)
+    dispatch = entry.get("dispatch")
+    if isinstance(dispatch, dict):
+        needed = {"design-source-label": "label", "explicit-runtime-parser": "parser"}.get(
+            dispatch.get("kind"))
+        if needed and not (isinstance(dispatch.get(needed), str) and dispatch[needed].strip()):
+            _add(findings, "invalid-field", source,
+                 f"contract.dispatch.{needed} must be a non-empty string for {dispatch.get('kind')}")
+    parser = entry.get("parser")
+    if isinstance(parser, dict):
+        for key in ("runtime_file", "runtime", "static"):
+            if key in parser and parser[key] is not None and not (
+                    isinstance(parser[key], str) and parser[key].strip()):
+                _add(findings, "invalid-field", source,
+                     f"contract.parser.{key} must be a non-empty string or null")
+
+
+def contained_path(root: Path, rel_path: Any) -> Path | None:
+    """`rel_path` under `root`, or None if it is absolute, empty, or escapes root."""
+    if not isinstance(rel_path, str) or not rel_path or Path(rel_path).is_absolute():
+        return None
+    if ".." in PurePosixPath(rel_path).parts:
+        return None
+    resolved = (root / rel_path).resolve()
+    try:
+        resolved.relative_to(root.resolve())
+    except ValueError:
+        return None
+    return resolved
+
+
 def _check_open_items(findings: list[Finding], entry: dict[str, Any]) -> None:
     """Pending items name what is open and where; deferred items say why."""
     source = _source(entry)
@@ -182,9 +265,10 @@ def _check_surface_refs(findings: list[Finding], root: Path, entry: dict[str, An
         _add(findings, "missing-sdk-min", source,
              "runtime_requirements.sdk_min must be a Vellum release version such as 0.2.3")
     for ref in _as_list(reqs.get("surface_refs")):
-        if not isinstance(ref, str) or not ref.startswith(SURFACE_OWNERS):
+        if not isinstance(ref, str) or not ref.startswith(SURFACE_OWNERS) or \
+                contained_path(root, ref) is None:
             _add(findings, "invalid-surface-ref", source, f"unknown surface ref owner: {ref!r}")
-        elif not (root / ref).exists():
+        elif not contained_path(root, ref).exists():
             _add(findings, "missing-surface-ref", source, f"surface ref does not exist: {ref}",
                  path=ref)
 
@@ -460,6 +544,7 @@ def compute_findings(root: Path = REPO_ROOT, registry_path: Path = DEFAULT_REGIS
     journeys = _manifest_journeys(root)
     for entry in entries:
         _check_entry_shape(findings, entry)
+        _check_nested_shape(findings, entry)
         _check_open_items(findings, entry)
         _check_compat(findings, imports, entry)
         _check_surface_refs(findings, root, entry)
