@@ -35,6 +35,7 @@
       "vellum.feature-versions-drift",
       "vellum.fidelity-montage",
       "vellum.fidelity-reference-diff",
+      "vellum.fidelity-region-diff",
       "vellum.foundation",
       "vellum.frame-driver",
       "vellum.frame-pump",

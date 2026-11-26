@@ -582,6 +582,9 @@ if(VELLUM_BUILD_TESTS)
     add_test(NAME vellum.fidelity-reference-diff
         COMMAND "${Python3_EXECUTABLE}" tools/fidelity/test_reference_diff.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.fidelity-region-diff
+        COMMAND "${Python3_EXECUTABLE}" tools/fidelity/test_region_diff.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.parity-packaging-unit
         COMMAND "${Python3_EXECUTABLE}"
             tools/parity/packaging/test_packaging_lane.py

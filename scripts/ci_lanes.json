@@ -237,6 +237,9 @@
         "script": "tools/fidelity/test_reference_diff.py"
       },
       {
+        "script": "tools/fidelity/test_region_diff.py"
+      },
+      {
         "script": "tools/parity/test_parity_harness.py"
       },
       {
