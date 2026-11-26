@@ -4,11 +4,10 @@
 
 #include <vellum/authoring/import_detect.hpp>
 
-#include <vellum/authoring/detail/json_parser.hpp>
+#include "strict_json.hpp"
 
 #include <algorithm>
 #include <fstream>
-#include <iomanip>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -20,8 +19,36 @@ namespace vellum::authoring::import_detect {
 
 namespace {
 
-using vellum::authoring::json::JsonParser;
-using vellum::authoring::json::JsonValue;
+using JsonView = choc::value::ValueView;
+
+// The named member of a JSON object, or nullopt when `v` is not an object or
+// has no such member.
+std::optional<JsonView> member(const JsonView& v, std::string_view name) {
+    if (!v.isObject()) return std::nullopt;
+    for (uint32_t i = 0; i < v.size(); ++i) {
+        auto m = v.getObjectMemberAt(i);
+        if (std::string_view(m.name) == name) return m.value;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> member_string(const JsonView& v, std::string_view name) {
+    auto m = member(v, name);
+    if (!m || !m->isString()) return std::nullopt;
+    return std::string(m->getString());
+}
+
+// The string elements of an array member, in order; other elements are skipped.
+std::vector<std::string> member_strings(const JsonView& v, std::string_view name) {
+    std::vector<std::string> out;
+    auto m = member(v, name);
+    if (!m || !m->isArray()) return out;
+    for (uint32_t i = 0; i < m->size(); ++i) {
+        auto e = (*m)[i];
+        if (e.isString()) out.emplace_back(e.getString());
+    }
+    return out;
+}
 
 std::string read_text_file(const fs::path& p) {
     std::ifstream f(p);
@@ -31,66 +58,34 @@ std::string read_text_file(const fs::path& p) {
     return ss.str();
 }
 
-std::string json_escape(std::string_view input) {
-    std::string out;
-    out.reserve(input.size() + 8);
-    for (char ch : input) {
-        switch (ch) {
-            case '\\': out += "\\\\"; break;
-            case '"': out += "\\\""; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
-            default:
-                if (static_cast<unsigned char>(ch) < 0x20) {
-                    std::ostringstream ss;
-                    ss << "\\u" << std::hex << std::setw(4)
-                       << std::setfill('0')
-                       << static_cast<int>(static_cast<unsigned char>(ch));
-                    out += ss.str();
-                } else {
-                    out += ch;
-                }
-                break;
-        }
-    }
-    return out;
-}
-
-FingerprintClause parse_clause(const JsonValue& v) {
+FingerprintClause parse_clause(const JsonView& v) {
     FingerprintClause c;
-    if (v.type != JsonValue::Object) return c;
-    if (auto* k = v.get("kind"); k && k->type == JsonValue::String) {
-        c.raw_kind = k->str_val;
-        if (k->str_val == "directory-files")
+    if (!v.isObject()) return c;
+    if (auto kind = member_string(v, "kind")) {
+        c.raw_kind = *kind;
+        if (*kind == "directory-files")
             c.kind = FingerprintClause::Kind::directory_files;
-        else if (k->str_val == "html-script-src")
+        else if (*kind == "html-script-src")
             c.kind = FingerprintClause::Kind::html_script_src;
-        else if (k->str_val == "html-script-type")
+        else if (*kind == "html-script-type")
             c.kind = FingerprintClause::Kind::html_script_type;
-        else if (k->str_val == "tailwind-config-token")
+        else if (*kind == "tailwind-config-token")
             c.kind = FingerprintClause::Kind::tailwind_config_token;
-        else if (k->str_val == "filename")
+        else if (*kind == "filename")
             c.kind = FingerprintClause::Kind::filename;
-        else if (k->str_val == "frontmatter-fence")
+        else if (*kind == "frontmatter-fence")
             c.kind = FingerprintClause::Kind::frontmatter_fence;
-        else if (k->str_val == "frontmatter-key")
+        else if (*kind == "frontmatter-key")
             c.kind = FingerprintClause::Kind::frontmatter_key;
-        else if (k->str_val == "json-key-equals")
+        else if (*kind == "json-key-equals")
             c.kind = FingerprintClause::Kind::json_key_equals;
     }
-    if (auto* files = v.get("files"); files && files->type == JsonValue::Array)
-        c.files = files->as_string_array();
-    if (auto* re = v.get("regex"); re && re->type == JsonValue::String)
-        c.regex = re->str_val;
-    if (auto* val = v.get("value"); val && val->type == JsonValue::String)
-        c.value = val->str_val;
-    if (auto* any = v.get("any-of"); any && any->type == JsonValue::Array)
-        c.any_of = any->as_string_array();
-    if (auto* req = v.get("required"); req && req->type == JsonValue::String)
-        c.required = req->str_val;
-    if (auto* pp = v.get("path"); pp && pp->type == JsonValue::String)
-        c.path = pp->str_val;
+    c.files = member_strings(v, "files");
+    if (auto re = member_string(v, "regex")) c.regex = *re;
+    if (auto value = member_string(v, "value")) c.value = *value;
+    c.any_of = member_strings(v, "any-of");
+    if (auto required = member_string(v, "required")) c.required = *required;
+    if (auto path = member_string(v, "path")) c.path = *path;
     return c;
 }
 
@@ -192,56 +187,43 @@ std::vector<std::string> scrape_tailwind_tokens(const std::string& html) {
 
 std::optional<ImportsManifest> parse_compat_json(const std::string& text) {
     if (text.empty()) return std::nullopt;
-    JsonParser p{text, 0};
-    JsonValue root;
-    try { root = p.parse(); }
-    catch (...) { return std::nullopt; }
-    if (root.type != JsonValue::Object) return std::nullopt;
+    auto document = strict_json::parse_document(text);
+    if (!document || !document->isObject()) return std::nullopt;
+    const JsonView root = *document;
 
     ImportsManifest m;
-    if (auto* sv = root.get("compat-schema-version");
-        sv && sv->type == JsonValue::String)
-        m.compat_schema_version = sv->str_val;
+    if (auto sv = member_string(root, "compat-schema-version")) m.compat_schema_version = *sv;
 
-    auto* imports = root.get("imports");
-    if (!imports || imports->type != JsonValue::Object) return std::nullopt;
+    auto imports = member(root, "imports");
+    if (!imports || !imports->isObject()) return std::nullopt;
 
-    for (const auto& [src_name, src_val] : imports->obj()) {
-        if (src_val.type != JsonValue::Object) continue;
+    for (uint32_t i = 0; i < imports->size(); ++i) {
+        auto src = imports->getObjectMemberAt(i);
+        if (!src.value.isObject()) continue;
         SourceEntry s;
-        s.source = src_name;
-        if (auto* pv = src_val.get("parser-version");
-            pv && pv->type == JsonValue::String)
-            s.parser_version = pv->str_val;
+        s.source = src.name;
+        if (auto pv = member_string(src.value, "parser-version")) s.parser_version = *pv;
 
-        if (auto* dfs = src_val.get("detected-formats");
-            dfs && dfs->type == JsonValue::Array) {
-            for (const auto& f : dfs->arr()) {
-                if (f.type != JsonValue::Object) continue;
+        auto dfs = member(src.value, "detected-formats");
+        if (dfs && dfs->isArray()) {
+            for (uint32_t j = 0; j < dfs->size(); ++j) {
+                const JsonView f = (*dfs)[j];
+                if (!f.isObject()) continue;
                 FormatEntry e;
                 e.parser_version = s.parser_version;
-                if (auto* fv = f.get("format-version");
-                    fv && fv->type == JsonValue::String)
-                    e.format_version = fv->str_val;
-                if (auto* iv = f.get("introduced");
-                    iv && iv->type == JsonValue::String)
-                    e.introduced = iv->str_val;
-                if (auto* dv = f.get("deprecated");
-                    dv && dv->type == JsonValue::String)
-                    e.deprecated = dv->str_val;
-                if (auto* nv = f.get("notes");
-                    nv && nv->type == JsonValue::String)
-                    e.notes = nv->str_val;
-                if (auto* mv = f.get("match");
-                    mv && mv->type == JsonValue::String)
-                    e.match = mv->str_val;
-                if (auto* cv = f.get("min-confidence-pct");
-                    cv && cv->type == JsonValue::Number)
-                    e.min_confidence_pct = static_cast<int>(cv->num_val);
-                if (auto* fp = f.get("fingerprint");
-                    fp && fp->type == JsonValue::Array) {
-                    for (const auto& cl : fp->arr())
-                        e.fingerprint.push_back(parse_clause(cl));
+                if (auto fv = member_string(f, "format-version")) e.format_version = *fv;
+                if (auto iv = member_string(f, "introduced")) e.introduced = *iv;
+                if (auto dv = member_string(f, "deprecated")) e.deprecated = *dv;
+                if (auto nv = member_string(f, "notes")) e.notes = *nv;
+                if (auto mv = member_string(f, "match")) e.match = *mv;
+                if (auto cv = member(f, "min-confidence-pct")) {
+                    if (cv->isInt()) e.min_confidence_pct = static_cast<int>(cv->getInt64());
+                    else if (cv->isFloat()) e.min_confidence_pct = static_cast<int>(cv->getFloat64());
+                }
+                auto fp = member(f, "fingerprint");
+                if (fp && fp->isArray()) {
+                    for (uint32_t k = 0; k < fp->size(); ++k)
+                        e.fingerprint.push_back(parse_clause((*fp)[k]));
                 }
                 s.formats.push_back(std::move(e));
             }
@@ -372,7 +354,9 @@ InputSnapshot snapshot_input(const fs::path& input) {
 bool match_clause(const FingerprintClause& clause, const InputSnapshot& snap) {
     switch (clause.kind) {
         case FingerprintClause::Kind::directory_files: {
-            if (clause.files.empty()) return false;
+            // Only a directory export has member files; a single file whose
+            // name happens to match never satisfies this clause.
+            if (!snap.is_directory || clause.files.empty()) return false;
             for (const auto& want : clause.files) {
                 bool found = false;
                 for (const auto& have : snap.directory_basenames) {
@@ -424,7 +408,9 @@ bool match_clause(const FingerprintClause& clause, const InputSnapshot& snap) {
             return std::regex_search(snap.filename, re);
         }
         case FingerprintClause::Kind::frontmatter_fence: {
-            // Either value="---" (literal) or empty (presence-only check).
+            // The snapshot only recognizes a `---` fence, so a clause asking
+            // for any other fence value cannot match. Empty means presence.
+            if (!clause.value.empty() && clause.value != "---") return false;
             return snap.has_frontmatter_fence;
         }
         case FingerprintClause::Kind::frontmatter_key: {
@@ -448,152 +434,25 @@ bool match_clause(const FingerprintClause& clause, const InputSnapshot& snap) {
             // mismatch.
             if (clause.path.empty() || clause.value.empty() || snap.html_text.empty())
                 return false;
-            try {
-                // Brace aggregate-init, not parens: JsonParser is an aggregate
-                // with a `const std::string& src` member and no constructor, so
-                // `JsonParser p(snap.html_text)` is parenthesized aggregate init,
-                // which needs C++20 P0960, and older Apple clang rejects it even
-                // at -std=c++20 with "no matching constructor". Braces are plain
-                // aggregate init, valid on every toolchain.
-                JsonParser p{snap.html_text};
-                auto root = p.parse();
-                const JsonValue* cur = &root;
-                std::string remaining = clause.path;
-                while (!remaining.empty()) {
-                    auto dot = remaining.find('.');
-                    std::string segment = (dot == std::string::npos)
-                                              ? remaining
-                                              : remaining.substr(0, dot);
-                    if (cur->type != JsonValue::Object) return false;
-                    cur = cur->get(segment);
-                    if (cur == nullptr) return false;
-                    if (dot == std::string::npos) break;
-                    remaining = remaining.substr(dot + 1);
-                }
-                if (cur == nullptr || cur->type != JsonValue::String) return false;
-                return cur->str_val == clause.value;
-            } catch (...) {
-                return false;
+            auto document = strict_json::parse_document(snap.html_text);
+            if (!document) return false;
+            std::optional<JsonView> cur = JsonView(*document);
+            std::string remaining = clause.path;
+            while (!remaining.empty()) {
+                auto dot = remaining.find('.');
+                std::string segment = (dot == std::string::npos) ? remaining
+                                                                 : remaining.substr(0, dot);
+                cur = member(*cur, segment);
+                if (!cur) return false;
+                if (dot == std::string::npos) break;
+                remaining = remaining.substr(dot + 1);
             }
+            return cur && cur->isString() && cur->getString() == clause.value;
         }
         case FingerprintClause::Kind::unknown:
         default:
             return false;
     }
-}
-
-DetectionResult detect(const ImportsManifest& manifest, const InputSnapshot& snap) {
-    DetectionResult best;
-    best.ok = true;
-
-    int best_matched = -1;
-    for (const auto& src : manifest.sources) {
-        for (const auto& fmt : src.formats) {
-            int matched = 0;
-            std::vector<std::string> matched_kinds;
-            std::vector<std::string> unmatched_kinds;
-            for (const auto& cl : fmt.fingerprint) {
-                if (match_clause(cl, snap)) {
-                    ++matched;
-                    matched_kinds.push_back(cl.raw_kind);
-                } else {
-                    unmatched_kinds.push_back(cl.raw_kind);
-                }
-            }
-            const int total = static_cast<int>(fmt.fingerprint.size());
-            const int confidence = total > 0 ? (matched * 100 / total) : 0;
-            // Strict modes (DESIGN.md): reject this format unless every clause
-            // matches (match="all-of") or the confidence clears the floor
-            // (min_confidence_pct). This prevents generic Markdown files
-            // with `---fence---` from masquerading as DESIGN.md.
-            if (fmt.match == "all-of" && matched < total) continue;
-            if (fmt.min_confidence_pct > 0 && confidence < fmt.min_confidence_pct) continue;
-            // Prefer (a) more matches, then (b) higher confidence ratio.
-            const bool better =
-                matched > best_matched ||
-                (matched == best_matched && matched > 0 &&
-                 total > 0 && best.total_clauses > 0 &&
-                 matched * best.total_clauses > best.matched_clauses * total);
-            if (matched > 0 && better) {
-                best.source = src.source;
-                best.format_version = fmt.format_version;
-                best.parser_version = fmt.parser_version;
-                best.matched_clauses = matched;
-                best.total_clauses = total;
-                best.confidence_pct = total > 0 ? (matched * 100 / total) : 0;
-                best.matched_kinds = std::move(matched_kinds);
-                best.unmatched_kinds = std::move(unmatched_kinds);
-                best_matched = matched;
-            }
-        }
-    }
-    return best;
-}
-
-// ── Reporting ──────────────────────────────────────────────────────────
-
-NewFormatReport build_new_format_report(const ImportsManifest& manifest,
-                                        const InputSnapshot& snap,
-                                        const DetectionResult& closest) {
-    NewFormatReport r;
-    r.candidate_source = closest.source;
-    r.based_on_source = closest.source;
-    r.based_on_format_version = closest.format_version;
-    if (!closest.format_version.empty())
-        r.candidate_format_version = closest.format_version + "+next";
-    else
-        r.candidate_format_version.clear();
-
-    // Diff tailwind tokens against the closest format's any-of list.
-    std::set<std::string> known;
-    for (const auto& src : manifest.sources) {
-        if (src.source != closest.source) continue;
-        for (const auto& fmt : src.formats) {
-            if (fmt.format_version != closest.format_version) continue;
-            for (const auto& cl : fmt.fingerprint) {
-                if (cl.kind == FingerprintClause::Kind::tailwind_config_token)
-                    for (const auto& tok : cl.any_of) known.insert(tok);
-            }
-        }
-    }
-    for (const auto& tok : snap.tailwind_tokens) {
-        if (!known.empty() && known.count(tok) == 0)
-            r.additions.push_back(tok);
-    }
-    // Cap suggestions so the output stays human-readable.
-    if (r.additions.size() > 20) r.additions.resize(20);
-    return r;
-}
-
-std::string render_new_format_json(const NewFormatReport& r) {
-    std::ostringstream o;
-    o << "{\n";
-    o << "  \"candidate-source\": \"" << json_escape(r.candidate_source) << "\",\n";
-    o << "  \"candidate-format-version\": \"" << json_escape(r.candidate_format_version) << "\",\n";
-    o << "  \"fingerprint-additions\": [";
-    if (!r.additions.empty()) {
-        o << "\n    {\"kind\": \"tailwind-config-token\", \"any-of\": [";
-        for (size_t i = 0; i < r.additions.size(); ++i) {
-            if (i) o << ", ";
-            o << "\"" << json_escape(r.additions[i]) << "\"";
-        }
-        o << "]}\n  ";
-    }
-    o << "],\n";
-    o << "  \"fingerprint-removals\": [";
-    if (!r.removals.empty()) {
-        o << "\n    ";
-        for (size_t i = 0; i < r.removals.size(); ++i) {
-            if (i) o << ", ";
-            o << "\"" << json_escape(r.removals[i]) << "\"";
-        }
-        o << "\n  ";
-    }
-    o << "],\n";
-    o << "  \"based-on\": {\"source\": \"" << json_escape(r.based_on_source)
-      << "\", \"format-version\": \"" << json_escape(r.based_on_format_version) << "\"}\n";
-    o << "}\n";
-    return o.str();
 }
 
 }  // namespace vellum::authoring::import_detect
