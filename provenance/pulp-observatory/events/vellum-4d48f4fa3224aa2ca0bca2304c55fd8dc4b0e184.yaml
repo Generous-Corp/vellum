@@ -1,0 +1,42 @@
+{
+  "class": "platform",
+  "contract_keys": [
+    "capture-primitives"
+  ],
+  "contract_tests": [
+    "vellum.capture-stats",
+    "vellum.gpu-native"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-26T07:57:57Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-4d48f4fa3224aa2ca0bca2304c55fd8dc4b0e184",
+  "include_dependency_deltas": [],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "capture-primitives"
+  ],
+  "mapped_paths": [
+    "apps/design-tool/design-tool-palette.js",
+    "apps/design-tool/moves/palette.json",
+    "apps/design-tool/test-harness.js"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "37197596ffbeb73071936db27a7c3fb926e70fa2",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "01ca7484800131e6b407609fffb39ee98ab8b5b2",
+    "to_commit": "4d48f4fa3224aa2ca0bca2304c55fd8dc4b0e184"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "4d48f4fa3224aa2ca0bca2304c55fd8dc4b0e184",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}
