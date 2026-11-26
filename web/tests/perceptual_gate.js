@@ -15,8 +15,7 @@
 // Perception. SSIM (Wang et al. 2004) on luma with an 11 tap Gaussian window
 // of sigma 1.5 and the standard C1 = (0.01 L)^2, C2 = (0.03 L)^2, L = 255,
 // averaged over every full window. A device-scale-2 capture is reduced to
-// the luma of each 2 by 2 block first, the way the native reference is
-// (`make_native_reference.py`). The plan's new floor is SSIM_FLOOR.
+// the luma of each 2 by 2 block first, the way a native reference is made. The plan's new floor is SSIM_FLOOR.
 
 // RGB distance above which a pixel is ink. The session's existing ink
 // threshold; DESIGN.

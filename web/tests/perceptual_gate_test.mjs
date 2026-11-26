@@ -58,4 +58,24 @@ assert.deepEqual(verdict({ink: {chip: pass}, similarity: 0.89}).failures, ['ssim
 assert.deepEqual(verdict({ink: {chip: pass}, similarity: Number.NaN}).failures, ['ssim']);
 assert.equal(verdict({ink: {chip: pass}}).pass, true, 'no reference, no SSIM check');
 
+// Planted defects, on synthetic frames: each must fail the verdict by name.
+const ground = [10, 12, 16];
+const field = (x, y) => (((x >> 2) + (y >> 2)) % 2 ? [120, 140, 200] : ground);
+const withField = image(48, 32, field);
+const referencePlane = lumaPlane(withField);
+const verdictFor = (frame, inkRegion) => verdict({
+    ink: {chip: inkRegion}, similarity: ssim(lumaPlane(frame), referencePlane)});
+const good = regionInk(image(10, 10, () => [200, 200, 200]), image(10, 10, () => ground));
+assert.equal(verdictFor(withField, good).pass, true, 'the intact frame passes');
+// A missing field: the ground only, so structure is gone and SSIM fails.
+assert.deepEqual(verdictFor(flat, good).failures, ['ssim']);
+// A solid background: no field and no ink in any region, so both fail.
+const solidInk = regionInk(image(10, 10, () => ground), image(10, 10, () => ground));
+assert.deepEqual(verdictFor(flat, solidInk).failures, ['ink:chip', 'ssim']);
+// A one pixel placeholder in a large region has ink below the floor.
+const placeholder = regionInk(
+    image(40, 40, (x, y) => (x + y === 0 ? [255, 255, 255] : ground)),
+    image(40, 40, () => ground));
+assert.deepEqual(verdictFor(withField, placeholder).failures, ['ink:chip']);
+
 console.log('perceptual gate: ok');
