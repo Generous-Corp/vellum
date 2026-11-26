@@ -22,6 +22,9 @@
 #include <string_view>
 #include <vector>
 
+extern "C" void* vellum_text_accessibility_lookup_macos_for_owner(
+    const void* owner, const char* id_utf8);
+
 namespace {
 
 using Host = vellum::view::PluginViewHost;
@@ -111,6 +114,17 @@ int main(int argc, char** argv) {
     first_text.id = "editor-text:label";
     first_text.text = "First editor";
     vellum::view::register_text_accessibility_node_for_owner(&probe, first_text);
+    vellum::view::TextAccessibilityNode lifetime_text;
+    lifetime_text.id = "editor-text:lifetime";
+    lifetime_text.text = "Lifetime probe";
+    vellum::view::register_text_accessibility_node_for_owner(&probe, lifetime_text);
+    auto* retained_lifetime = (__bridge NSAccessibilityElement*)
+        vellum_text_accessibility_lookup_macos_for_owner(&probe, lifetime_text.id.c_str());
+    if (!retained_lifetime) return fail("text accessibility lookup returned no lifetime probe");
+    vellum::view::unregister_text_accessibility_node_for_owner(&probe, lifetime_text.id);
+    if (![[retained_lifetime accessibilityLabel] isEqualToString:@"Lifetime probe"])
+        return fail("text accessibility lookup did not retain its result");
+    [retained_lifetime release];
     vellum::view::TextAccessibilityNode second_text;
     second_text.id = "editor-text:label";
     second_text.text = "Second editor";

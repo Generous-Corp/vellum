@@ -309,14 +309,15 @@ std::vector<TextAccessibilityNode> snapshot_accessibility_nodes() {
     return out;
 }
 
-// Test-only lookup. Returns the retained NSAccessibilityElement for the
-// given id, or nil if no such node is registered. Defined in this TU
+// Test-only lookup. Returns a retained NSAccessibilityElement for the
+// given id, or nil if no such node is registered. The caller owns the +1
+// retain and must release it after adding the element to another owner.
+// Defined in this TU
 // so tests can verify the macOS bridge without exposing a public header
 // dependency on Foundation.
 //
-// Returns a non-owning pointer suitable for an `(__bridge
-// NSAccessibilityElement*)` cast on the test side; the registry
-// continues to own the +1 retain.
+// The extra retain closes the lifetime race between releasing the registry
+// mutex and the caller inserting the element into accessibilityChildren.
 #if TARGET_OS_OSX
 extern "C" void* vellum_text_accessibility_lookup_macos(const char* id_utf8) {
     if (!id_utf8) return nullptr;
@@ -325,6 +326,7 @@ extern "C" void* vellum_text_accessibility_lookup_macos(const char* id_utf8) {
     const std::string key = registry_key(nullptr, id_utf8);
     NSString* nsId = [[NSString alloc] initWithUTF8String:key.c_str()];
     VellumMirrorTextAccessibilityElement* el = [r.elements objectForKey:nsId];
+    if (el) [el retain];
     [nsId release];
     return (__bridge void*)el;
 }
@@ -337,6 +339,7 @@ extern "C" void* vellum_text_accessibility_lookup_macos_for_owner(
     const std::string key = registry_key(owner, id_utf8);
     NSString* nsId = [[NSString alloc] initWithUTF8String:key.c_str()];
     VellumMirrorTextAccessibilityElement* el = [r.elements objectForKey:nsId];
+    if (el) [el retain];
     [nsId release];
     return (__bridge void*)el;
 }
