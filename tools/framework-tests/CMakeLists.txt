@@ -67,6 +67,10 @@ set_tests_properties(vellum.framework.text-accessibility-default PROPERTIES LABE
 set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
     text_accessibility_default_test.cpp)
 
+vellum_add_framework_test(text-accessibility-owner-link
+    SOURCES text_accessibility_owner_link_test.cpp
+    UNITS Vellum::MirrorView_core)
+
 vellum_add_framework_test(widget-bridge
     SOURCES widget_bridge_test.cpp
     UNITS Vellum::MirrorView_script)

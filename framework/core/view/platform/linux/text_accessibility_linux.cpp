@@ -71,12 +71,12 @@ Registry& registry() {
     return r;
 }
 
-}  // namespace
-
 std::string registry_key(const void* owner, std::string_view id) {
     const auto value = reinterpret_cast<std::uintptr_t>(owner);
     return std::to_string(value) + ":" + std::string(id);
 }
+
+}  // namespace
 
 std::string_view accessibility_backend_name() noexcept {
     // Explicitly distinguishes the Linux backend stub from the default

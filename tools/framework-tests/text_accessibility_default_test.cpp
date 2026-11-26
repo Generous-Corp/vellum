@@ -1,7 +1,6 @@
 #include <vellum/view/text_accessibility.hpp>
 
 #include <algorithm>
-#include <cassert>
 #include <string_view>
 
 namespace {
@@ -32,14 +31,17 @@ int main() {
     second.text = "second";
     vellum::view::register_text_accessibility_node_for_owner(&second_owner, second);
 
-    assert(contains_owner(&first_owner, "same-id"));
-    assert(contains_owner(&second_owner, "same-id"));
+    if (!contains_owner(&first_owner, "same-id") ||
+        !contains_owner(&second_owner, "same-id"))
+        return 1;
 
     vellum::view::unregister_text_accessibility_node_for_owner(&first_owner, "same-id");
-    assert(!contains_owner(&first_owner, "same-id"));
-    assert(contains_owner(&second_owner, "same-id"));
+    if (contains_owner(&first_owner, "same-id") ||
+        !contains_owner(&second_owner, "same-id"))
+        return 2;
 
     vellum::view::unregister_text_accessibility_node("same-id");
-    assert(!contains_owner(&second_owner, "same-id"));
+    if (contains_owner(&second_owner, "same-id"))
+        return 3;
     return 0;
 }

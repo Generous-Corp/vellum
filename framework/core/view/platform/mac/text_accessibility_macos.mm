@@ -200,8 +200,6 @@ Registry& registry() {
     return *r;
 }
 
-}  // namespace
-
 std::string registry_key(const void* owner, std::string_view id) {
     const auto value = reinterpret_cast<std::uintptr_t>(owner);
     return std::to_string(value) + ":" + std::string(id);
@@ -288,6 +286,8 @@ void unregister_nodes(const void* owner, std::string_view id, bool owner_only) {
     }
 #endif
 }
+
+}  // namespace
 
 void unregister_text_accessibility_node(std::string_view id) {
     unregister_nodes(nullptr, id, false);
