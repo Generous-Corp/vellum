@@ -237,6 +237,9 @@
         "script": "tools/fidelity/test_reference_diff.py"
       },
       {
+        "script": "scripts/test_source_support_manifest.py"
+      },
+      {
         "script": "tools/parity/test_parity_harness.py"
       },
       {
@@ -454,6 +457,7 @@
     "apps/app-host/test_phase3_scenario.py": "cmake:apps/app-host/CMakeLists.txt",
     "apps/app-host/test_state_persistence.py": "cmake:apps/app-host/CMakeLists.txt",
     "apps/app-host/test_text_semantics.py": "cmake:apps/app-host/CMakeLists.txt",
+    "apps/app-host/test_visual_fixtures.py": "cmake:apps/app-host/CMakeLists.txt",
     "authoring/tests/test_phase3_contracts.py": "cmake:CMakeLists.txt",
     "graphics/tests/test_dawn_bootstrap_source.py": "cmake:CMakeLists.txt",
     "graphics/tests/test_dawn_provider_topology.py": "cmake:CMakeLists.txt",
