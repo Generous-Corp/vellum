@@ -28,6 +28,7 @@
       "vellum.dawn-provider-bootstrap",
       "vellum.dawn-provider-topology",
       "vellum.design-pipeline",
+      "vellum.design-tool-verbatim-move",
       "vellum.downstream-consumer-registry",
       "vellum.downstream-consumer-registry-unit",
       "vellum.effects",
