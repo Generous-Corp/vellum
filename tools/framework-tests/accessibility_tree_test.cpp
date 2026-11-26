@@ -148,7 +148,7 @@ TEST_CASE("count_announceable excludes AccessRole::none", "[a11y][harness]") {
     a->set_access_label("Gain");
     root.add_child(std::move(a));
     auto b = std::make_unique<Probe>();
-    // b stays none — invisible to screen readers
+    // b stays none - invisible to screen readers
     root.add_child(std::move(b));
     auto c = std::make_unique<Probe>();
     c->set_access_role(View::AccessRole::meter);
@@ -383,7 +383,7 @@ TEST_CASE("Accessibility helper interfaces expose default selection behavior",
 // The Linux provider (accessibility_linux.cpp) exports one D-Bus object per
 // accessible View implementing org.a11y.atspi.Accessible + Component. This is
 // the CI-verifiable proof: build a known View tree, export it on the SESSION
-// bus via the test seam, then ACT AS AN AT-SPI CLIENT — call Accessible.
+// bus via the test seam, then ACT AS AN AT-SPI CLIENT - call Accessible.
 // GetChildren on the root, recurse, and assert the (role, role-name, child-
 // count) tuples match snapshot_accessibility_tree's accessible (non-none)
 // nodes re-parented onto their nearest accessible ancestor. Then call
@@ -455,7 +455,7 @@ TEST_CASE("widget default accessibility roles are announceable and correct",
 // The regression this pins: giving ArrowButton / ShapeButton / ImageButton
 // AccessRole::button (correct!) without a name made every screen reader
 // announce an unnamed "button" for every transport arrow and icon in every
-// Vellum UI — a WCAG 4.1.2 (Name, Role, Value) failure that did NOT exist when
+// Vellum UI - a WCAG 4.1.2 (Name, Role, Value) failure that did NOT exist when
 // they were AccessRole::none and excluded from the tree. is_accessibility_
 // element() is the shared gate all six bridges call.
 
@@ -591,7 +591,7 @@ TEST_CASE("TextEditor exposes its content through the text interface",
 TEST_CASE("ProgressBar exposes a real range and not a degenerate 0..0",
           "[view][accessibility][roles]") {
     // `progress_bar` advertises RangeValue. With no value interface behind it,
-    // UIA get_Value / get_Minimum / get_Maximum all returned 0.0 — Narrator
+    // UIA get_Value / get_Minimum / get_Maximum all returned 0.0 - Narrator
     // announced 0 at any progress, and min == max == 0 divides by zero in any
     // client computing (v - min) / (max - min).
     ProgressBar bar;
@@ -633,7 +633,7 @@ TEST_CASE("value-bearing widgets all carry a value source",
     REQUIRE(dynamic_cast<AccessibilityValueInterface*>(&sb)->get_current_value()
             == Catch::Approx(50.0));
 
-    // A knob's own display formatter wins over the generic percentage — it is
+    // A knob's own display formatter wins over the generic percentage - it is
     // the string the sighted user reads.
     knob.set_format([](float v) { return std::to_string(static_cast<int>(v * 24)) + " dB"; });
     REQUIRE(accessibility_value_string(knob) == "6 dB");
@@ -713,7 +713,7 @@ TEST_CASE("Android role ordinals are wire format",
 TEST_CASE("an author-set accessible name is not clobbered by content",
           "[view][accessibility][name]") {
     // ARIA 1.2 accname step 2B: aria-label is consulted BEFORE the element's
-    // contents — an explicit name WINS. The JS bridge's setAccessibilityLabel
+    // contents - an explicit name WINS. The JS bridge's setAccessibilityLabel
     // (aria-label replay) lands on set_access_label(); a widget's visible text
     // lands on set_derived_access_label(). If the widgets wrote the content into
     // the same slot:
@@ -746,7 +746,7 @@ TEST_CASE("an author-set accessible name is not clobbered by content",
 TEST_CASE("every content-named widget respects an author-set name",
           "[view][accessibility][name]") {
     // The full set of widgets that derive a name from their visible text.
-    // Each: aria-label first, then content — the content must not win.
+    // Each: aria-label first, then content - the content must not win.
     Knob knob;
     knob.set_access_label("Filter cutoff");
     knob.set_label("Hz");
@@ -783,7 +783,7 @@ TEST_CASE("every content-named widget respects an author-set name",
     REQUIRE(link.access_label() == "Read the Vellum documentation");
 
     // And the reverse order (content first, then aria-label) still ends on the
-    // author's name — this is the order the JS bridge actually replays in.
+    // author's name - this is the order the JS bridge actually replays in.
     Label l;
     l.set_text("dB");
     l.set_access_label("Gain in decibels");
@@ -795,8 +795,8 @@ TEST_CASE("every content-named widget respects an author-set name",
 TEST_CASE("the cross-platform snapshot resolves the value like every bridge",
           "[view][accessibility][value]") {
     // accessibility_tree.cpp used to read the raw access_value SLOT, so the
-    // snapshot — the one "bridge" that runs on every platform, and the surface
-    // the offline tests read — reported "" for a Knob that macOS / Windows /
+    // snapshot - the one "bridge" that runs on every platform, and the surface
+    // the offline tests read - reported "" for a Knob that macOS / Windows /
     // Linux all announce as "25%", and "" for a TextEditor holding "hello".
     Probe root;
     auto add = [&root](auto widget) {
@@ -840,7 +840,7 @@ TEST_CASE("check state resolves as a value for the bridges with no state slot",
     // macOS turns access_checked into a native @YES/@NO accessibilityValue, and
     // AT-SPI carries CHECKED/PRESSED in the state bitfield. iOS (UIKit collapses
     // checkbox onto TraitButton) and Android read the VALUE string and nothing
-    // else — so without the state in the resolver they announced "button" and
+    // else - so without the state in the resolver they announced "button" and
     // fell silent. Windows announces no state at all: the UIA Toggle pattern
     // needs an IToggleProvider that VellumFragmentProvider does not implement.
     Checkbox check;
@@ -916,7 +916,7 @@ TEST_CASE("a string-valued role exports a text interface, not nothing",
     REQUIRE(accessibility_text_content(combo) == "Saw");
     REQUIRE_FALSE(accessibility_text_editable(combo));
 
-    // A numeric range is Value, NOT Text — a Knob is not a text field.
+    // A numeric range is Value, NOT Text - a Knob is not a text field.
     Knob knob;
     ifs = accessibility_interfaces(knob);
     REQUIRE(ifs.value);

@@ -19,7 +19,7 @@ TEST_CASE("init_accessibility returns a non-null handle (stub)",
     View root;
     void* handle = init_accessibility(root, nullptr);
     REQUIRE(handle != nullptr);
-    // Second call should still succeed — the stub is idempotent.
+    // Second call should still succeed - the stub is idempotent.
     void* handle2 = init_accessibility(root, nullptr);
     REQUIRE(handle2 != nullptr);
     shutdown_accessibility(handle);
@@ -29,7 +29,7 @@ TEST_CASE("init_accessibility returns a non-null handle (stub)",
 TEST_CASE("accessibility_tree_changed tolerates a null handle",
           "[a11y][provider]") {
     // Widgets that raise events before init_accessibility ran should
-    // never crash — pin the invariant.
+    // never crash - pin the invariant.
     accessibility_tree_changed(nullptr);
     SUCCEED();
 }
