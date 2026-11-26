@@ -153,6 +153,8 @@ def stage(core_root: Path, negative_control: bool) -> dict[str, bytes]:
         files[name] = (fixture / name).read_bytes()
     for path in sorted((ROOT / "web/session").glob("*.js")):
         files[f"session/{path.name}"] = path.read_bytes()
+    # The session draws vector chrome through the shell's vector module.
+    files["shell/vector-canvas.js"] = (ROOT / "web/shell/vector-canvas.js").read_bytes()
     if negative_control:
         text = files["session/editor_session.js"].decode("utf-8")
         if text.count(RESIZE_DISPATCH) != 1:

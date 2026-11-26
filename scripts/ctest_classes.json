@@ -157,6 +157,7 @@
       "vellum.value.param-metadata",
       "vellum.value.param-model",
       "vellum.vector-asset",
+      "vellum.web.backdrop-backend",
       "vellum.web.browser-process-cleanup",
       "vellum.web.browser-proof-wait",
       "vellum.web.canvas-shell-lowering",
@@ -166,6 +167,7 @@
       "vellum.web.layout-contract",
       "vellum.web.no-engine",
       "vellum.web.no-engine-negative-control",
+      "vellum.web.superconvolver-field",
       "vellum.web.superconvolver-negative-control-status",
       "vellum.web.superconvolver-view-layout",
       "vellum.web.vector-canvas-builder"
