@@ -170,9 +170,14 @@ const DEFAULT_BUTTON_HEIGHT = 44;
 const DEFAULT_TEXT_INPUT_HEIGHT = 44;
 const DEFAULT_GENERIC_HEIGHT = 0;
 const TEXT_LINE_HEIGHT_MULTIPLIER = 1.4;
-function defaultHeight(type, style) {
+function defaultHeight(type, style, node) {
     if (type === 'text' || type === 'text-run') {
-        return number(style, 'fontSize', 14) * TEXT_LINE_HEIGHT_MULTIPLIER;
+        let fontSize = number(style, 'fontSize', 14);
+        for (const run of (node && node.children) || []) {
+            if (run.type !== 'text-run') continue;
+            fontSize = Math.max(fontSize, number(run.style || {}, 'fontSize', fontSize));
+        }
+        return fontSize * TEXT_LINE_HEIGHT_MULTIPLIER;
     }
     if (type === 'button') return DEFAULT_BUTTON_HEIGHT;
     if (type === 'text-input') return DEFAULT_TEXT_INPUT_HEIGHT;
@@ -296,7 +301,7 @@ function lowerNode(node, proposed, parentX, parentY) {
         if (child.type === 'text-run' && (node.type === 'text' || node.type === 'button')) continue;
         const childStyle = child.style || {};
         let width = number(childStyle, 'width', horizontal ? 0 : Math.max(0, proposed.width - padding * 2));
-        let height = number(childStyle, 'height', defaultHeight(child.type, childStyle));
+        let height = number(childStyle, 'height', defaultHeight(child.type, childStyle, child));
         const x = number(childStyle, 'x', isStack && horizontal ? cursor : padding);
         const y = number(childStyle, 'y', isStack && !horizontal ? cursor : padding);
         if (width <= 0 && horizontal) width = Math.max(0, proposed.width - cursor - padding);
