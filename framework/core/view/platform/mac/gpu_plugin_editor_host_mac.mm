@@ -9,6 +9,7 @@
 #include <vellum/render/headless_surface.hpp>
 #include <vellum/canvas/canvas.hpp>
 #include "mac_gpu_host_config.h"
+#include "window_host_mac_internal.hpp"
 #include "window_host_mac_metal_view.h"
 
 #import <Cocoa/Cocoa.h>
@@ -176,6 +177,24 @@ public:
         return WindowHost::compute_design_viewport_transform(
             size_.width, size_.height, design_width_, design_height_, sx, sy, tx, ty,
             design_top_align_);
+    }
+    // Native children (a WKWebView from WebViewPanel, any platform control)
+    // are subviews of the host's own view, so AppKit hit-tests them ahead of
+    // the Metal view and the window server composites them over the frame.
+    bool attach_native_child_view(NativeViewHandle child, float x, float y, float width,
+                                  float height) override {
+        return mac_geometry::attach_child_view_to_host(view_, child, x, y, width, height);
+    }
+    bool set_native_child_view_bounds(NativeViewHandle child, float x, float y, float width,
+                                      float height) override {
+        return mac_geometry::set_child_view_bounds_in_host(view_, child, x, y, width, height);
+    }
+    void detach_native_child_view(NativeViewHandle child) override {
+        mac_geometry::detach_child_view_from_host(view_, child);
+    }
+    bool set_native_child_view_clip(NativeViewHandle child, bool has_clip, float x, float y,
+                                    float width, float height) override {
+        return mac_geometry::clip_child_view_in_host(view_, child, has_clip, x, y, width, height);
     }
     bool is_gpu_backed() const override { return gpu_ready_; }
     render::GpuSurface* gpu_surface() const override { return gpu_.get(); }
