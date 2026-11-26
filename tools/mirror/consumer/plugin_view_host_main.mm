@@ -11,6 +11,7 @@
 #include <vellum/graphics/dawn_native_bootstrap.hpp>
 #include <vellum/view/input_events.hpp>
 #include <vellum/view/plugin_view_host.hpp>
+#include <vellum/view/text_accessibility.hpp>
 #include <vellum/view/view.hpp>
 #import <Cocoa/Cocoa.h>
 
@@ -105,6 +106,15 @@ int main(int argc, char** argv) {
         vellum::view::Point last_press{};
     } probe;
     probe.set_bounds({0, 0, 64, 64});
+    Probe second_probe;
+    vellum::view::TextAccessibilityNode first_text;
+    first_text.id = "first-editor-text";
+    first_text.text = "First editor";
+    vellum::view::register_text_accessibility_node_for_owner(&probe, first_text);
+    vellum::view::TextAccessibilityNode second_text;
+    second_text.id = "second-editor-text";
+    second_text.text = "Second editor";
+    vellum::view::register_text_accessibility_node_for_owner(&second_probe, second_text);
     auto named_button = std::make_unique<vellum::view::View>();
     named_button->set_access_role(vellum::view::View::AccessRole::button);
     named_button->set_access_label("Bypass");
@@ -165,9 +175,23 @@ int main(int argc, char** argv) {
     if (!host_view.isAccessibilityElement ||
         ![host_view.accessibilityRole isEqualToString:NSAccessibilityGroupRole])
         return fail("the editor view is not an accessibility group");
-    if (accessible.count != 1U || ![[accessible[0] accessibilityLabel] isEqualToString:@"Bypass"] ||
-        ![[accessible[0] accessibilityRole] isEqualToString:NSAccessibilityButtonRole])
+    if (accessible.count != 2U)
+        return fail("the editor view exposed another instance's painted text");
+    BOOL has_button = NO;
+    BOOL has_first_text = NO;
+    for (NSAccessibilityElement* element in accessible) {
+        has_button = has_button ||
+            ([[element accessibilityLabel] isEqualToString:@"Bypass"] &&
+             [[element accessibilityRole] isEqualToString:NSAccessibilityButtonRole]);
+        has_first_text = has_first_text ||
+            [[element accessibilityLabel] isEqualToString:@"First editor"];
+        if ([[element accessibilityLabel] isEqualToString:@"Second editor"])
+            return fail("the editor view exposed another instance's painted text");
+    }
+    if (!has_button || !has_first_text)
         return fail("the editor view did not expose its named button");
+    vellum::view::unregister_text_accessibility_node("first-editor-text");
+    vellum::view::unregister_text_accessibility_node("second-editor-text");
 
     using vellum::view::Point;
     using vellum::view::Rect;

@@ -21,7 +21,8 @@
 namespace vellum::view {
 NSArray* build_accessibility_elements(View& root, NSView* host);
 }
-extern "C" void* vellum_text_accessibility_lookup_macos(const char* id_utf8);
+extern "C" void* vellum_text_accessibility_lookup_macos_for_owner(
+    const void* owner, const char* id_utf8);
 
 namespace vellum::view::detail {
 namespace {
@@ -57,9 +58,11 @@ NSArray* editor_accessibility_children(VellumMirrorMetalView* host) {
     }
     // Painted text is registered apart from the view tree; without this merge a
     // screen reader never reaches it.
-    for (const auto& node : snapshot_accessibility_nodes()) {
+    // Text registrations are keyed by the root View so two editor instances
+    // in one process cannot expose one another's painted text.
+    for (const auto& node : snapshot_accessibility_nodes_for_owner(host.rootView)) {
         auto* element = (__bridge NSAccessibilityElement*)
-            vellum_text_accessibility_lookup_macos(node.id.c_str());
+            vellum_text_accessibility_lookup_macos_for_owner(host.rootView, node.id.c_str());
         if (!element) continue;
         [element setAccessibilityParent:host];
         [children addObject:element];
