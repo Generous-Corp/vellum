@@ -111,8 +111,8 @@ FRAMEWORK_TEST(element_tree_exposes_roles_labels_and_state) {
         CHECK(host != nullptr);
         if (!host) return;
         NSArray* elements = [editor_view(*host) accessibilityChildren];
-        CHECK(elements.count == 4U);  // the nameless button is left out
-        if (elements.count != 4U) return;
+        CHECK(elements.count == 3U);  // the nameless button and hidden label are left out
+        if (elements.count != 3U) return;
 
         NSAccessibilityElement* button = elements[0];
         CHECK([button.accessibilityRole isEqualToString:NSAccessibilityButtonRole]);
@@ -123,14 +123,28 @@ FRAMEWORK_TEST(element_tree_exposes_roles_labels_and_state) {
         CHECK([checkbox.accessibilityRole isEqualToString:NSAccessibilityCheckBoxRole]);
         CHECK([checkbox.accessibilityValue isEqual:@YES]);
 
-        NSAccessibilityElement* secret = elements[2];
-        CHECK([secret.accessibilityRole isEqualToString:NSAccessibilityStaticTextRole]);
-        CHECK(![secret isAccessibilityElement]);
-
-        NSAccessibilityElement* slider = elements[3];
+        NSAccessibilityElement* slider = elements[2];
         CHECK([slider.accessibilityRole isEqualToString:NSAccessibilitySliderRole]);
         CHECK([slider.accessibilityValue isEqual:@"0.5"]);
         CHECK(![slider isAccessibilityEnabled]);
+    }
+}
+
+FRAMEWORK_TEST(accessibility_children_do_not_leak_elements) {
+    @autoreleasepool {
+        View root;
+        add_named(root, Role::button, "Save");
+        auto host = PluginViewHost::create(root, {.size = {50, 50}});
+        CHECK(host != nullptr);
+        if (!host) return;
+        __weak NSAccessibilityElement* weak_element = nil;
+        @autoreleasepool {
+            NSArray* elements = [editor_view(*host) accessibilityChildren];
+            CHECK(elements.count == 1U);
+            if (elements.count == 1U) weak_element = elements[0];
+            CHECK(weak_element != nil);
+        }
+        CHECK(weak_element == nil);
     }
 }
 

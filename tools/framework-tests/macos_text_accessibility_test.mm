@@ -155,11 +155,12 @@ FRAMEWORK_TEST(plugin_view_surfaces_registered_text_to_voiceover) {
         auto host = PluginViewHost::create(root, options);
         CHECK(host != nullptr);
         if (!host) return;
-        register_text_accessibility_node(
-            make_node("discoverable", "Hi VoiceOver", TextAccessibilityRole::Label));
         NSView* view = (__bridge NSView*)host->native_handle();
         CHECK(view != nil);
         if (!view) return;
+        auto node = make_node("discoverable", "Hi VoiceOver", TextAccessibilityRole::Label);
+        node.host_handle = (__bridge void*)view;
+        register_text_accessibility_node(node);
         bool found = false;
         for (id child in [view accessibilityChildren]) {
             if ([child respondsToSelector:@selector(accessibilityLabel)] &&
@@ -167,8 +168,8 @@ FRAMEWORK_TEST(plugin_view_surfaces_registered_text_to_voiceover) {
                 found = true;
         }
         CHECK(found);
+        clear_registry();
     }
-    clear_registry();
 }
 
 } // namespace

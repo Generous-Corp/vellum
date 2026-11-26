@@ -22,7 +22,7 @@
 namespace vellum::view {
 NSArray* build_accessibility_elements(View& root, NSView* host);
 }
-extern "C" void* vellum_text_accessibility_lookup_macos(const char* id_utf8);
+extern "C" NSArray* vellum_text_accessibility_elements_for_host_macos(const void* host);
 
 namespace vellum::view::detail {
 namespace {
@@ -32,47 +32,42 @@ Class host_class();
 // Mirrors the order build_accessibility_elements() walks: every descendant of
 // the root, parents before children, keeping the views that pass the shared
 // exposure gate. Each entry records whether the view and all its ancestors are
-// visible, so a hidden panel's contents stay out of the tree a screen reader
-// reads.
+// visible and accessibility-exposed, so hidden subtrees stay out of the tree.
 void collect_exposure_flags(const View& parent, bool parent_visible, std::vector<bool>& out) {
     for (std::size_t i = 0; i < parent.child_count(); ++i) {
         const View* child = parent.child_at(i);
-        const bool visible = parent_visible && child->visible();
+        const bool visible = parent_visible && child->visible() && child->access_hidden() != "true";
         if (is_accessibility_element(*child)) out.push_back(visible);
         collect_exposure_flags(*child, visible, out);
     }
 }
 
-NSArray* editor_accessibility_children(VellumMirrorMetalView* host) {
+NSArray* editor_accessibility_children(VellumMirrorView* host) {
     NSMutableArray* children = [NSMutableArray array];
     if (View* root = host.rootView) {
         NSArray* elements = build_accessibility_elements(*root, host);
         std::vector<bool> shown;
-        collect_exposure_flags(*root, root->visible(), shown);
+        collect_exposure_flags(*root, root->visible() && root->access_hidden() != "true", shown);
         const bool aligned = shown.size() == elements.count;
         for (NSUInteger i = 0; i < elements.count; ++i) {
-            if (aligned && !shown[i]) continue;
+            if (!aligned || !shown[i]) continue;
             [elements[i] setAccessibilityParent:host];
             [children addObject:elements[i]];
         }
     }
     // Painted text is registered apart from the view tree; without this merge a
     // screen reader never reaches it.
-    for (const auto& node : snapshot_accessibility_nodes()) {
-        auto* element = (__bridge NSAccessibilityElement*)
-            vellum_text_accessibility_lookup_macos(node.id.c_str());
-        if (!element) continue;
+    if (!host.rootView || !host.rootView->visible() || host.rootView->access_hidden() == "true")
+        return children;
+    for (NSAccessibilityElement* element in vellum_text_accessibility_elements_for_host_macos((__bridge const void*)host)) {
         [element setAccessibilityParent:host];
         [children addObject:element];
     }
     return children;
 }
 
-// Every Metal view the framework creates, the window host's and the plug-in
-// editor's, presents as one group whose children are the view tree's accessible
-// elements and the registered text elements. The methods are added to the shared
-// class once, when this image loads, so the window host needs no accessibility
-// code of its own.
+// CPU and Metal hosts share the same accessibility tree. The methods are added
+// to their common view class once when this image loads.
 void add_method(Class cls, SEL selector, const char* return_type, id block) {
     char types[8];
     std::snprintf(types, sizeof types, "%s@:", return_type);
@@ -80,7 +75,7 @@ void add_method(Class cls, SEL selector, const char* return_type, id block) {
 }
 
 void install_view_accessibility() {
-    Class cls = [VellumMirrorMetalView class];
+    Class cls = [VellumMirrorView class];
     add_method(cls, @selector(isAccessibilityElement), @encode(BOOL), ^BOOL(id) { return YES; });
     add_method(cls, @selector(accessibilityRole), @encode(id), ^NSAccessibilityRole(id) {
         return NSAccessibilityGroupRole;
@@ -89,7 +84,7 @@ void install_view_accessibility() {
         NSString* title = host.window.title;
         return title.length > 0 ? title : @"UI";
     });
-    add_method(cls, @selector(accessibilityChildren), @encode(id), ^NSArray*(VellumMirrorMetalView* host) {
+    add_method(cls, @selector(accessibilityChildren), @encode(id), ^NSArray*(VellumMirrorView* host) {
         return editor_accessibility_children(host);
     });
 }
