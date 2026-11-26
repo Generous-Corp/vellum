@@ -108,11 +108,11 @@ int main(int argc, char** argv) {
     probe.set_bounds({0, 0, 64, 64});
     Probe second_probe;
     vellum::view::TextAccessibilityNode first_text;
-    first_text.id = "first-editor-text";
+    first_text.id = "editor-text:label";
     first_text.text = "First editor";
     vellum::view::register_text_accessibility_node_for_owner(&probe, first_text);
     vellum::view::TextAccessibilityNode second_text;
-    second_text.id = "second-editor-text";
+    second_text.id = "editor-text:label";
     second_text.text = "Second editor";
     vellum::view::register_text_accessibility_node_for_owner(&second_probe, second_text);
     vellum::view::TextAccessibilityNode global_text;
@@ -197,8 +197,8 @@ int main(int argc, char** argv) {
     }
     if (!has_button || !has_first_text || !has_global_text)
         return fail("the editor view did not expose its named button");
-    vellum::view::unregister_text_accessibility_node("first-editor-text");
-    vellum::view::unregister_text_accessibility_node("second-editor-text");
+    vellum::view::unregister_text_accessibility_node_for_owner(&probe, first_text.id);
+    vellum::view::unregister_text_accessibility_node_for_owner(&second_probe, second_text.id);
     vellum::view::unregister_text_accessibility_node("global-editor-text");
 
     using vellum::view::Point;

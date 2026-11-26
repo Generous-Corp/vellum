@@ -98,6 +98,18 @@ void register_text_accessibility_node(const TextAccessibilityNode& node) {
     (void)accesskit_role_for;  // suppress "unused" until the wiring lands
 }
 
+void unregister_text_accessibility_node_for_owner(
+    const void* owner, std::string_view id) {
+    auto& r = registry();
+    std::lock_guard<std::mutex> lock(r.mu);
+    for (auto it = r.nodes.begin(); it != r.nodes.end();) {
+        if (it->second.id == id && it->second.owner == owner) it = r.nodes.erase(it);
+        else ++it;
+    }
+    // Real backend: emit a TreeUpdate that removes the node by id, then
+    // call accesskit_unix_adapter_update_if_active(...).
+}
+
 void unregister_text_accessibility_node(std::string_view id) {
     auto& r = registry();
     std::lock_guard<std::mutex> lock(r.mu);
@@ -105,8 +117,6 @@ void unregister_text_accessibility_node(std::string_view id) {
         if (it->second.id == id) it = r.nodes.erase(it);
         else ++it;
     }
-    // Real backend: emit a TreeUpdate that removes the node by id, then
-    // call accesskit_unix_adapter_update_if_active(...).
 }
 
 std::vector<TextAccessibilityNode> snapshot_accessibility_nodes() {

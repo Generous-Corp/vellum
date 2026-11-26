@@ -269,23 +269,33 @@ void register_text_accessibility_node(const TextAccessibilityNode& node) {
 #endif
 }
 
-void unregister_text_accessibility_node(std::string_view id) {
+void unregister_nodes(const void* owner, std::string_view id, bool owner_only) {
     auto& r = registry();
     std::lock_guard<std::mutex> lock(r.mu);
+    std::vector<std::string> removed;
     for (auto it = r.nodes.begin(); it != r.nodes.end();) {
-        if (it->second.id == id) it = r.nodes.erase(it);
+        if (it->second.id == id && (!owner_only || it->second.owner == owner)) {
+            removed.push_back(it->first);
+            it = r.nodes.erase(it);
+        }
         else ++it;
     }
 #if TARGET_OS_OSX
-    NSString* wanted = [[NSString alloc] initWithUTF8String:std::string(id).c_str()];
-    NSArray* keys = [[r.elements allKeys] copy];
-    for (NSString* key in keys) {
-        if ([[[key componentsSeparatedByString:@":"] lastObject] isEqualToString:wanted])
-            [r.elements removeObjectForKey:key];
+    for (const auto& key : removed) {
+        NSString* nsKey = [[NSString alloc] initWithUTF8String:key.c_str()];
+        [r.elements removeObjectForKey:nsKey];
+        [nsKey release];
     }
-    [keys release];
-    [wanted release];
 #endif
+}
+
+void unregister_text_accessibility_node(std::string_view id) {
+    unregister_nodes(nullptr, id, false);
+}
+
+void unregister_text_accessibility_node_for_owner(
+    const void* owner, std::string_view id) {
+    unregister_nodes(owner, id, true);
 }
 
 std::vector<TextAccessibilityNode> snapshot_accessibility_nodes() {

@@ -93,6 +93,10 @@ inline void register_text_accessibility_node_for_owner(
 /// such node is registered.
 void unregister_text_accessibility_node(std::string_view id);
 
+/// Drop one node registered for one host or root view.
+void unregister_text_accessibility_node_for_owner(
+    const void* owner, std::string_view id);
+
 /// Read back the currently-registered nodes. Returns by value (a copy)
 /// so callers do not race with concurrent register/unregister activity.
 /// Order is unspecified.
