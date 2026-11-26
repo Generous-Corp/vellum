@@ -78,6 +78,15 @@ sources:
     provider_access: none
     reimport: supported
     requires: macOS native SDK
+  stitch:
+    channel: experimental
+    accepted_artifact: recorded Stitch screen payload JSON or Stitch code.html export
+    provider_access: none
+    reimport: supported
+    requires: macOS native SDK
+    limitations:
+      - an HTML export is reduced to visible text by a fallback parser and reports ir.fallback-used
+      - reached only through an explicit stitch source type, never inferred from .html
   designmd:
     channel: experimental
     accepted_artifact: Google DESIGN.md token specification

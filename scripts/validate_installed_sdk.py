@@ -145,6 +145,71 @@ components:
 
 
 
+def validate_installed_stitch_import(prefix: Path, root: Path, env: dict[str, str]) -> None:
+    """Import a recorded Stitch screen payload and a Stitch HTML export, then reimport both."""
+
+    def command(project: Path, *args: str, status: str, diagnostic: str = "") -> dict:
+        result = subprocess.run(
+            [str(prefix / "bin/vellum"), *args, "--json"], cwd=project, env=env,
+            text=True, capture_output=True, check=False,
+        )
+        payload = json.loads(result.stdout)
+        if payload.get("status") != status or (result.returncode == 0) != payload.get("ok"):
+            raise ValidationError(f"Expected {status}, got {result.stdout}{result.stderr}")
+        if diagnostic and diagnostic not in {item["code"] for item in payload["diagnostics"]}:
+            raise ValidationError(f"Expected diagnostic {diagnostic}, got {result.stdout}")
+        return payload
+
+    screen = {
+        "type": "frame", "name": "Sample Panel",
+        "style": {"width": 160, "height": 100, "backgroundColor": "#123456"},
+        "children": [{"type": "text", "name": "Caption", "content": "Sample Label"}],
+    }
+    project = root / "stitch-project"
+    command(root, "create", "stitch sample", "--directory", str(project), status="created")
+    source = root / "stitch-screen.json"
+    source.write_text(json.dumps(screen), encoding="utf-8")
+    command(project, "import", "stitch", str(source), status="imported")
+    lock = project / "design/import.lock.json"
+    materialized = project / "ui/generated/main.materialized.json"
+    frame = json.loads(materialized.read_text(encoding="utf-8"))["root"]
+    if (frame["name"] != "Sample Panel"
+            or frame["properties"]["layout"]["width"] != 160
+            or frame["properties"]["paint"]["backgroundColor"] != "#123456"
+            or frame["children"][0]["text"] != "Sample Label"):
+        raise ValidationError("Stitch screen import did not preserve the frame and its label")
+    command(project, "design", "check", status="design_clean")
+    command(project, "reimport", "--source", str(source), status="reimport_unchanged")
+    before = lock.read_bytes()
+    source.write_text(json.dumps({**screen, "name": "Renamed Panel"}), encoding="utf-8")
+    command(project, "reimport", "--source", str(source), status="reimported")
+    command(project, "design", "check", status="design_clean")
+    if lock.read_bytes() == before:
+        raise ValidationError("Changed Stitch screen did not advance the import lock")
+
+    html_project = root / "stitch-html-project"
+    command(root, "create", "stitch html sample", "--directory", str(html_project), status="created")
+    html = root / "code.html"
+    page = ("<!DOCTYPE html><html><head><title>Sample Screen</title>"
+            "<script>tailwind.config = {}</script></head>"
+            "<body><main><h1>Sample Title</h1><button>Sample Action</button></main></body></html>")
+    html.write_text(page, encoding="utf-8")
+    command(html_project, "import", "--source-type", "stitch", str(html), status="imported",
+            diagnostic="ir.fallback-used")
+    root_node = json.loads(
+        (html_project / "ui/generated/main.materialized.json").read_text(encoding="utf-8")
+    )["root"]
+    if [child.get("text") for child in root_node["children"]] != ["Sample Title", "Sample Action"]:
+        raise ValidationError("Stitch HTML import did not keep visible text and drop script and title")
+    html_lock = html_project / "design/import.lock.json"
+    command(html_project, "reimport", "--source", str(html), status="reimport_unchanged")
+    before = html_lock.read_bytes()
+    html.write_text(page.replace("Sample Title", "Changed Title"), encoding="utf-8")
+    command(html_project, "reimport", "--source", str(html), status="reimported")
+    if html_lock.read_bytes() == before:
+        raise ValidationError("Changed Stitch HTML did not advance the import lock")
+
+
 def validate_installed_frame_import(prefix: Path, root: Path, env: dict[str, str], lane: str) -> None:
     def command(project: Path, *args: str, status: str) -> None:
         result = subprocess.run(
@@ -982,6 +1047,7 @@ def validate(
         if native_enabled:
             validate_installed_source_imports(prefix, root, journey_env)
             validate_installed_frame_import(prefix, root, journey_env, "v0")
+            validate_installed_stitch_import(prefix, root, journey_env)
             for name, arguments in {
                 "build": ["build"],
                 "run": ["run", "--self-test", "--no-build"],
