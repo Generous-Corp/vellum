@@ -43,6 +43,16 @@ install(TARGETS vellum-source-adapter RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR
 install(FILES "${PROJECT_SOURCE_DIR}/product/source-detection.json"
     DESTINATION "${CMAKE_INSTALL_DATADIR}/vellum")
 
+# Scores a rendered panel against the design it was meant to realize. Kept a
+# tool rather than a test: it is pointed at whichever pair is being compared.
+add_executable(vellum-design-ab src/design_ab_main.cpp)
+target_compile_features(vellum-design-ab PRIVATE cxx_std_20)
+target_link_libraries(vellum-design-ab PRIVATE Vellum::DesignPipeline)
+set_target_properties(vellum-design-ab PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-skia-dawn-provider>")
+
 if(VELLUM_BUILD_TESTS)
     add_executable(vellum-design-pipeline-test tests/design_pipeline_test.cpp)
     target_link_libraries(vellum-design-pipeline-test PRIVATE Vellum::DesignPipeline)
@@ -156,3 +166,7 @@ if(VELLUM_BUILD_TESTS)
     add_test(NAME vellum.design-emitter-conformance
         COMMAND vellum-design-emitter-conformance)
 endif()
+
+# `vellum design-debug`, kept inside this folder because it consumes the mirrored
+# view, script and state units the way the pipeline does.
+add_subdirectory(design_debug)

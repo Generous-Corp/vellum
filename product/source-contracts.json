@@ -25,7 +25,6 @@
         "tests": ["ctest:vellum.framework.design-import-jsx-runtime", "ctest:vellum.import-detect-data", "lane:cli/tests/test_html_source.py"],
         "fixtures": ["fixtures/source-detection/claude/2024.10/example.html"],
         "journey": null,
-        "journey_required": false,
         "render_reference": {"status": "not-applicable", "path": null}
       },
       "pending": [],
@@ -52,7 +51,6 @@
         "tests": ["lane:cli/tests/test_html_source.py", "lane:cli/tests/test_web_backend.py", "ctest:vellum.app-host-html-import-geometry"],
         "fixtures": ["fixtures/html-import/index.html"],
         "journey": null,
-        "journey_required": false,
         "render_reference": {"status": "not-applicable", "path": null}
       },
       "pending": [],
@@ -82,7 +80,6 @@
         "tests": ["ctest:vellum.design-pipeline", "ctest:vellum.import-detect-data", "ctest:vellum.source-adapter-detect"],
         "fixtures": ["fixtures/source-detection/stitch/2025.04/code.html"],
         "journey": null,
-        "journey_required": true,
         "render_reference": {"status": "pending", "path": null}
       },
       "pending": [
@@ -117,7 +114,6 @@
         "tests": ["ctest:vellum.design-pipeline", "ctest:vellum.import-detect-data"],
         "fixtures": ["fixtures/source-detection/designmd/alpha/DESIGN.md"],
         "journey": "scripts/validate_installed_sdk.py::validate_installed_source_imports[designmd]",
-        "journey_required": true,
         "render_reference": {"status": "not-applicable", "path": null}
       },
       "pending": [
@@ -147,7 +143,6 @@
         "tests": ["ctest:vellum.design-pipeline"],
         "fixtures": [],
         "journey": "scripts/validate_installed_sdk.py::validate_installed_source_imports[pencil]",
-        "journey_required": true,
         "render_reference": {"status": "pending", "path": null}
       },
       "pending": [
@@ -181,7 +176,6 @@
         "tests": ["ctest:vellum.design-pipeline", "lane:cli/tests/test_import_backend.py"],
         "fixtures": ["fixtures/design-ir/revision-a.source.json"],
         "journey": "scripts/validate_installed_sdk.py::validate[figma]",
-        "journey_required": true,
         "render_reference": {"status": "pending", "path": null}
       },
       "pending": [
@@ -213,7 +207,6 @@
         "tests": ["lane:cli/tests/test_import_backend.py", "package:packages/vellum-design-ir/test/figma-plugin.test.js", "ctest:vellum.design-emitter-conformance"],
         "fixtures": ["fixtures/design-ir/figma-plugin-a.export.json"],
         "journey": "scripts/validate_installed_sdk.py::validate_installed_frame_import[figma-plugin]",
-        "journey_required": false,
         "render_reference": {"status": "not-applicable", "path": null}
       },
       "pending": [],
@@ -241,7 +234,6 @@
         "tests": ["lane:cli/tests/test_import_backend.py"],
         "fixtures": [],
         "journey": null,
-        "journey_required": false,
         "render_reference": {"status": "not-applicable", "path": null}
       },
       "pending": [
@@ -272,7 +264,6 @@
         "tests": ["lane:cli/tests/test_cli.py"],
         "fixtures": [],
         "journey": "scripts/validate_installed_sdk.py::validate_installed_frame_import[v0]",
-        "journey_required": true,
         "render_reference": {"status": "pending", "path": null}
       },
       "pending": [
@@ -303,7 +294,6 @@
         "tests": ["ctest:vellum.framework.design-import-jsx-runtime", "ctest:vellum.framework.react-materialization", "lane:cli/tests/test_import_backend.py"],
         "fixtures": [],
         "journey": null,
-        "journey_required": true,
         "render_reference": {"status": "pending", "path": null}
       },
       "pending": [
@@ -337,7 +327,6 @@
         "tests": [],
         "fixtures": [],
         "journey": null,
-        "journey_required": true,
         "render_reference": {"status": "pending", "path": null}
       },
       "pending": [
@@ -371,7 +360,6 @@
         "tests": ["ctest:vellum.framework.design-import-jsx-runtime", "ctest:vellum.framework.react-materialization", "lane:cli/tests/test_import_backend.py"],
         "fixtures": [],
         "journey": null,
-        "journey_required": true,
         "render_reference": {"status": "pending", "path": null}
       },
       "pending": [
