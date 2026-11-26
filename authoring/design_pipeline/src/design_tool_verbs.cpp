@@ -15,6 +15,17 @@
 #include <choc/text/choc_JSON.h>
 #include <choc/text/choc_UTF8.h>
 
+#if defined(_WIN32)
+#include <windows.h>
+#include <atomic>
+#include <cstdio>
+#else
+#include <cerrno>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <cstdlib>
+#endif
+
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -23,6 +34,7 @@
 #include <map>
 #include <sstream>
 #include <system_error>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -80,21 +92,58 @@ std::string read_text_file(const fs::path& p) {
 // file intact rather than truncated. Matters most for the ledger sidecar, whose
 // recorded history must survive an interrupted record.
 bool write_text_file(const fs::path& p, const std::string& content) {
-    fs::path tmp = p;
-    tmp += ".vellum-tmp";
-    {
-        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
-        if (!f.is_open()) return false;
-        f << content;
-        f.flush();
-        if (!f.good()) {
-            f.close();
-            std::error_code ec;
-            fs::remove(tmp, ec);
-            return false;
+    // The temp file has a unique, unpredictable name and is created exclusively
+    // (O_EXCL, never following a symlink), so a pre-created symlink cannot
+    // redirect the write and concurrent invocations never share a temp path.
+    fs::path dir = p.parent_path();
+    if (dir.empty()) dir = ".";
+    const std::string tmpl = (dir / (p.filename().string() + ".vellum-tmp.XXXXXX")).string();
+#if defined(_WIN32)
+    fs::path tmp;
+    FILE* fp = nullptr;
+    for (int attempt = 0; attempt < 16 && !fp; ++attempt) {
+        static std::atomic<unsigned> counter{0};
+        tmp = dir / (p.filename().string() + ".vellum-tmp." +
+                     std::to_string(GetCurrentProcessId()) + "." +
+                     std::to_string(counter.fetch_add(1)) + "." +
+                     std::to_string(GetTickCount64()));
+        fp = _wfopen(tmp.c_str(), L"wbx");  // 'x': fail if the path exists
+    }
+    if (!fp) return false;
+    bool ok = std::fwrite(content.data(), 1, content.size(), fp) == content.size();
+    ok = (std::fflush(fp) == 0) && ok;
+    ok = (std::fclose(fp) == 0) && ok;
+#else
+    std::vector<char> buf(tmpl.begin(), tmpl.end());
+    buf.push_back('\0');
+    const int fd = ::mkstemp(buf.data());  // O_CREAT|O_EXCL, mode 0600
+    if (fd < 0) return false;
+    const fs::path tmp(buf.data());
+    // Match a normal file's mode (0666 & ~umask) rather than mkstemp's 0600.
+    const mode_t um = ::umask(0);
+    ::umask(um);
+    ::fchmod(fd, static_cast<mode_t>(0666 & ~um));
+    bool ok = true;
+    const char* data = content.data();
+    size_t left = content.size();
+    while (left > 0 && ok) {
+        const ssize_t n = ::write(fd, data, left);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            ok = false;
+        } else {
+            data += n;
+            left -= static_cast<size_t>(n);
         }
     }
+    ok = (::fsync(fd) == 0 || errno == EINVAL || errno == ENOTSUP) && ok;
+    ok = (::close(fd) == 0) && ok;
+#endif
     std::error_code ec;
+    if (!ok) {
+        fs::remove(tmp, ec);
+        return false;
+    }
     fs::rename(tmp, p, ec);
     if (ec) {
         fs::remove(tmp, ec);

@@ -121,6 +121,22 @@ class DesignToolCliTests(unittest.TestCase):
         self.assert_parse_error(rejected)
         self.assertNotIn('"manifest_version"', rejected.stdout)
 
+    @unittest.skipIf(os.name == "nt", "symlink pre-creation is POSIX-only")
+    def test_write_does_not_follow_predictable_temp_symlink(self) -> None:
+        # A pre-created symlink at the old predictable sibling temp path must
+        # not redirect compile output to an arbitrary target.
+        victim = self.write("victim.txt", "KEEP")
+        out = self.root / "out"
+        out.mkdir()
+        for name in ("design-manifest.json", "design-binding-prompt.md"):
+            (out / (name + ".vellum-tmp")).symlink_to(victim)
+        written = self.design("compile", "--out-dir", "out")
+        self.assertEqual(written.returncode, 0, written.stderr)
+        self.assertEqual(victim.read_text(encoding="utf-8"), "KEEP")
+        manifest = out / "design-manifest.json"
+        self.assertTrue(manifest.is_file() and not manifest.is_symlink())
+        json.loads(manifest.read_text(encoding="utf-8"))
+
     def test_lint_adherence(self) -> None:
         clean = self.write("ui.js", "export const el = 1;\n")
         passed = self.design("lint-adherence", str(clean))
