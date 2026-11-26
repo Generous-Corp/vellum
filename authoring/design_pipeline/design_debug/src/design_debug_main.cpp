@@ -5,6 +5,7 @@
 // a model; otherwise the tool's AI CLI template is run.
 
 #include <vellum/view/view.hpp>
+#include <vellum/view/data_display.hpp>
 #include <vellum/view/theme.hpp>
 #include <vellum/view/script_engine.hpp>
 #include <vellum/view/widget_bridge.hpp>
@@ -64,7 +65,73 @@ struct Options {
     uint64_t delay_ms = 350;
     uint64_t after_delay_ms = 350;
     bool debug_json = true;
+    bool force_placeholder_displays = false;
 };
+
+// Audio displays (meters, waveforms, spectra) come from an audio display
+// provider. Without one the design tool's preview cannot build, so the runner
+// stands in a placeholder that paints a red-outlined, labelled box. A run that
+// used any placeholder says so in its report, its run log and its output, so
+// it can never be read as a full-fidelity capture.
+constexpr const char* kAudioDisplayIds[] = {"pulp.level", "pulp.series", "pulp.bins"};
+
+void paint_audio_display_placeholder(vellum::canvas::Canvas& canvas, const Rect& bounds) {
+    canvas.set_fill_color(vellum::canvas::Color::rgba(0.85f, 0.2f, 0.2f, 0.18f));
+    canvas.fill_rect(0.0f, 0.0f, bounds.width, bounds.height);
+    canvas.set_stroke_color(vellum::canvas::Color::rgba(0.9f, 0.25f, 0.25f, 1.0f));
+    canvas.set_line_width(1.0f);
+    canvas.stroke_rect(0.5f, 0.5f, bounds.width - 1.0f, bounds.height - 1.0f);
+    canvas.set_fill_color(vellum::canvas::Color::rgba(0.95f, 0.6f, 0.6f, 1.0f));
+    canvas.fill_text("audio display placeholder", 4.0f, 14.0f);
+}
+
+class PlaceholderLevelDisplay final : public View, public LevelDisplay {
+  public:
+    void paint(vellum::canvas::Canvas& canvas) override { paint_audio_display_placeholder(canvas, bounds()); }
+    void set_levels(float, float) override {}
+    void set_level_orientation(Orientation) override {}
+    void set_level_fill(std::optional<vellum::canvas::Color>, std::vector<vellum::canvas::Color>) override {}
+    void clear_level_fill() override {}
+    void set_level_bar_ratio(float) override {}
+    void set_level_render_style(WidgetRenderStyle) override {}
+};
+
+class PlaceholderSeriesDisplay final : public View, public SeriesDisplay {
+  public:
+    void paint(vellum::canvas::Canvas& canvas) override { paint_audio_display_placeholder(canvas, bounds()); }
+    void set_series(const float*, std::size_t) override {}
+    void set_series_preview(std::string_view) override {}
+};
+
+class PlaceholderBinDisplay final : public View, public BinDisplay {
+  public:
+    void paint(vellum::canvas::Canvas& canvas) override { paint_audio_display_placeholder(canvas, bounds()); }
+    void set_bins(const float*, std::size_t) override {}
+};
+
+std::unique_ptr<View> make_placeholder_level() { return std::make_unique<PlaceholderLevelDisplay>(); }
+std::unique_ptr<View> make_placeholder_series() { return std::make_unique<PlaceholderSeriesDisplay>(); }
+std::unique_ptr<View> make_placeholder_bins() { return std::make_unique<PlaceholderBinDisplay>(); }
+
+// Registers a placeholder for every audio display no provider registered, or
+// for all of them when forced. Returns "real" when every display is a
+// provider's and "placeholder" when any is a stand-in.
+const char* prepare_audio_displays(bool force_placeholder) {
+    const DataDisplayFactory placeholders[] = {make_placeholder_level, make_placeholder_series,
+                                               make_placeholder_bins};
+    bool any_placeholder = false;
+    for (std::size_t i = 0; i < std::size(kAudioDisplayIds); ++i) {
+        if (force_placeholder || !has_data_display(kAudioDisplayIds[i])) {
+            register_data_display({kAudioDisplayIds[i], placeholders[i], {}});
+            any_placeholder = true;
+        }
+    }
+    return any_placeholder ? "placeholder" : "real";
+}
+
+constexpr const char* kPlaceholderWarning =
+    "Audio displays (meters, waveforms, spectra) are placeholders: no audio display provider "
+    "is linked, so those widgets render as red-outlined boxes. This capture is not full fidelity.";
 
 std::string read_file(const fs::path& path) {
     std::ifstream f(path, std::ios::binary);
@@ -163,7 +230,7 @@ fs::path find_repo_root() {
     auto dir = fs::current_path();
     while (!dir.empty()) {
         if (fs::exists(dir / "CMakeLists.txt")
-            && fs::exists(dir / "examples" / "design-tool" / kDesignToolEntry)) {
+            && fs::exists(dir / "apps" / "design-tool" / kDesignToolEntry)) {
             return dir;
         }
         auto parent = dir.parent_path();
@@ -174,7 +241,7 @@ fs::path find_repo_root() {
 }
 
 fs::path find_default_script(const fs::path& repo_root) {
-    auto path = repo_root / "examples" / "design-tool" / kDesignToolEntry;
+    auto path = repo_root / "apps" / "design-tool" / kDesignToolEntry;
     if (fs::exists(path)) return path;
     return {};
 }
@@ -206,7 +273,7 @@ void load_design_tool(const fs::path& script_path, WidgetBridge& bridge) {
 void print_usage() {
     std::cerr << "Usage: vellum-design-debug --prompt <text> [options]\n";
     std::cerr << "  --target <id|all>            Scope prompt to a widget like k1, slider1, t1\n";
-    std::cerr << "  --script <file.js>           Design tool entry module (default: examples/design-tool/design-tool-core.js)\n";
+    std::cerr << "  --script <file.js>           Design tool entry module (default: apps/design-tool/design-tool-core.js)\n";
     std::cerr << "  --output-dir <dir>           Artifact directory (default: build/design-debug)\n";
     std::cerr << "  --response-file <file.txt>   Use a saved model response instead of calling AI\n";
     std::cerr << "  --provider <name>            Metadata provider name (default: claude)\n";
@@ -220,6 +287,7 @@ void print_usage() {
     std::cerr << "  --design-tool-bin <path>     Live design-tool binary for --capture-backend live-gpu\n";
     std::cerr << "  --delay-ms <ms>              Delay before baseline capture in live-gpu mode (default: 350)\n";
     std::cerr << "  --after-delay-ms <ms>        Delay before post-apply capture in live-gpu mode (default: 350)\n";
+    std::cerr << "  --audio-displays <mode>      auto (a provider's displays, else placeholders) or placeholder\n";
 }
 
 std::string shell_quote(std::string_view text) {
@@ -362,6 +430,14 @@ int main(int argc, char* argv[]) {
             else if (arg == "--design-tool-bin" && i + 1 < argc) opts.design_tool_bin = argv[++i];
             else if (arg == "--delay-ms" && i + 1 < argc) opts.delay_ms = static_cast<uint64_t>(std::stoull(argv[++i]));
             else if (arg == "--after-delay-ms" && i + 1 < argc) opts.after_delay_ms = static_cast<uint64_t>(std::stoull(argv[++i]));
+            else if (arg == "--audio-displays" && i + 1 < argc) {
+                const std::string value = argv[++i];
+                if (value == "placeholder") opts.force_placeholder_displays = true;
+                else if (value != "auto") {
+                    std::cerr << "Unknown audio display mode: " << value << "\n";
+                    return 1;
+                }
+            }
             else if (arg == "--capture-backend" && i + 1 < argc) {
                 auto value = std::string(argv[++i]);
                 if (value == "coregraphics") {
@@ -418,6 +494,13 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     fs::create_directories(opts.output_dir);
+    // The live GPU path runs the design tool's own binary, which brings its
+    // own displays; the headless path decides here.
+    const char* audio_displays = opts.capture_mode == CaptureMode::live_gpu
+        ? "design-tool-binary"
+        : prepare_audio_displays(opts.force_placeholder_displays);
+    const bool placeholder_displays = std::string_view(audio_displays) == "placeholder";
+    if (placeholder_displays) std::cerr << "Warning: " << kPlaceholderWarning << "\n";
 
     auto stamp = now_stamp();
     auto stem = stamp + "-" + slugify(opts.target == "all" ? "all" : opts.target) + "-" +
@@ -696,7 +779,9 @@ int main(int argc, char* argv[]) {
     report << "  \"requested_capture_backend\": \"" << capture_mode_flag_name(opts.capture_mode, opts.capture_backend) << "\",\n";
     report << "  \"sksl_gpu_supported\": " << (opts.capture_mode == CaptureMode::live_gpu ? "true" : "false") << ",\n";
     report << "  \"widget_sksl_render_supported\": " << (capture_mode_supports_widget_sksl(opts.capture_mode, opts.capture_backend) ? "true" : "false") << ",\n";
+    report << "  \"audio_displays\": \"" << audio_displays << "\",\n";
     report << "  \"warnings\": [\n";
+    if (placeholder_displays) report << "    \"" << json_escape(kPlaceholderWarning) << "\",\n";
     if (opts.capture_mode == CaptureMode::live_gpu) {
         report << "    \"This run used the live GPU design tool automation path, so the before/after artifacts reflect the real Skia/Graphite widget render path instead of the offscreen headless fallback.\"\n";
     } else if (opts.capture_backend == ScreenshotBackend::skia) {
@@ -782,6 +867,7 @@ int main(int argc, char* argv[]) {
     run_summary << "\"provider\":\"" << json_escape(opts.provider) << "\",";
     run_summary << "\"model\":\"" << json_escape(opts.model) << "\",";
     run_summary << "\"reasoning_effort\":\"" << json_escape(opts.reasoning_effort) << "\",";
+    run_summary << "\"audio_displays\":\"" << audio_displays << "\",";
     run_summary << "\"render_backend\":\"" << capture_mode_report_name(opts.capture_mode, opts.capture_backend) << "\",";
     run_summary << "\"widget_sksl_render_supported\":" << (capture_mode_supports_widget_sksl(opts.capture_mode, opts.capture_backend) ? "true" : "false") << ",";
     run_summary << "\"similarity_pct\":" << static_cast<int>(compare.similarity * 100.0f) << ",";
@@ -826,6 +912,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Report → " << report_path << "\n";
     std::cout << "Latest report → " << latest_report_path << "\n";
     std::cout << "Applied → " << apply_summary << "\n";
+    if (placeholder_displays) std::cout << "Audio displays: PLACEHOLDER (not full fidelity)\n";
     std::cout << "Visual change: " << static_cast<int>(compare.similarity * 100.0f)
               << "% similarity (" << compare.diff_pixels << "/" << compare.total_pixels
               << " pixels differ)\n";
