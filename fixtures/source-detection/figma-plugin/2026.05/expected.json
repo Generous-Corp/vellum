@@ -1,0 +1,10 @@
+{
+  "_comment": "Detection expectations for the figma-plugin fixture: both json-key-equals clauses (provenance.adapter and format_version) must match.",
+  "source": "figma-plugin",
+  "format-version": "2026.05-figma-plugin-v1",
+  "parser-version": "0.1.0",
+  "matched-clauses": 2,
+  "total-clauses": 2,
+  "min-confidence-pct": 95,
+  "fingerprint-kinds": ["json-key-equals"]
+}

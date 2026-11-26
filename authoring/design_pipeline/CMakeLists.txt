@@ -71,6 +71,8 @@ if(VELLUM_BUILD_TESTS)
 
     add_executable(vellum-import-detect-data-test tests/import_detect_data_test.cpp)
     target_link_libraries(vellum-import-detect-data-test PRIVATE vellum-import-detect)
+    target_include_directories(vellum-import-detect-data-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src" "${VELLUM_MIRROR_CHOC_ROOT}")
     target_compile_definitions(vellum-import-detect-data-test PRIVATE
         VELLUM_SOURCE_DETECTION_JSON="${PROJECT_SOURCE_DIR}/product/source-detection.json"
         VELLUM_SOURCE_DETECTION_FIXTURES="${PROJECT_SOURCE_DIR}/fixtures/source-detection")
