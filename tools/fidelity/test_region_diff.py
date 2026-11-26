@@ -142,6 +142,20 @@ class TestSchemaValidation(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertIn("threshold", result.stderr)
 
+    def test_out_of_frame_or_empty_rectangles_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tdir:
+            tmp = Path(tdir)
+            self._assert_load_regions_error(
+                tmp,
+                {"r1": {"x": 0.75, "y": 0.0, "w": 0.5, "h": 0.5}},
+                "contained in the normalized 0..1 frame",
+            )
+            self._assert_load_regions_error(
+                tmp,
+                {"r1": {"x": 0.0, "y": 0.0, "w": 0.0, "h": 0.5}},
+                "positive",
+            )
+
     def test_load_regions_direct_errors_cover_schema_branches(self) -> None:
         with tempfile.TemporaryDirectory() as tdir:
             tmp = Path(tdir)

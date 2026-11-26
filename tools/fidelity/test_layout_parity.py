@@ -378,6 +378,15 @@ class TestCli(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertIn("--dump-layout", result.stderr)
 
+    def test_an_empty_geometry_document_is_a_usage_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = pathlib.Path(tmp)
+            dump = self.write_pair(td, {"nodes": [{"node_id": "empty"}]},
+                                   layout(view("empty", 0, 0)))
+            result = self.run_tool(str(dump))
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("no usable reference rectangles", result.stderr)
+
     def test_json_report_is_written_and_is_not_capped_by_max_findings(self):
         with tempfile.TemporaryDirectory() as tmp:
             td = pathlib.Path(tmp)

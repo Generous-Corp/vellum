@@ -41,6 +41,7 @@ Exit codes:
 from __future__ import annotations
 import argparse
 import json
+import math
 import sys
 from collections import Counter
 from pathlib import Path
@@ -356,6 +357,16 @@ def load_regions(path: Path | None) -> dict:
                     file=sys.stderr,
                 )
                 sys.exit(2)
+        x, y, w, h = (float(region[key]) for key in ("x", "y", "w", "h"))
+        if (not all(math.isfinite(value) for value in (x, y, w, h))
+                or w <= 0.0 or h <= 0.0
+                or x < 0.0 or y < 0.0 or x + w > 1.0 or y + h > 1.0):
+            print(
+                f"error: region '{name}' rectangle must be finite, positive, "
+                "and contained in the normalized 0..1 frame",
+                file=sys.stderr,
+            )
+            sys.exit(2)
         for threshold_name in ("threshold", "edge_threshold", "coverage_floor", "max_uncovered_fraction"):
             if threshold_name not in region:
                 continue

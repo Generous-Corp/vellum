@@ -161,7 +161,12 @@ def _rect(entry: dict[str, Any]) -> Rect | None:
 
 def load_geometry(path: pathlib.Path) -> tuple[dict[str, Rect], dict[str, dict]]:
     """The design's solved rects, keyed by node id, plus each node's metadata."""
-    doc = json.loads(path.read_text())
+    try:
+        doc = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise CaptureInputError(f"cannot read geometry {path}: {error}") from None
+    if not isinstance(doc, dict) or not isinstance(doc.get("nodes"), list):
+        raise CaptureInputError(f"geometry {path} has no nodes list")
     rects: dict[str, Rect] = {}
     meta: dict[str, dict] = {}
     for node in doc.get("nodes", []):
@@ -177,6 +182,8 @@ def load_geometry(path: pathlib.Path) -> tuple[dict[str, Rect], dict[str, dict]]
             "type": node.get("type") or "",
             "parent_id": node.get("parent_id"),
         }
+    if not rects:
+        raise CaptureInputError(f"geometry {path} has no usable reference rectangles")
     return rects, meta
 
 
@@ -731,7 +738,11 @@ def _run_dump(args: argparse.Namespace) -> dict | None:
                 print("hint: pass --geometry, or re-run the import with --dump-layout "
                       "(which writes this sidecar next to the dump).", file=sys.stderr)
             return None
-    return compare(geometry, args.layout, args.tolerance, args.gate_px)
+    try:
+        return compare(geometry, args.layout, args.tolerance, args.gate_px)
+    except CaptureInputError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return None
 
 
 def main(argv: list[str] | None = None) -> int:
