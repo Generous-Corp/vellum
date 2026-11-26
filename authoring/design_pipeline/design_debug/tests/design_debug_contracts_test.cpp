@@ -520,4 +520,113 @@ function getDesignDebugStateJson() {
     std::filesystem::remove_all(temp, ec);
 }
 
+namespace {
+
+// A stand-in for a real audio display provider: paints a solid fill, so a
+// capture shows whether the provider's widget or the runner's placeholder drew.
+class ProviderLevelDisplay final : public View, public LevelDisplay {
+  public:
+    void paint(vellum::canvas::Canvas& canvas) override {
+        canvas.set_fill_color(vellum::canvas::Color::rgba(0.1f, 0.8f, 0.3f, 1.0f));
+        canvas.fill_rect(0.0f, 0.0f, bounds().width, bounds().height);
+    }
+    void set_levels(float, float) override {}
+    void set_level_orientation(Orientation) override {}
+    void set_level_fill(std::optional<vellum::canvas::Color>, std::vector<vellum::canvas::Color>) override {}
+    void clear_level_fill() override {}
+    void set_level_bar_ratio(float) override {}
+    void set_level_render_style(WidgetRenderStyle) override {}
+};
+
+std::unique_ptr<View> make_provider_level() { return std::make_unique<ProviderLevelDisplay>(); }
+
+constexpr const char* kMeterScript = R"JS(
+createLabel('target1', 'Before', 10, 10, 120, 24);
+createMeter('m1', 'horizontal', '');
+setFlex('m1', 'width', 160);
+setFlex('m1', 'height', 30);
+function setDesignDebugTarget(id) {}
+function clearInspectedComponent() {}
+function setDesignDebugAIConfig(provider, model, effort) {}
+function buildDesignChatPrompt(prompt) { return 'prompt:' + prompt; }
+function applyDesignChatResponse(response) { setText('target1', response); return 'applied'; }
+function getDesignDebugStateJson() { return '{}'; }
+)JS";
+
+struct MeterRun {
+    int exit_code = -1;
+    std::string report;
+    std::string run_log;
+    std::vector<uint8_t> after_png;
+};
+
+MeterRun run_meter_script(const std::string& name, std::vector<std::string> extra = {}) {
+    auto temp = make_temp_dir(name);
+    auto script = temp / "meter-tool.js";
+    auto response = temp / "response.txt";
+    auto output = temp / "artifacts";
+    write_text_file(script, kMeterScript);
+    write_text_file(response, "After");
+    std::vector<std::string> args = {
+        "vellum-design-debug", "--prompt", "meter check", "--script", script.string(),
+        "--response-file", response.string(), "--ai-cli", "sh -c 'exit 97'",
+        "--output-dir", output.string(), "--width", "200", "--height", "90", "--scale", "1"};
+    args.insert(args.end(), extra.begin(), extra.end());
+    MeterRun run;
+    run.exit_code = run_design_debug(args);
+    run.report = read_file(output / "latest-report.json");
+    run.run_log = read_file(output / "runs.jsonl");
+    auto latest = read_file(output / "latest-run.json");
+    auto key = std::string("\"after_image\":\"");
+    auto at = latest.find(key);
+    if (at != std::string::npos) {
+        auto end = latest.find('"', at + key.size());
+        run.after_png = read_binary_file(latest.substr(at + key.size(), end - at - key.size()));
+    }
+    std::error_code ec;
+    std::filesystem::remove_all(temp, ec);
+    return run;
+}
+
+} // namespace
+
+TEST_CASE("design-debug marks a run without an audio display provider as placeholder",
+          "[tools][design-debug]") {
+#if !defined(__APPLE__)
+    return;  // artifact comparison needs the native screenshot backend
+#endif
+    clear_data_displays();
+    auto run = run_meter_script("placeholder-displays");
+    REQUIRE(run.exit_code == 0);
+    REQUIRE(run.report.find(R"("audio_displays": "placeholder")") != std::string::npos);
+    REQUIRE(run.report.find("This capture is not full fidelity") != std::string::npos);
+    REQUIRE(run.run_log.find(R"("audio_displays":"placeholder")") != std::string::npos);
+    clear_data_displays();
+}
+
+TEST_CASE("design-debug uses a registered audio display provider, and forcing placeholders shows",
+          "[tools][design-debug]") {
+#if !defined(__APPLE__)
+    return;  // artifact comparison needs the native screenshot backend
+#endif
+    clear_data_displays();
+    register_data_display({"pulp.level", make_provider_level, {}});
+    register_data_display({"pulp.series", make_provider_level, {}});
+    register_data_display({"pulp.bins", make_provider_level, {}});
+    auto real = run_meter_script("provider-displays");
+    REQUIRE(real.exit_code == 0);
+    REQUIRE(real.report.find(R"("audio_displays": "real")") != std::string::npos);
+    REQUIRE(real.report.find("This capture is not full fidelity") == std::string::npos);
+
+    // Control: the same run forced to placeholders reports so, and its meter
+    // region no longer shows the provider's paint.
+    auto forced = run_meter_script("forced-placeholder", {"--audio-displays", "placeholder"});
+    REQUIRE(forced.exit_code == 0);
+    REQUIRE(forced.report.find(R"("audio_displays": "placeholder")") != std::string::npos);
+    REQUIRE(!real.after_png.empty());
+    REQUIRE(!forced.after_png.empty());
+    REQUIRE(compare_screenshots(real.after_png, forced.after_png).diff_pixels > 0);
+    clear_data_displays();
+}
+
 int main() { return mini_test::run_all(); }
