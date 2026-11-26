@@ -168,11 +168,27 @@ class BakedEmitTests(unittest.TestCase):
         self.assertIn("design-ir", payload["message"])
         self.assertFalse((self.out / "ui.cpp").exists())
 
+    def test_html_offline_emits_visible_text_only(self) -> None:
+        code, payload = vellum("--source-type", "html", str(STATIC_FIXTURE), "--offline", "--mode", "baked",
+                               "--emit", "cpp", "--out", str(self.out / "ui.cpp"))
+        self.assertEqual(code, 0, payload)
+        source = (self.out / "ui.cpp").read_text(encoding="utf-8")
+        for text in ("Gain Stage", "Drive", "Output Trim"):
+            self.assertIn(text, source)
+        self.assertNotIn("never rendered", source)
+
+    def test_html_without_offline_is_refused(self) -> None:
+        code, payload = vellum("--source-type", "html", str(STATIC_FIXTURE), "--mode", "baked",
+                               "--emit", "swiftui", "--out", str(self.out / "Gain.swift"))
+        self.assertEqual(code, 2, payload)
+        self.assertIn("--offline", payload["message"])
+        self.assertFalse((self.out / "Gain.swift").exists())
+
     def test_offline_is_refused_for_a_structured_source(self) -> None:
         code, payload = vellum("--source-type", "design-ir", str(IR_FIXTURE), "--offline", "--mode", "baked",
                                "--emit", "cpp", "--out", str(self.out / "ui.cpp"))
         self.assertEqual(code, 2, payload)
-        self.assertIn("--offline applies only to --source-type claude-design", payload["message"])
+        self.assertIn("--offline applies only to --source-type claude-design, html", payload["message"])
 
     def test_offline_needs_a_baked_emit(self) -> None:
         code, payload = vellum("--source-type", "claude-design", str(STATIC_FIXTURE), "--offline")
