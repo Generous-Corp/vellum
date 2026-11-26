@@ -1,6 +1,8 @@
 #include <vellum/view/plugin_view_host.hpp>
 #include <vellum/view/input_events.hpp>
 #include <vellum/view/pointer_dispatch.hpp>
+#include <vellum/view/accessibility.hpp>
+#include <vellum/view/text_accessibility.hpp>
 #include <vellum/view/window_host.hpp>
 #include <vellum/render/gpu_surface.hpp>
 #include <vellum/render/skia_surface.hpp>
@@ -12,11 +14,76 @@
 #import <Cocoa/Cocoa.h>
 #include <objc/runtime.h>
 #include <cstdio>
+#include <vector>
+
+// Provided by the accessibility units compiled into this image: the window-host
+// element tree and the painted-text element lookup.
+namespace vellum::view {
+NSArray* build_accessibility_elements(View& root, NSView* host);
+}
+extern "C" void* vellum_text_accessibility_lookup_macos(const char* id_utf8);
 
 namespace vellum::view::detail {
 namespace {
 class MacPluginViewHost;
 Class host_class();
+
+// Mirrors the order build_accessibility_elements() walks: every descendant of
+// the root, parents before children, keeping the views that pass the shared
+// exposure gate. Each entry records whether the view and all its ancestors are
+// visible, so a hidden panel's contents stay out of the tree a screen reader
+// reads.
+void collect_exposure_flags(const View& parent, bool parent_visible, std::vector<bool>& out) {
+    for (std::size_t i = 0; i < parent.child_count(); ++i) {
+        const View* child = parent.child_at(i);
+        const bool visible = parent_visible && child->visible();
+        if (is_accessibility_element(*child)) out.push_back(visible);
+        collect_exposure_flags(*child, visible, out);
+    }
+}
+
+NSArray* editor_accessibility_children(VellumMirrorMetalView* host) {
+    NSMutableArray* children = [NSMutableArray array];
+    if (View* root = host.rootView) {
+        NSArray* elements = build_accessibility_elements(*root, host);
+        std::vector<bool> shown;
+        collect_exposure_flags(*root, root->visible(), shown);
+        const bool aligned = shown.size() == elements.count;
+        for (NSUInteger i = 0; i < elements.count; ++i) {
+            if (aligned && !shown[i]) continue;
+            [elements[i] setAccessibilityParent:host];
+            [children addObject:elements[i]];
+        }
+    }
+    // Painted text is registered apart from the view tree; without this merge a
+    // screen reader never reaches it.
+    for (const auto& node : snapshot_accessibility_nodes()) {
+        auto* element = (__bridge NSAccessibilityElement*)
+            vellum_text_accessibility_lookup_macos(node.id.c_str());
+        if (!element) continue;
+        [element setAccessibilityParent:host];
+        [children addObject:element];
+    }
+    return children;
+}
+
+// The editor view presents as one group whose children are the view tree's
+// accessible elements and the registered text elements.
+void install_accessibility(Class cls) {
+    auto add = [cls](SEL selector, const char* return_type, id block) {
+        char types[8];
+        std::snprintf(types, sizeof types, "%s@:", return_type);
+        class_addMethod(cls, selector, imp_implementationWithBlock(block), types);
+    };
+    add(@selector(isAccessibilityElement), @encode(BOOL), ^BOOL(id) { return YES; });
+    add(@selector(accessibilityRole), @encode(id), ^NSAccessibilityRole(id) {
+        return NSAccessibilityGroupRole;
+    });
+    add(@selector(accessibilityLabel), @encode(id), ^NSString*(id) { return @"Plugin UI"; });
+    add(@selector(accessibilityChildren), @encode(id), ^NSArray*(VellumMirrorMetalView* host) {
+        return editor_accessibility_children(host);
+    });
+}
 
 class MacPluginViewHost final : public PluginViewHost {
 public:
@@ -186,7 +253,7 @@ private:
 Class host_class() {
     static Class c=[] { char n[96]; std::snprintf(n,sizeof n,"VellumPluginViewHost_%p",reinterpret_cast<void*>(&host_class));
         if (Class old=objc_getClass(n)) return old; Class x=objc_allocateClassPair([VellumMirrorMetalView class],n,0);
-        objc_registerClassPair(x); return x; }(); return c;
+        install_accessibility(x); objc_registerClassPair(x); return x; }(); return c;
 }
 }
 
