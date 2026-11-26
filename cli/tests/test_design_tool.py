@@ -137,6 +137,13 @@ class DesignToolCliTests(unittest.TestCase):
         self.assertTrue(manifest.is_file() and not manifest.is_symlink())
         json.loads(manifest.read_text(encoding="utf-8"))
 
+    def test_record_refuses_malformed_ledger_assets(self) -> None:
+        self.write("ui.js", "export const el = 1;\n")
+        ledger = self.write(".pulp-design-meta.json", '{"assets":"corrupt"}')
+        refused = self.design("record", "--name", "new", "--asset", "ui.js")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertEqual(ledger.read_text(encoding="utf-8"), '{"assets":"corrupt"}')
+
     def test_lint_adherence(self) -> None:
         clean = self.write("ui.js", "export const el = 1;\n")
         passed = self.design("lint-adherence", str(clean))
@@ -185,6 +192,23 @@ class DesignToolDiscoveryTests(unittest.TestCase):
             env=env, text=True, capture_output=True, check=False,
         )
         self.assertEqual(completed.returncode, 4)
+        self.assertEqual(json.loads(completed.stdout)["status"], "capability_unavailable")
+
+    @unittest.skipIf(os.name == "nt", "POSIX file modes")
+    def test_non_executable_tool_reports_capability_unavailable(self) -> None:
+        tmp = tempfile.TemporaryDirectory(prefix="vellum-not-exec-")
+        self.addCleanup(tmp.cleanup)
+        tool = Path(tmp.name) / "not-exec"
+        tool.write_text("x", encoding="utf-8")
+        tool.chmod(0o644)
+        env = {k: v for k, v in os.environ.items() if k not in {"VELLUM_SDK_ROOT"}}
+        env["VELLUM_DESIGN_TOOL"] = str(tool)
+        completed = subprocess.run(
+            [sys.executable, str(CLI), "design", "md-lint", "DESIGN.md", "--json"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(completed.returncode, 4, completed.stderr)
+        self.assertNotIn("Traceback", completed.stderr)
         self.assertEqual(json.loads(completed.stdout)["status"], "capability_unavailable")
 
     def test_help_lists_every_design_verb(self) -> None:

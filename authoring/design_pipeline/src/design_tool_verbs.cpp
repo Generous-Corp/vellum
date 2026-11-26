@@ -560,6 +560,15 @@ int run_record(const std::vector<std::string>& rest) {
             try {
                 auto probe = choc::json::parse(raw);
                 valid = probe.isObject();
+                // parse_ledger silently drops malformed assets, so a ledger
+                // whose "assets" is not an array of objects must be refused
+                // here rather than rewritten as empty.
+                if (valid && probe.hasObjectMember("assets")) {
+                    const auto assets = probe["assets"];
+                    valid = assets.isArray();
+                    for (uint32_t i = 0; valid && i < assets.size(); ++i)
+                        valid = assets[i].isObject();
+                }
             } catch (...) {
                 // Catch-all, not catch(std::exception&): this CLI co-links Yoga
                 // (-fno-rtti), which shadows std::exception's typeinfo so choc's
@@ -569,7 +578,7 @@ int run_record(const std::vector<std::string>& rest) {
             }
             if (!valid) {
                 std::cerr << "Error: ledger " << ledger_path.string()
-                          << " is not valid JSON; refusing to touch it. "
+                          << " is not a valid ledger; refusing to touch it. "
                              "Fix or delete it first.\n";
                 return 1;
             }

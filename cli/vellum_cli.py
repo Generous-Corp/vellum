@@ -1662,7 +1662,14 @@ def design_tool_command(verb: str, arguments: list[str]) -> int:
             message=f"This SDK does not provide 'design {verb}'.",
         ), json_output="--json" in arguments)
         return EXIT_UNAVAILABLE
-    return subprocess.run([str(tool), verb, *arguments], check=False).returncode
+    try:
+        return subprocess.run([str(tool), verb, *arguments], check=False).returncode
+    except OSError as error:
+        emit(result(
+            "design", ok=False, status="capability_unavailable",
+            message=f"Cannot run the design tool for 'design {verb}': {error}.",
+        ), json_output="--json" in arguments)
+        return EXIT_UNAVAILABLE
 
 
 def ui_command(arguments: list[str], *, json_output: bool) -> int:
