@@ -11,6 +11,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <unordered_set>
 
@@ -472,11 +473,26 @@ TweakStore::from_json_locked(std::string_view json) {
     // it uses `$schema: "pulp-tweaks://v1"`). An explicit version
     // beyond what we understand is a hard error so we don't silently
     // discard fields we don't know about.
+    // Every present field must have its schema type; a mistyped field is
+    // reported before any state is committed.
+    auto malformed = [&](const char* what) {
+        result.error = std::string("Malformed pulp-tweaks.json: ") + what;
+        return result;
+    };
     int version = kSchemaVersion;
-    if (parsed.hasObjectMember("version") && parsed["version"].isInt32()) {
-        version = parsed["version"].getInt32();
-    } else if (parsed.hasObjectMember("version") && parsed["version"].isInt64()) {
-        version = static_cast<int>(parsed["version"].getInt64());
+    if (parsed.hasObjectMember("version")) {
+        auto v = parsed["version"];
+        if (v.isInt32()) {
+            version = v.getInt32();
+        } else if (v.isInt64()) {
+            const auto wide = v.getInt64();
+            if (wide < std::numeric_limits<int>::min() ||
+                wide > std::numeric_limits<int>::max())
+                return malformed("`version` is out of range");
+            version = static_cast<int>(wide);
+        } else {
+            return malformed("`version` is not an integer");
+        }
     }
     if (version != kSchemaVersion) {
         result.error = "Unsupported pulp-tweaks.json version: " +
@@ -496,14 +512,17 @@ TweakStore::from_json_locked(std::string_view json) {
         }
     }
 
-    if (parsed.hasObjectMember("tweaks") && parsed["tweaks"].isObject()) {
+    if (parsed.hasObjectMember("tweaks")) {
+        if (!parsed["tweaks"].isObject())
+            return malformed("`tweaks` is not an object");
         auto tweaks_obj = parsed["tweaks"];
         for (uint32_t i = 0; i < tweaks_obj.size(); ++i) {
             auto anchor_member = tweaks_obj.getObjectMemberAt(i);
             std::string anchor(anchor_member.name);
             auto& anchor_map = new_tweaks[anchor];
             auto inner = anchor_member.value;
-            if (!inner.isObject()) continue;  // skip malformed anchor
+            if (!inner.isObject())
+                return malformed("a `tweaks` anchor record is not an object");
             for (uint32_t j = 0; j < inner.size(); ++j) {
                 auto path_member = inner.getObjectMemberAt(j);
                 Entry entry{
@@ -517,26 +536,31 @@ TweakStore::from_json_locked(std::string_view json) {
     // sources are an additive overlay onto `new_tweaks`. Missing
     // sources OR sources without a matching tweak entry are silently
     // ignored, they can't hurt round-trip fidelity.
-    if (parsed.hasObjectMember("sources") && parsed["sources"].isObject()) {
+    if (parsed.hasObjectMember("sources")) {
+        if (!parsed["sources"].isObject())
+            return malformed("`sources` is not an object");
         auto sources_obj = parsed["sources"];
         for (uint32_t i = 0; i < sources_obj.size(); ++i) {
             auto anchor_member = sources_obj.getObjectMemberAt(i);
-            auto it = new_tweaks.find(std::string(anchor_member.name));
-            if (it == new_tweaks.end()) continue;
             auto inner = anchor_member.value;
-            if (!inner.isObject()) continue;
+            if (!inner.isObject())
+                return malformed("a `sources` anchor record is not an object");
+            auto it = new_tweaks.find(std::string(anchor_member.name));
             for (uint32_t j = 0; j < inner.size(); ++j) {
                 auto path_member = inner.getObjectMemberAt(j);
+                if (!path_member.value.isString())
+                    return malformed("a `sources` value is not a string");
+                if (it == new_tweaks.end()) continue;
                 auto pit = it->second.find(std::string(path_member.name));
                 if (pit == it->second.end()) continue;
-                if (path_member.value.isString()) {
-                    pit->second.source = std::string(path_member.value.getString());
-                }
+                pit->second.source = std::string(path_member.value.getString());
             }
         }
     }
 
-    if (parsed.hasObjectMember("bypassed") && parsed["bypassed"].isObject()) {
+    if (parsed.hasObjectMember("bypassed")) {
+        if (!parsed["bypassed"].isObject())
+            return malformed("`bypassed` is not an object");
         auto bypassed_obj = parsed["bypassed"];
         for (uint32_t i = 0; i < bypassed_obj.size(); ++i) {
             auto anchor_member = bypassed_obj.getObjectMemberAt(i);
@@ -548,22 +572,27 @@ TweakStore::from_json_locked(std::string_view json) {
             } else if (v.isArray()) {
                 std::vector<std::string> paths;
                 for (uint32_t j = 0; j < v.size(); ++j) {
-                    if (v[j].isString()) {
-                        paths.push_back(std::string(v[j].getString()));
-                    }
+                    if (!v[j].isString())
+                        return malformed("a `bypassed` path is not a string");
+                    paths.push_back(std::string(v[j].getString()));
                 }
                 if (!paths.empty()) new_bypassed[anchor] = std::move(paths);
+            } else {
+                return malformed("a `bypassed` value is not a bool or array");
             }
         }
     }
 
     // locked: string[]. Missing key is fine (v1 files without lock
-    // state). Non-string array elements are skipped.
-    if (parsed.hasObjectMember("locked") && parsed["locked"].isArray()) {
+    // state).
+    if (parsed.hasObjectMember("locked")) {
+        if (!parsed["locked"].isArray())
+            return malformed("`locked` is not an array");
         auto locked_arr = parsed["locked"];
         for (uint32_t i = 0; i < locked_arr.size(); ++i) {
-            if (locked_arr[i].isString())
-                new_locked.insert(std::string(locked_arr[i].getString()));
+            if (!locked_arr[i].isString())
+                return malformed("a `locked` entry is not a string");
+            new_locked.insert(std::string(locked_arr[i].getString()));
         }
     }
 

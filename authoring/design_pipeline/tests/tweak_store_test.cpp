@@ -265,6 +265,48 @@ TEST_CASE("TweakStore: lock state round-trips through disk",
     REQUIRE(locked.size() == 2);
 }
 
+TEST_CASE("TweakStore: from_json rejects mistyped fields without touching state",
+          "[inspect][tweak-store][json]") {
+    const char* bad_documents[] = {
+        R"({"version":"1"})",
+        R"({"version":1.5})",
+        R"({"tweaks":[]})",
+        R"({"tweaks":{"a":3}})",
+        R"({"tweaks":{"a":{"p":1}},"sources":[]})",
+        R"({"tweaks":{"a":{"p":1}},"sources":{"a":"x"}})",
+        R"({"tweaks":{"a":{"p":1}},"sources":{"a":{"p":7}}})",
+        R"({"bypassed":[]})",
+        R"({"bypassed":{"a":"yes"}})",
+        R"({"bypassed":{"a":["p",4]}})",
+        R"({"locked":"a"})",
+        R"({"locked":["a",9]})",
+    };
+    for (const char* doc : bad_documents) {
+        TweakStore s;
+        s.apply_tweak("keep", "paint.bg", choc::value::createString("#000"), "drag");
+        s.set_locked("keep", true);
+        auto r = s.from_json(doc);
+        INFO(doc);
+        REQUIRE_FALSE(r.ok);
+        REQUIRE_FALSE(r.error.empty());
+        // The previous state is untouched.
+        REQUIRE(s.list_tweaks().size() == 1);
+        REQUIRE(s.is_locked("keep"));
+    }
+}
+
+TEST_CASE("TweakStore: from_json still accepts well-typed and absent fields",
+          "[inspect][tweak-store][json]") {
+    TweakStore s;
+    REQUIRE(s.from_json(R"({})").ok);
+    auto r = s.from_json(
+        R"({"version":1,"tweaks":{"a":{"p":1}},"sources":{"a":{"p":"drag"},"gone":{"p":"x"}},)"
+        R"("bypassed":{"a":["p"],"b":true,"c":false},"locked":["a"]})");
+    REQUIRE(r.ok);
+    REQUIRE(r.tweak_count == 1);
+    REQUIRE(s.is_locked("a"));
+}
+
 TEST_CASE("TweakStore::diff classifies every tweak against an anchor set",
           "[inspect][tweak-store][drift]") {
     TweakStore store;
