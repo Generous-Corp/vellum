@@ -201,6 +201,16 @@ class SdkArtifactTests(unittest.TestCase):
             with self.assertRaises(artifact_error):
                 rewrite(path, b"short")
 
+    def test_optional_executables_are_normalized_only_when_installed(self) -> None:
+        select = runpy.run_path(str(BUILDER))["executables_to_normalize"]
+        with tempfile.TemporaryDirectory() as temporary:
+            bin_dir = Path(temporary)
+            names = [path.name for path in select(bin_dir)]
+            self.assertEqual(names, ["vellum-app-host", "vellum-source-adapter"])
+            (bin_dir / "vellum-design-debug").write_bytes(b"")
+            names = [path.name for path in select(bin_dir)]
+            self.assertEqual(names, ["vellum-app-host", "vellum-source-adapter", "vellum-design-debug"])
+
     def test_macho_temp_root_normalization_makes_archives_equal(self) -> None:
         module = runpy.run_path(str(BUILDER))
         normalize = module["canonicalize_macho_temp_root"]
