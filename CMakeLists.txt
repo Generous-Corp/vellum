@@ -773,6 +773,12 @@ if(VELLUM_BUILD_TESTS)
                 "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
                 "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunJsBytecodeCollision.cmake")
+        add_test(NAME vellum.mirror-js-bytecode-cross-configure
+            COMMAND "${CMAKE_COMMAND}"
+                "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                "-DVELLUM_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunJsBytecodeCrossConfigure.cmake")
         # vellum_add_js_bytecode() end to end for the framework test that checks
         # its blobs: the generator is built from the build tree's unit include
         # roots, like the framework tests, and runs from the build tree.
@@ -798,11 +804,16 @@ if(VELLUM_BUILD_TESTS)
             SOURCES "${CMAKE_CURRENT_BINARY_DIR}/js-bytecode/bytecode_bridge_fixture.js"
             NAMESPACE js_bytecode_embed_fixture
             WIDGET_BRIDGE_SCRIPT)
-        set_target_properties(vellum-js-bytecode PROPERTIES
-            CXX_STANDARD 20
-            OSX_ARCHITECTURES arm64
-            MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
-            BUILD_RPATH "$<TARGET_FILE_DIR:vellum-skia-dawn-provider>")
+        if(TARGET vellum-js-bytecode)
+            set_target_properties(vellum-js-bytecode PROPERTIES
+                CXX_STANDARD 20
+                OSX_ARCHITECTURES arm64
+                MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
+            if(TARGET vellum-skia-dawn-provider)
+                set_target_properties(vellum-js-bytecode PROPERTIES
+                    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-skia-dawn-provider>")
+            endif()
+        endif()
         # Behavior tests of the framework units (ctest label `framework`).
         add_subdirectory(tools/framework-tests)
         if(TARGET yogacore)
