@@ -1414,7 +1414,10 @@ def illustrator_command(args: argparse.Namespace) -> dict[str, Any]:
 
 
 BAKED_EMITS = ("cpp", "swiftui")
-BAKED_EMIT_SOURCES = ("design-ir", "figma", "figma-plugin", "pencil", "v0", "designmd")
+BAKED_EMIT_SOURCES = ("design-ir", "figma", "figma-plugin", "pencil", "v0", "designmd", "claude-design")
+# These exports are normally solved in a browser. The baked emitter only has
+# the bounded static parser, so it runs them only when --offline asks for it.
+BAKED_EMIT_OFFLINE_SOURCES = ("claude-design",)
 DESIGN_EMIT_NAME = "vellum-design-emit.exe" if os.name == "nt" else "vellum-design-emit"
 
 
@@ -1445,6 +1448,18 @@ def validate_baked_emit(args: argparse.Namespace) -> None:
                     " file with --source-type design-ir.")
         raise CliFailure(
             f"--emit {args.emit} supports --source-type {', '.join(BAKED_EMIT_SOURCES)}.{hint}",
+            status="invalid_arguments", exit_code=EXIT_USAGE,
+        )
+    if args.source_type in BAKED_EMIT_OFFLINE_SOURCES and not args.offline:
+        raise CliFailure(
+            f"--source-type {args.source_type} is solved in a browser by default, which --emit {args.emit}"
+            " does not run. Pass --offline for the bounded static parser (CSS layout and"
+            " runtime DOM are not evaluated), or import it to design-ir first.",
+            status="invalid_arguments", exit_code=EXIT_USAGE,
+        )
+    if args.offline and args.source_type not in BAKED_EMIT_OFFLINE_SOURCES:
+        raise CliFailure(
+            f"--offline applies only to --source-type {', '.join(BAKED_EMIT_OFFLINE_SOURCES)}.",
             status="invalid_arguments", exit_code=EXIT_USAGE,
         )
     if Path(args.source).suffix.casefold() == ".fig":
@@ -1727,6 +1742,7 @@ def parser() -> argparse.ArgumentParser:
             ("--validate-only", {"action": "store_true", "help": "validate an import without generating files"}),
             ("--emit", {"choices": ["js", "ir-json", "materialized-runtime", *BAKED_EMITS], "default": "js"}),
             ("--dry-run", {"action": "store_true", "help": "print a baked emit instead of writing it"}),
+            ("--offline", {"action": "store_true", "help": "run an HTML export through the static parser for a baked emit"}),
             ("--strict-fidelity", {"action": "store_true", "help": "fail a baked SwiftUI emit that reports fidelity losses"}),
             ("--mode", {"choices": ["live", "baked"], "default": "live"}),
             ("--source-out", {"help": "output directory for materialized runtime source"}),
@@ -1770,7 +1786,7 @@ def forwarded_arguments(args: argparse.Namespace) -> list[str]:
     if args.command == "import":
         ignored.update({"output", "provenance", "timeout", "illustrator_input", "manifest",
                         "validate_only", "emit", "mode", "source_out", "dry_run",
-                        "strict_fidelity"})
+                        "strict_fidelity", "offline"})
     forwarded: list[str] = []
     for key, value in vars(args).items():
         if key in ignored or value is None or value is False:
@@ -1815,6 +1831,11 @@ def main(argv: Iterable[str] | None = None) -> int:
             if args.emit not in BAKED_EMITS and (args.dry_run or args.strict_fidelity):
                 raise CliFailure(
                     "--dry-run and --strict-fidelity apply only to --emit cpp or swiftui.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
+            if args.offline and args.emit not in BAKED_EMITS:
+                raise CliFailure(
+                    "--offline applies only to --emit cpp or swiftui.",
                     status="invalid_arguments", exit_code=EXIT_USAGE,
                 )
             if args.emit in BAKED_EMITS:
