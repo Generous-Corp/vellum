@@ -153,7 +153,9 @@ class Rect:
 
 
 def _rect(entry: dict[str, Any]) -> Rect | None:
-    vals = [entry.get(k) for k in ("x", "y", "width", "height")]
+    vals = [entry.get("x"), entry.get("y"),
+            entry.get("w", entry.get("width")),
+            entry.get("h", entry.get("height"))]
     if any(v is None for v in vals):
         return None
     return Rect(*(float(v) for v in vals))

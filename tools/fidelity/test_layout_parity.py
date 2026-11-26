@@ -103,6 +103,16 @@ class TestPassControl(ParityTestCase):
         lay = layout(view("0:1", 0, 0, 100, 100), view("0:2", 11, 11))
         self.assertEqual(self.compare(geom, lay)["findings"], [])
 
+    def test_documented_w_h_geometry_fields_are_accepted(self):
+        geom = {"units": "design-px", "nodes": [{
+            "node_id": "0:1", "parent_id": None, "x": 0, "y": 0,
+            "w": 100, "h": 100,
+        }]}
+        lay = layout(view("0:1", 0, 0, 100, 100))
+        report = self.compare(geom, lay)
+        self.assertEqual(report["matched"], 1)
+        self.assertEqual(report["findings"], [])
+
 
 class TestClustering(ParityTestCase):
     def test_shared_offset_collapses_to_one_finding_naming_the_parent(self):
