@@ -159,6 +159,15 @@
       "source": "https://github.com/google/perfetto/releases/download/v57.2/perfetto-cpp-sdk-src.zip",
       "sha256": "c6fa3d89aee30f7da39402c9cd178c9f2e344544fda5c2109fd8457e319c3a2f",
       "surface": "development-only native tracing (VELLUM_ENABLE_TRACING=ON, default OFF; needs VELLUM_ENABLE_MIRROR); the amalgamated perfetto.h and perfetto.cc are fetched by URL and SHA-256 by cmake/VellumTracing.cmake, built as one static library and linked into the mirror's foundation unit library only in that configuration; never part of a default build or a release artifact; a development SDK installed by hand from a tracing-ON build does contain it"
+    },
+    {
+      "name": "Draco",
+      "version": "1.5.9",
+      "license": "Apache-2.0",
+      "source": "https://github.com/google/draco/archive/refs/tags/1.5.9.tar.gz",
+      "commit": "554628821c3448319d7d4ae48db170b8c63e1aaf",
+      "sha256": "5b84e0e212ccc7b03ace681760a65a66fe2481a5f54df65154cfc8f0cbb87148",
+      "surface": "optional native mesh decoding (VELLUM_ENABLE_DRACO=ON, default OFF; needs VELLUM_ENABLE_MIRROR); the source archive is fetched by URL and SHA-256 by cmake/VellumDraco.cmake, built decoder-only as a position-independent static library and linked into vellum-skia-dawn-provider, where framework/core/render/src/draco_decoder.cpp turns vellum::render::decode_draco from the stub into a decoder; never part of a default build; bytes not mirrored"
     }
   ],
   "runtime_toolchain_dependencies": {

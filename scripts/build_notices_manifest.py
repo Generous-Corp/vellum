@@ -32,6 +32,8 @@ def _feature(row: dict[str, Any]) -> str:
         return "VELLUM_ENABLE_RMLUI"
     if name == "perfetto" or "tracing" in surface:
         return "VELLUM_ENABLE_TRACING"
+    if name == "draco":
+        return "VELLUM_ENABLE_DRACO"
     return ""
 
 
@@ -46,6 +48,8 @@ def _required_by(row: dict[str, Any], bundled: bool = False) -> list[str]:
         return ["Vellum::SkiaDawnProvider", "Vellum::MirrorView_script"]
     if name == "perfetto":
         return ["Vellum::MirrorFoundation"]
+    if name == "draco":
+        return ["Vellum::SkiaDawnProvider"]
     if "rmlui" in name or name in {"lua", "freetype", "stb_image_write"}:
         return ["VellumRmlUi::Core", "VellumRmlUi::NativeHost"]
     if "font" in row.get("surface", "") or "font" in name:
@@ -68,6 +72,7 @@ def _heading(name: str, bundled: bool) -> str:
         "esbuild and @esbuild/darwin-arm64": "esbuild",
         "V8": "Optional V8 provider",
         "Perfetto": "Optional native Perfetto tracing",
+        "Draco": "Optional native Draco decoding",
         "Three.js": "Three.js",
         "FreeType": "FreeType",
         "stb_image_write": "stb_image_write",

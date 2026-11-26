@@ -70,6 +70,7 @@ set(_vellum_runtime_abi_inputs
     "mirror=${VELLUM_ENABLE_MIRROR}"
     "v8=${VELLUM_ENABLE_V8}"
     "tracing=${VELLUM_ENABLE_TRACING}"
+    "draco=${VELLUM_ENABLE_DRACO}"
     "graphics=${VELLUM_ENABLE_GRAPHICS}"
     "gpu=${VELLUM_ENABLE_GPU}"
     "asan=${VELLUM_ENABLE_ADDRESS_SANITIZER}"
@@ -523,6 +524,24 @@ if(VELLUM_ENABLE_V8)
     install(FILES "${VELLUM_V8_MANIFEST}"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/vellum/v8")
     set(VELLUM_MIRROR_HAS_V8 ON)
+endif()
+
+# Optional Draco (VELLUM_ENABLE_DRACO). The closures build render-2d without
+# Draco, so framework/core/render/src/draco_decoder.cpp compiles as the stub that
+# reports the decoder unavailable. This is the one native addition to that
+# unit's compile: the decoder's PULP_HAS_DRACO switch and the static Draco
+# library, whose objects live in vellum-skia-dawn-provider with the rest of the
+# unit. The provider's export list keeps every Draco symbol private; only
+# decode_draco and draco_decoder_available leave it.
+if(VELLUM_ENABLE_DRACO)
+    if(NOT TARGET pulp-render)
+        message(FATAL_ERROR "Vellum: VELLUM_ENABLE_DRACO needs the mirror's render-2d unit")
+    endif()
+    target_link_libraries(pulp-render PRIVATE vellum-draco)
+    target_compile_definitions(pulp-render PRIVATE PULP_HAS_DRACO=1)
+    target_link_libraries(vellum-skia-dawn-provider PRIVATE vellum-draco)
+    install(FILES "${vellum_draco_SOURCE_DIR}/LICENSE"
+        DESTINATION "mirror/share/licenses/draco")
 endif()
 
 # A mirrored source can include Vellum's value model: one probe compiled with

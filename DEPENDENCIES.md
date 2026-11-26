@@ -229,6 +229,28 @@ this row and `provenance/third-party-lock.json` on one pin.
 |---|---|---|---|---|
 | Perfetto | `v57.2`, `google/perfetto` release asset `perfetto-cpp-sdk-src.zip` (`perfetto.h` and `perfetto.cc`) SHA-256 `c6fa3d89aee30f7da39402c9cd178c9f2e344544fda5c2109fd8457e319c3a2f` | Apache-2.0; the amalgamation also carries BSD-2-Clause code from OpenBSD's `tree.h` | `vellum-perfetto`, compiled as one position-independent static library and whole-archive linked into `vellum-mirror-foundation`, only with `VELLUM_ENABLE_TRACING=ON` | Never linked into a default build or a release artifact. A development SDK installed by hand from a tracing-ON build does contain it (the foundation library is installed as built); do not ship one. Perfetto's `TRACE_EVENT` takes a mutex when a chunk rolls over, so it is not real-time safe: trace UI, render and process-level code, never a live audio thread. Notice in `NOTICE.md` |
 
+## Optional native Draco decoding
+
+With `VELLUM_ENABLE_DRACO=ON` (default OFF; it needs `VELLUM_ENABLE_MIRROR=ON`)
+the mirror's render-2d unit compiles `framework/core/render/src/draco_decoder.cpp`
+with its Draco switch on, so `decode_draco` decodes
+`KHR_draco_mesh_compression` meshes and `draco_decoder_available()` reports
+true. With it OFF the decoder is a stub that returns an empty mesh and reports
+itself unavailable, which is what every default build and the published SDK
+carried before this option existed. The configure step
+(`cmake/VellumDraco.cmake`) downloads the source archive and refuses any other
+SHA-256. Only Draco's decoder library is built (the encoder, transcoder, tools
+and tests are off, so none of Draco's own `third_party` code is compiled), as a
+position-independent static library linked into
+`Vellum::SkiaDawnProvider`; the provider's export list keeps every Draco symbol
+private. `tools/draco/check_draco.py` keeps the module, this row and
+`provenance/third-party-lock.json` on one pin, and checks a built tree for
+exactly one decoder.
+
+| Dependency | Pinned identity | License | Used by | Notes |
+|---|---|---|---|---|
+| Draco | `1.5.9` (`554628821c3448319d7d4ae48db170b8c63e1aaf`), `google/draco` source archive SHA-256 `5b84e0e212ccc7b03ace681760a65a66fe2481a5f54df65154cfc8f0cbb87148` | Apache-2.0 | `vellum-draco`, compiled as one position-independent static library and linked into `Vellum::SkiaDawnProvider`, only with `VELLUM_ENABLE_DRACO=ON` | MIT-compatible. Bytes not mirrored; the license ships under `sdk/mirror/share/licenses/draco/`. Notice in `NOTICE.md` |
+
 ## Developer prerequisites
 
 CMake, a C++20 compiler, Python 3, Node.js, and npm are developer-supplied
