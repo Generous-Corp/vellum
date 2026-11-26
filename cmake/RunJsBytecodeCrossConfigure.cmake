@@ -3,9 +3,9 @@ if(NOT VELLUM_SOURCE_DIR OR NOT VELLUM_BUILD_DIR)
 endif()
 
 file(READ "${VELLUM_SOURCE_DIR}/CMakeLists.txt" _top_level)
-string(REGEX MATCH "if\\(TARGET vellum-js-bytecode\\)[^\n]*\n[ \t]+set_target_properties\\(vellum-js-bytecode"
-    _guarded_properties "${_top_level}")
-if(NOT _guarded_properties)
+string(FIND "${_top_level}" [=[if(_vellum_js_bytecode_generator AND TARGET "${_vellum_js_bytecode_generator}")]=]
+    _guarded_properties)
+if(_guarded_properties LESS 0)
     message(FATAL_ERROR
         "the build-tree bytecode generator properties are not guarded for cross-compiling")
 endif()

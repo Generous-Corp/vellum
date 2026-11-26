@@ -10,6 +10,9 @@ endif()
 add_executable(vellum-js-bytecode IMPORTED GLOBAL)
 set_target_properties(vellum-js-bytecode PROPERTIES
     IMPORTED_LOCATION "${CMAKE_COMMAND}")
+add_library(Vellum::MirrorView_script INTERFACE IMPORTED GLOBAL)
+set(VELLUM_JS_BYTECODE_GENERATOR_SOURCE
+    "${VELLUM_SOURCE_DIR}/cmake/vellum_js_bytecode_main.cpp")
 set(VELLUM_JS_BYTECODE_ENCODER
     "${VELLUM_SOURCE_DIR}/framework/tools/cmake/scripts/encode_binary_data.py")
 include("${VELLUM_SOURCE_DIR}/cmake/VellumJsBytecode.cmake")
@@ -24,3 +27,7 @@ else()
         "${CMAKE_CURRENT_SOURCE_DIR}/two/duplicate.js")
 endif()
 vellum_add_js_bytecode(collision SOURCES ${_collision_sources})
+get_property(_generator GLOBAL PROPERTY VELLUM_JS_BYTECODE_GENERATOR_TARGET)
+if(NOT _generator OR _generator STREQUAL "vellum-js-bytecode")
+    message(FATAL_ERROR "vellum_add_js_bytecode reused the unrelated pre-existing generator target")
+endif()

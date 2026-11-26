@@ -19,7 +19,7 @@
 # from and only by the engine build that compiled it; otherwise the script
 # compiles from source as before.
 #
-# The generator (vellum-js-bytecode) is built by the consumer against
+# The private generator executable is built by the consumer against
 # Vellum::MirrorView_script, the unit the product links, so its output always
 # matches the product's engine. When cross-compiling, the generator cannot run
 # on the build machine: the library is still created but holds placeholder
@@ -42,8 +42,9 @@ endif()
 
 function(_vellum_js_bytecode_generator out_var)
     get_property(_vellum_js_bytecode_dir GLOBAL PROPERTY VELLUM_JS_BYTECODE_SHARE_DIR)
-    if(TARGET vellum-js-bytecode)
-        set(${out_var} vellum-js-bytecode PARENT_SCOPE)
+    get_property(_generator GLOBAL PROPERTY VELLUM_JS_BYTECODE_GENERATOR_TARGET)
+    if(_generator AND TARGET "${_generator}")
+        set(${out_var} "${_generator}" PARENT_SCOPE)
         return()
     endif()
     set(_source "${VELLUM_JS_BYTECODE_GENERATOR_SOURCE}")
@@ -60,14 +61,26 @@ function(_vellum_js_bytecode_generator out_var)
             "vellum_add_js_bytecode: the Vellum view-script unit is not available "
             "(Vellum::MirrorView_script)")
     endif()
-    add_executable(vellum-js-bytecode "${_source}")
-    target_link_libraries(vellum-js-bytecode PRIVATE Vellum::MirrorView_script
+    set(_generator "_vellum_js_bytecode_generator")
+    if(TARGET "${_generator}")
+        string(SHA256 _suffix "${CMAKE_CURRENT_BINARY_DIR};${_source}")
+        string(SUBSTRING "${_suffix}" 0 16 _suffix)
+        set(_generator "_vellum_js_bytecode_generator_${_suffix}")
+        set(_suffix_index 0)
+        while(TARGET "${_generator}")
+            math(EXPR _suffix_index "${_suffix_index} + 1")
+            set(_generator "_vellum_js_bytecode_generator_${_suffix}_${_suffix_index}")
+        endwhile()
+    endif()
+    add_executable("${_generator}" "${_source}")
+    target_link_libraries("${_generator}" PRIVATE Vellum::MirrorView_script
         ${VELLUM_JS_BYTECODE_EXTRA_LINK_LIBRARIES})
     if(VELLUM_JS_BYTECODE_EXTRA_INCLUDES)
-        target_include_directories(vellum-js-bytecode PRIVATE ${VELLUM_JS_BYTECODE_EXTRA_INCLUDES})
+        target_include_directories("${_generator}" PRIVATE ${VELLUM_JS_BYTECODE_EXTRA_INCLUDES})
     endif()
-    target_compile_features(vellum-js-bytecode PRIVATE cxx_std_20)
-    set(${out_var} vellum-js-bytecode PARENT_SCOPE)
+    target_compile_features("${_generator}" PRIVATE cxx_std_20)
+    set_property(GLOBAL PROPERTY VELLUM_JS_BYTECODE_GENERATOR_TARGET "${_generator}")
+    set(${out_var} "${_generator}" PARENT_SCOPE)
 endfunction()
 
 function(vellum_add_js_bytecode target)

@@ -810,13 +810,14 @@ if(VELLUM_BUILD_TESTS)
             SOURCES "${CMAKE_CURRENT_BINARY_DIR}/js-bytecode/bytecode_bridge_fixture.js"
             NAMESPACE js_bytecode_embed_fixture
             WIDGET_BRIDGE_SCRIPT)
-        if(TARGET vellum-js-bytecode)
-            set_target_properties(vellum-js-bytecode PROPERTIES
+        get_property(_vellum_js_bytecode_generator GLOBAL PROPERTY VELLUM_JS_BYTECODE_GENERATOR_TARGET)
+        if(_vellum_js_bytecode_generator AND TARGET "${_vellum_js_bytecode_generator}")
+            set_target_properties("${_vellum_js_bytecode_generator}" PROPERTIES
                 CXX_STANDARD 20
                 OSX_ARCHITECTURES arm64
                 MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
             if(TARGET vellum-skia-dawn-provider)
-                set_target_properties(vellum-js-bytecode PROPERTIES
+                set_target_properties("${_vellum_js_bytecode_generator}" PROPERTIES
                     BUILD_RPATH "$<TARGET_FILE_DIR:vellum-skia-dawn-provider>")
             endif()
         endif()
