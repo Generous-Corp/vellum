@@ -113,3 +113,7 @@ if(VELLUM_BUILD_TESTS)
     add_test(NAME vellum.design-emitter-conformance
         COMMAND vellum-design-emitter-conformance)
 endif()
+
+# `vellum design-debug`, kept inside this folder because it consumes the mirrored
+# view, script and state units the way the pipeline does.
+add_subdirectory(design_debug)

@@ -583,6 +583,10 @@ if(VELLUM_BUILD_TESTS)
                 "$<TARGET_FILE:vellum-design-ab>"
             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     endif()
+    add_test(NAME vellum.source-support-manifest
+        COMMAND "${Python3_EXECUTABLE}"
+            scripts/test_source_support_manifest.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.parity-packaging-unit
         COMMAND "${Python3_EXECUTABLE}"
             tools/parity/packaging/test_packaging_lane.py

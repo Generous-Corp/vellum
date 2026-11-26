@@ -231,6 +231,9 @@
         "module": "tools.agent_instructions.test_verify"
       },
       {
+        "script": "scripts/test_source_support_manifest.py"
+      },
+      {
         "script": "tools/parity/test_parity_harness.py"
       },
       {
