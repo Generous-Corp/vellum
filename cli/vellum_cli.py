@@ -513,6 +513,12 @@ def write_localized_capture_assets(staging: Path, envelope: dict[str, Any]) -> N
         destination.write_bytes(payload)
 
 
+# Sources that `vellum import NAME FILE` accepts as a leading name. Illustrator
+# is a separate converter route and is matched on its own.
+IMPORT_SHORTHAND_SOURCES = frozenset({"pencil", "designmd", "v0", "stitch", "jsx", "preconverted-svg"})
+IMPORT_CONVERTER_SOURCES = frozenset({"illustrator"})
+
+
 # Adapters that parse an HTML file natively. A reimport of their source stays on the
 # adapter recorded in the import lock instead of the browser capture route.
 NATIVE_HTML_ADAPTERS = frozenset({"stitch"})
@@ -1657,7 +1663,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         if args.command == "import" and isinstance(args.source, list):
             if len(args.source) == 2 and args.source[0] == "illustrator":
                 args.source, args.illustrator_input = args.source
-            elif len(args.source) == 2 and args.source[0] in {"pencil", "designmd", "v0", "stitch", "jsx", "preconverted-svg"}:
+            elif len(args.source) == 2 and args.source[0] in IMPORT_SHORTHAND_SOURCES:
                 args.source_type, args.source = args.source
             elif len(args.source) == 1:
                 args.source = args.source[0]

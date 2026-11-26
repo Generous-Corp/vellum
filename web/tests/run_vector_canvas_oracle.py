@@ -22,7 +22,9 @@ import tempfile
 import threading
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from run_text_semantics_browser import ProofProgress, ProofTimeout, stop_browser, wait_for_proof  # noqa: E402
+from run_text_semantics_browser import (  # noqa: E402
+    ProofProgress, ProofTimeout, headless_mode_arguments, stop_browser, wait_for_proof,
+)
 
 PAGE = """<!doctype html>
 <html><body><script type="module">
@@ -159,7 +161,8 @@ def main() -> int:
         try:
             with tempfile.TemporaryDirectory(prefix="vellum-chrome-") as profile:
                 process = subprocess.Popen(
-                    [chrome, "--headless=new", "--disable-gpu-sandbox", "--no-first-run",
+                    [chrome, *headless_mode_arguments(chrome), "--disable-gpu-sandbox",
+                     "--no-first-run",
                      "--disable-background-networking", "--force-device-scale-factor=1",
                      f"--user-data-dir={profile}",
                      f"http://127.0.0.1:{server.server_port}/index.html"],
