@@ -119,10 +119,12 @@ bool write_text_file(const fs::path& p, const std::string& content) {
     const int fd = ::mkstemp(buf.data());  // O_CREAT|O_EXCL, mode 0600
     if (fd < 0) return false;
     const fs::path tmp(buf.data());
-    // Match a normal file's mode (0666 & ~umask) rather than mkstemp's 0600.
-    const mode_t um = ::umask(0);
-    ::umask(um);
-    ::fchmod(fd, static_cast<mode_t>(0666 & ~um));
+    // Keep the destination's mode when it exists, else 0644 (mkstemp is 0600).
+    // No umask juggling: that is process-wide and racy in a threaded process.
+    mode_t mode = 0644;
+    struct stat st;
+    if (::stat(p.c_str(), &st) == 0 && S_ISREG(st.st_mode)) mode = st.st_mode & 07777;
+    ::fchmod(fd, mode);
     bool ok = true;
     const char* data = content.data();
     size_t left = content.size();
