@@ -321,8 +321,12 @@ def _check_cadence(findings: list[Finding], entry: dict[str, Any], today: _dt.da
 
 
 def _read(root: Path, rel_path: str) -> str:
+    """A file's text, or empty when the path escapes the checkout or is unreadable."""
+    path = contained_path(root, rel_path)
+    if path is None:
+        return ""
     try:
-        return (root / rel_path).read_text(encoding="utf-8", errors="replace")
+        return path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
 
@@ -337,13 +341,35 @@ def _symbol_exists(root: Path, rel_file: str, symbol: str) -> bool:
     return re.search(rf"\b{re.escape(symbol)}\b", _read(root, rel_file)) is not None
 
 
-def ctest_names(root: Path) -> set[str]:
-    """Every test name the CMake build registers, read from the CMake sources."""
-    names: set[str] = set()
-    for path in root.rglob("CMakeLists.txt"):
-        rel = path.relative_to(root).parts
-        if rel[0].startswith("build") or rel[0] in {"mirror", "node_modules", "_deps"}:
+def cmake_graph(root: Path) -> list[Path]:
+    """The CMakeLists.txt files the root build reaches through add_subdirectory().
+
+    Only literal relative subdirectories are followed, so a CMakeLists.txt that
+    no add_subdirectory() names is not part of the graph.
+    """
+    seen: list[Path] = []
+    pending = [root.resolve()]
+    while pending:
+        directory = pending.pop()
+        cmake = directory / "CMakeLists.txt"
+        if not cmake.is_file() or cmake in seen:
             continue
+        seen.append(cmake)
+        text = cmake.read_text(encoding="utf-8", errors="replace")
+        for name in re.findall(r"(?m)^\s*add_subdirectory\(\s*\"?([A-Za-z0-9_./-]+)\"?", text):
+            child = (directory / name).resolve()
+            try:
+                child.relative_to(root.resolve())
+            except ValueError:
+                continue
+            pending.append(child)
+    return seen
+
+
+def ctest_names(root: Path) -> set[str]:
+    """Every test name the configured CMake graph registers."""
+    names: set[str] = set()
+    for path in cmake_graph(root):
         text = path.read_text(encoding="utf-8", errors="replace")
         names |= set(re.findall(r"add_test\(\s*NAME\s+\"?([A-Za-z0-9_.-]+)", text))
         names |= {f"vellum.framework.{name}"
@@ -387,16 +413,17 @@ def test_resolves(root: Path, reference: str, ctests: set[str]) -> bool:
     kind, _, name = reference.partition(":")
     if kind == "ctest":
         return name in ctests
+    path = contained_path(root, name)
     if kind == "lane":
-        return (root / name).is_file() and _lane_covered(root, name)
+        return path is not None and path.is_file() and _lane_covered(root, name)
     if kind == "package":
-        return (root / name).is_file() and _package_covered(root, name)
+        return path is not None and path.is_file() and _package_covered(root, name)
     return False
 
 
 def journey_resolves(root: Path, reference: str) -> bool:
     match = JOURNEY.fullmatch(reference)
-    if not match:
+    if not match or contained_path(root, match["path"]) is None:
         return False
     text = _read(root, match["path"])
     function = match["name"]
@@ -428,7 +455,8 @@ def _check_references(findings: list[Finding], root: Path, entry: dict[str, Any]
     parser_file = parser.get("file")
     runtime_file = parser.get("runtime_file", parser_file)
     for label, rel in (("parser.file", parser_file), ("parser.runtime_file", runtime_file)):
-        if not isinstance(rel, str) or not (root / rel).is_file():
+        path = contained_path(root, rel)
+        if path is None or not path.is_file():
             _add(findings, "missing-parser-file", source, f"{label} does not exist: {rel!r}", path=rel)
     dispatch = entry.get("dispatch") or {}
     if dispatch.get("kind") == "design-source-label" and dispatch.get("label") not in labels:
@@ -458,12 +486,13 @@ def _check_references(findings: list[Finding], root: Path, entry: dict[str, Any]
               if isinstance(item, dict) and isinstance(item.get("url"), str)
               and not item["url"].startswith("https://")]
     for label, rel in paths:
-        if not isinstance(rel, str) or not (root / rel).exists():
+        path = contained_path(root, rel)
+        if path is None or not path.exists():
             _add(findings, f"missing-{label.replace(' ', '-')}", source,
                  f"{label} does not exist: {rel!r}", path=rel if isinstance(rel, str) else None)
     ref = validation.get("render_reference") or {}
-    if ref.get("status") == "present" and not (isinstance(ref.get("path"), str)
-                                               and (root / ref["path"]).is_file()):
+    ref_path = contained_path(root, ref.get("path"))
+    if ref.get("status") == "present" and not (ref_path is not None and ref_path.is_file()):
         _add(findings, "missing-reference-screenshot", source,
              f"render reference does not exist: {ref.get('path')!r}")
 
@@ -476,6 +505,8 @@ def _check_references(findings: list[Finding], root: Path, entry: dict[str, Any]
     for reference in tests:
         if not reference.startswith(TEST_KINDS) or not test_resolves(root, reference, ctests):
             _add(findings, "missing-test", source, f"test reference does not resolve: {reference}")
+    if "journey_required" in validation and not isinstance(validation["journey_required"], bool):
+        _add(findings, "invalid-field", source, "contract.validation.journey_required must be true or false")
     journey = validation.get("journey")
     if journey is None:
         required = validation.get("journey_required") is True or source in journeys
@@ -496,7 +527,8 @@ def _check_references(findings: list[Finding], root: Path, entry: dict[str, Any]
         landed = (item.get("check") == "tests" and target.startswith(TEST_KINDS)
                   and test_resolves(root, target, ctests)) or \
                  (item.get("check") == "journey" and journey_resolves(root, target)) or \
-                 (item.get("check") == "fixtures" and "/" in target and (root / target).exists())
+                 (item.get("check") == "fixtures" and contained_path(root, target) is not None
+                  and contained_path(root, target).exists())
         if landed:
             _add(findings, "pending-item-landed", source,
                  f"pending {item.get('check')} item now exists; move it into the contract: {target}",

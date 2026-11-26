@@ -133,5 +133,43 @@ class SourceContractReferenceTests(unittest.TestCase):
         self.assertIn("pencil", checker._design_source_labels(ROOT))
 
 
+    def test_references_cannot_leave_the_checkout(self) -> None:
+        outside = "../" * 12 + "etc/hosts"
+        cases = {
+            "parser file": lambda e: e["parser"].__setitem__("file", "/etc/hosts"),
+            "parser runtime file": lambda e: e["parser"].__setitem__("runtime_file", outside),
+            "fixture": lambda e: e["validation"]["fixtures"].append("fixtures/../../" + outside),
+            "evidence": lambda e: e["upstream"][0].__setitem__("url", outside),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(reference=name):
+                registry, entry = self.mutate("claude")
+                mutate(entry)
+                found = codes(registry)
+                self.assertTrue({"missing-parser-file", "missing-fixture", "missing-evidence"} & found,
+                                found)
+        registry, entry = self.mutate("designmd")
+        entry["validation"]["journey"] = (
+            "../vellum/scripts/validate_installed_sdk.py::validate_installed_source_imports[designmd]")
+        self.assert_code(registry, "missing-journey")
+        self.assertFalse(checker.test_resolves(ROOT, "lane:../" + "x/cli/tests/test_cli.py", set()))
+
+    def test_only_the_configured_cmake_graph_registers_tests(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "CMakeLists.txt").write_text("add_subdirectory(used)\n", encoding="utf-8")
+            for name, test in (("used", "t.used"), ("orphan", "t.orphan")):
+                (root / name).mkdir()
+                (root / name / "CMakeLists.txt").write_text(f"add_test(NAME {test} COMMAND x)\n",
+                                                            encoding="utf-8")
+            self.assertEqual(checker.ctest_names(root), {"t.used"})
+        self.assertIn(ROOT / "authoring/design_pipeline/CMakeLists.txt",
+                      [path for path in checker.cmake_graph(ROOT)])
+
+    def test_journey_required_must_be_a_boolean(self) -> None:
+        registry, entry = self.mutate("claude")
+        entry["validation"]["journey_required"] = "yes"
+        self.assert_code(registry, "invalid-field")
+
 if __name__ == "__main__":
     unittest.main()
