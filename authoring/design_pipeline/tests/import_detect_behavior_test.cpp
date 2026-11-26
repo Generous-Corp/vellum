@@ -5,7 +5,7 @@
 
 #include "import_detect_test_support.hpp"
 
-#include <vellum/authoring/import_detect.hpp>
+#include <vellum/authoring/import_detect_report.hpp>
 
 #include <algorithm>
 #include <cctype>

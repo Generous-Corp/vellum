@@ -1,6 +1,6 @@
 #include <vellum/authoring/source_detect_cli.hpp>
 
-#include <vellum/authoring/import_detect.hpp>
+#include <vellum/authoring/import_detect_report.hpp>
 
 #include <cstdio>
 #include <filesystem>
