@@ -36,6 +36,8 @@
       "vellum.foundation",
       "vellum.frame-driver",
       "vellum.frame-pump",
+      "vellum.framework.accessibility-provider",
+      "vellum.framework.accessibility-tree",
       "vellum.framework.canvas-raster-parity",
       "vellum.framework.design-codegen-web-grid",
       "vellum.framework.design-import-jsx-runtime",
