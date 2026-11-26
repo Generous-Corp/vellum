@@ -292,6 +292,10 @@
         "isolated": true
       },
       {
+        "script": "apps/design-tool/test_verify_verbatim_move.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/test_gates.py",
         "isolated": true
       },
