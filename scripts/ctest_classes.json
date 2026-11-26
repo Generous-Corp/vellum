@@ -67,6 +67,7 @@
       "vellum.host-c-exports",
       "vellum.image-decode-queue",
       "vellum.image-node",
+      "vellum.import-detect-data",
       "vellum.import-detect-unit",
       "vellum.install-arch-guard",
       "vellum.install-consumer",
