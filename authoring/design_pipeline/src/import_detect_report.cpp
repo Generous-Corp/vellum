@@ -183,9 +183,14 @@ NewFormatReport build_new_format_report(const ImportsManifest& manifest,
         }
     }
 
-    // Tailwind tokens, both ways.
+    // With no closest match there is no baseline to diff against, and the
+    // report stays empty rather than drafting an entry from guessed data.
+    if (closest.source.empty()) return r;
+
+    // Tailwind tokens, both ways. A category the closest format does not use
+    // at all still reports every input value as an addition.
     for (const auto& tok : snap.tailwind_tokens) {
-        if (!known_tokens.empty() && !contains(known_tokens, tok)) add_distinct(r.additions, tok);
+        if (!contains(known_tokens, tok)) add_distinct(r.additions, tok);
     }
     for (const auto& tok : known_tokens) {
         if (!contains(snap.tailwind_tokens, tok)) add_distinct(r.removals, tok);
@@ -197,12 +202,10 @@ NewFormatReport build_new_format_report(const ImportsManifest& manifest,
         for (const auto& src : snap.script_srcs) any = any || regex_finds(pattern, src);
         if (!any) add_distinct(r.script_removals, pattern);
     }
-    if (!src_regexes.empty()) {
-        for (const auto& src : snap.script_srcs) {
-            bool known = false;
-            for (const auto& pattern : src_regexes) known = known || regex_finds(pattern, src);
-            if (!known) add_distinct(r.script_additions, src);
-        }
+    for (const auto& src : snap.script_srcs) {
+        bool known = false;
+        for (const auto& pattern : src_regexes) known = known || regex_finds(pattern, src);
+        if (!known) add_distinct(r.script_additions, src);
     }
 
     // Script types against the html-script-type values, both ways.
@@ -211,10 +214,8 @@ NewFormatReport build_new_format_report(const ImportsManifest& manifest,
     for (const auto& type : known_types) {
         if (!contains(types, type)) add_distinct(r.type_removals, type);
     }
-    if (!known_types.empty()) {
-        for (const auto& type : types) {
-            if (!contains(known_types, type)) add_distinct(r.type_additions, type);
-        }
+    for (const auto& type : types) {
+        if (!contains(known_types, type)) add_distinct(r.type_additions, type);
     }
 
     // Cap suggestions so the output stays human-readable.
