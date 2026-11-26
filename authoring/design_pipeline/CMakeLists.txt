@@ -21,7 +21,7 @@ target_link_libraries(vellum-design-pipeline PUBLIC Vellum::MirrorDesign_import)
 
 # The design-import source detector: matches a file or directory against the
 # fingerprints in a detection manifest. It links nothing from the view layer.
-add_library(vellum-import-detect STATIC src/import_detect.cpp)
+add_library(vellum-import-detect STATIC src/import_detect.cpp src/import_detect_report.cpp)
 target_include_directories(vellum-import-detect PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
 # The detector reads JSON with CHOC, behind a strict whole-document wrapper.
@@ -61,6 +61,13 @@ if(VELLUM_BUILD_TESTS)
         OSX_ARCHITECTURES arm64
         MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
     add_test(NAME vellum.import-detect-unit COMMAND vellum-import-detect-unit-test)
+
+    add_executable(vellum-import-detect-report-test tests/import_detect_report_test.cpp)
+    target_link_libraries(vellum-import-detect-report-test PRIVATE vellum-import-detect)
+    set_target_properties(vellum-import-detect-report-test PROPERTIES
+        OSX_ARCHITECTURES arm64
+        MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
+    add_test(NAME vellum.import-detect-report COMMAND vellum-import-detect-report-test)
 
     # Keep one DesignIR fixture set across the native, bridge-JavaScript,
     # baked-C++, and SwiftUI lowerings.
