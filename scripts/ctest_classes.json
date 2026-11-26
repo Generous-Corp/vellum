@@ -187,6 +187,7 @@
       "vellum.app-host-phase3-scenario",
       "vellum.app-host-state-persistence",
       "vellum.app-host-text-ime-accessibility",
+      "vellum.app-host-visual-fixtures",
       "vellum.framework.native-trace",
       "vellum.framework.threejs-render",
       "vellum.framework.threejs-scene",
