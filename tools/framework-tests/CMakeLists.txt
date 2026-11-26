@@ -394,9 +394,19 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     target_link_libraries(vellum-framework-plugin-view-host-native-child-test PRIVATE
         "-framework AppKit")
     set_tests_properties(vellum.framework.plugin-view-host-native-child PROPERTIES TIMEOUT 60)
+
+    # The plug-in view host's cursor decision over a native child; the window
+    # is never ordered in.
+    vellum_add_framework_test(plugin-view-host-cursor
+        SOURCES plugin_view_host_cursor_test.mm
+        UNITS Vellum::MirrorView_core)
+    target_link_libraries(vellum-framework-plugin-view-host-cursor-test PRIVATE
+        "-framework AppKit")
+    set_tests_properties(vellum.framework.plugin-view-host-cursor PROPERTIES TIMEOUT 60)
 else()
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
         main_thread_timer_test.mm native_dialog_delivery_test.cpp
+        plugin_view_host_cursor_test.mm
         plugin_view_host_native_child_test.mm)
 endif()
 
