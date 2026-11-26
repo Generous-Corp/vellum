@@ -130,10 +130,32 @@ class BakedEmitTests(unittest.TestCase):
         self.assertIn("token spec", payload["message"])
         self.assertFalse((self.out / "View.swift").exists())
 
-    def test_jsx_points_at_the_design_ir_route(self) -> None:
+    def test_jsx_is_refused_without_a_misleading_route(self) -> None:
         code, payload = vellum("jsx", str(IR_FIXTURE), "--mode", "baked", "--emit", "cpp")
         self.assertEqual(code, 2, payload)
-        self.assertIn("--source-type design-ir", payload["message"])
+        self.assertIn("not lowered by the baked emitter", payload["message"])
+        self.assertNotIn("then emit that file", payload["message"])
+
+    def test_jsx_wrapper_is_not_emitted_as_design_ir(self) -> None:
+        jsx = self.out / "Panel.jsx"
+        jsx.write_text("export default function Panel() { return <div>Gain</div>; }\n", encoding="utf-8")
+        wrapper = self.out / "panel.ir.json"
+        code, payload = vellum("jsx", str(jsx), "--mode", "baked", "--emit", "ir-json", "--out", str(wrapper))
+        self.assertEqual(code, 0, payload)
+        code, payload = vellum("--source-type", "design-ir", str(wrapper), "--mode", "baked",
+                               "--emit", "cpp", "--out", str(self.out / "ui.cpp"))
+        self.assertEqual(code, 2, payload)
+        self.assertEqual(payload["status"], "invalid_design_ir")
+        self.assertIn("vellum.jsx-import.v1", payload["message"])
+        self.assertFalse((self.out / "ui.cpp").exists())
+
+    def test_non_json_design_ir_is_refused(self) -> None:
+        bad = self.out / "bad.ir.json"
+        bad.write_text("not json", encoding="utf-8")
+        code, payload = vellum("--source-type", "design-ir", str(bad), "--mode", "baked", "--emit", "cpp",
+                               "--out", str(self.out / "ui.cpp"))
+        self.assertEqual(code, 2, payload)
+        self.assertEqual(payload["status"], "invalid_design_ir")
 
     def test_local_fig_is_refused_before_the_emitter_runs(self) -> None:
         fig = self.out / "panel.fig"
