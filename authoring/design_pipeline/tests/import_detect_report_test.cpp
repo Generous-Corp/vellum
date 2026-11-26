@@ -158,6 +158,25 @@ TEST_CASE("the report diffs script srcs and script types both ways", "[import-de
     CHECK(json.find("\"fingerprint-removals\": [\n") != std::string::npos);
 }
 
+TEST_CASE("a category the closest format does not use is still reported", "[import-detect]") {
+    // The closest format fingerprints only script types; the input's Tailwind
+    // tokens and script srcs are all new and must all be listed.
+    auto m = manifest({source("tool", {format("1", {type_clause("module")})})});
+    det::InputSnapshot snap;
+    snap.script_types = {"module"};
+    snap.tailwind_tokens = {"new-a", "new-b"};
+    snap.script_srcs = {"https://cdn.example.com/a|b.js"};
+    auto closest = det::detect(m, snap);
+    REQUIRE(closest.source == "tool");
+    auto report = det::build_new_format_report(m, snap, closest);
+    CHECK(report.additions == std::vector<std::string>{"new-a", "new-b"});
+    CHECK(report.script_additions == std::vector<std::string>{"https://cdn.example.com/a|b.js"});
+    CHECK(report.removals.empty());
+    // A src containing `|` is rendered as a literal regex, not an alternation.
+    const auto json = det::render_new_format_json(report);
+    CHECK(json.find(R"("regex": "https:\\/\\/cdn\\.example\\.com\\/a\\|b\\.js")") != std::string::npos);
+}
+
 TEST_CASE("an unmatched input drafts nothing from guessed data", "[import-detect]") {
     auto m = manifest({source("tool", {format("1", {type_clause("module")})})});
     det::InputSnapshot snap;
