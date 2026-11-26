@@ -332,6 +332,7 @@ _CSS_VALUE_WORDS = frozenset({
 })
 _CSS_VALUE_TOKEN = re.compile(
     r"#[0-9a-fA-F]{3,8}|(?:rgba?|hsla?)\(\)|-?\d*\.?\d+(?:px|em|rem|%|pt|vh|vw|s|ms|deg)?")
+_CSS_FUNCTION = re.compile(r"(?:rgba?|hsla?)\([^()]*\)", re.IGNORECASE)
 
 
 def _is_style_value_string(content: str) -> bool:
@@ -341,9 +342,13 @@ def _is_style_value_string(content: str) -> bool:
     keyword, so prose such as ``"Use #fff for contrast"`` is not a style value.
     """
     content = content.strip("'\"` \t")
-    outside_parens = re.sub(r"\([^)]*\)", "()", content)
+    # Preserve functional colour values as one explicit token. Replacing only
+    # the parenthesized contents would leave a bare ``()`` token and make
+    # rgba()/hsla() values look like prose.
+    outside_parens = _CSS_FUNCTION.sub("css-function", content)
     tokens = outside_parens.replace(",", " ").split()
     return bool(tokens) and all(
+        token.lower() == "css-function" or
         token.lower() in _CSS_VALUE_WORDS or _CSS_VALUE_TOKEN.fullmatch(token)
         for token in tokens)
 
