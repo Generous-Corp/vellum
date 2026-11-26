@@ -240,6 +240,9 @@
         "script": "tools/fidelity/test_region_diff.py"
       },
       {
+        "script": "scripts/test_source_support_manifest.py"
+      },
+      {
         "script": "tools/parity/test_parity_harness.py"
       },
       {
