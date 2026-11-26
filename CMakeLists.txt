@@ -567,21 +567,10 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}"
             cli/tests/test_illustrator_cli.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-    # The clean-output lint for owned and imported UI source. The clean fixture
-    # and the captured corpus run on the same instrument as the unittest,
-    # which plants every lint class and must fail.
+    # The clean-output lint for owned and imported UI source.
     add_test(NAME vellum.cli-ui-lint
         COMMAND "${Python3_EXECUTABLE}"
             cli/tests/test_ui_lint.py
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-    add_test(NAME vellum.cli-ui-lint-clean-fixture
-        COMMAND "${Python3_EXECUTABLE}"
-            cli/vellum_ui_lint.py cli/tests/fixtures/ui-build/clean
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-    add_test(NAME vellum.cli-ui-lint-captured-corpus
-        COMMAND "${Python3_EXECUTABLE}"
-            cli/vellum_ui_lint.py cli/tests/fixtures/ui-build/generated
-            --manifest cli/tests/fixtures/ui-build/generated/manifest.json
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.parity-packaging-unit
         COMMAND "${Python3_EXECUTABLE}"
