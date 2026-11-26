@@ -41,6 +41,7 @@ Exit codes:
 from __future__ import annotations
 import argparse
 import json
+import math
 import sys
 from collections import Counter
 from pathlib import Path
@@ -115,6 +116,11 @@ def crop_region(img: Image, region: dict) -> Image:
     w = max(1, int(region["w"] * W))
     h = max(1, int(region["h"] * H))
     return img.crop((x, y, x + w, y + h))
+
+
+def uncovered_patch_limit(max_uncovered_fraction: float, frame_size: tuple[int, int]) -> int:
+    """Return the inclusive pixel limit for a frame-relative patch fraction."""
+    return math.ceil(max_uncovered_fraction * frame_size[0] * frame_size[1])
 
 
 def histogram_similarity(a: Image, b: Image) -> float:
@@ -280,7 +286,12 @@ def region_score(ref_full: Image, cand_full: Image, region: dict) -> dict:
     largest_fraction = coverage["largest_uncovered_px"] / max(frame_px, 1)
     max_uncovered = region.get("max_uncovered_fraction")
     coverage_passed = coverage_floor is None or coverage["covered"] >= coverage_floor
-    uncovered_passed = max_uncovered is None or largest_fraction <= max_uncovered
+    max_uncovered_px = (
+        None
+        if max_uncovered is None
+        else uncovered_patch_limit(max_uncovered, ref_full.size)
+    )
+    uncovered_passed = max_uncovered_px is None or coverage["largest_uncovered_px"] <= max_uncovered_px
     failed_checks = [
         name for name, ok in (
             ("score", score >= threshold),
@@ -309,7 +320,7 @@ def region_score(ref_full: Image, cand_full: Image, region: dict) -> dict:
         "largest_uncovered_px": coverage["largest_uncovered_px"],
         "largest_uncovered_fraction": round(largest_fraction, 7),
         "max_uncovered_fraction": max_uncovered,
-        "max_uncovered_px": None if max_uncovered is None else int(max_uncovered * frame_px),
+        "max_uncovered_px": max_uncovered_px,
         "uncovered_passed": uncovered_passed,
         "reference_ink_px": coverage["reference_ink_px"],
         "candidate_ink_px": coverage["candidate_ink_px"],
@@ -356,6 +367,25 @@ def load_regions(path: Path | None) -> dict:
                     file=sys.stderr,
                 )
                 sys.exit(2)
+            if not math.isfinite(float(value)) or not 0.0 <= float(value) <= 1.0:
+                print(
+                    f"error: region '{name}' has invalid {required}={value!r} (expected finite number in 0..1)",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+        for dimension in ("w", "h"):
+            if region[dimension] <= 0.0:
+                print(
+                    f"error: region '{name}' has invalid {dimension}={region[dimension]!r} (expected positive number in 0..1)",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+        if region["x"] + region["w"] > 1.0 or region["y"] + region["h"] > 1.0:
+            print(
+                f"error: region '{name}' extends beyond the unit frame",
+                file=sys.stderr,
+            )
+            sys.exit(2)
         for threshold_name in ("threshold", "edge_threshold", "coverage_floor", "max_uncovered_fraction"):
             if threshold_name not in region:
                 continue

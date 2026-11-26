@@ -207,6 +207,18 @@ class HelperScoringTests(unittest.TestCase):
 
 
 class MainFlowTests(unittest.TestCase):
+    def test_main_rejects_threshold_outside_unit_interval(self) -> None:
+        for invalid in ("-0.1", "1.1", "nan"):
+            with self.subTest(invalid=invalid):
+                result = subprocess.run(
+                    [sys.executable, str(SCRIPT), "missing-ref.png", "missing-cand.png", "--threshold", invalid],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("finite number in 0..1", result.stderr)
+
     def _run_main(
         self,
         argv: list[str],

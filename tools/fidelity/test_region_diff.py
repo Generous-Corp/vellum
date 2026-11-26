@@ -15,6 +15,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import math
 import subprocess
 import sys
 import tempfile
@@ -101,6 +102,18 @@ class TestSchemaValidation(unittest.TestCase):
             result = _run([str(ref), str(cand), "--regions", str(regions)])
             self.assertEqual(result.returncode, 2)
             self.assertIn("non-numeric", result.stderr)
+
+    def test_region_bounds_and_dimensions_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tdir:
+            tmp = Path(tdir)
+            for bad, expected in (
+                ({"x": -0.1, "y": 0.0, "w": 0.5, "h": 0.5}, "invalid x"),
+                ({"x": 0.0, "y": 0.0, "w": 0.0, "h": 0.5}, "invalid w"),
+                ({"x": 0.9, "y": 0.0, "w": 0.2, "h": 0.5}, "extends beyond"),
+                ({"x": float("nan"), "y": 0.0, "w": 0.5, "h": 0.5}, "invalid x"),
+            ):
+                with self.subTest(bad=bad):
+                    self._assert_load_regions_error(tmp, {"r1": bad}, expected)
 
     def test_bool_coord_rejected(self) -> None:
         # bool is an int subclass; reject it explicitly so
@@ -580,16 +593,39 @@ FULL = {"x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0}
 
 
 class TestInkCoverage(unittest.TestCase):
+    def test_default_size_patch_boundary_rounds_up_to_64_pixels(self) -> None:
+        self.assertEqual(regions_mod.uncovered_patch_limit(0.000056, (1320, 860)), 64)
+        ref = FakeImage([(1, 1, 1)], size=(1320, 860))
+        cand = FakeImage([(1, 1, 1)], size=(1320, 860))
+        coverage = {
+            "covered": 1.0,
+            "ink_ratio": 1.0,
+            "reference_ink_px": 1,
+            "candidate_ink_px": 1,
+            "reference_modal_rgb": [1, 1, 1],
+        }
+        with mock.patch.object(regions_mod, "ink_coverage", return_value={**coverage, "largest_uncovered_px": 64}):
+            self.assertTrue(regions_mod.region_score(
+                ref, cand, dict(FULL, threshold=0.0, max_uncovered_fraction=0.000056)
+            )["passed"])
+        with mock.patch.object(regions_mod, "ink_coverage", return_value={**coverage, "largest_uncovered_px": 65}):
+            result = regions_mod.region_score(
+                ref, cand, dict(FULL, threshold=0.0, max_uncovered_fraction=0.000056)
+            )
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["max_uncovered_px"], 64)
+        self.assertEqual(result["failed_checks"], ["uncovered_patch"])
     def test_missing_slider_fails_the_patch_gate_while_score_passes(self) -> None:
         region = dict(FULL, threshold=0.75, max_uncovered_fraction=0.0027)
         result = regions_mod.region_score(_toolbar(True), _toolbar(False), region)
         self.assertGreaterEqual(result["score"], 0.75)
         self.assertEqual(result["largest_uncovered_px"], 50 * 10)
         self.assertAlmostEqual(result["largest_uncovered_fraction"], 500 / (400 * 60), places=6)
-        self.assertEqual(result["max_uncovered_px"], 64)
+        self.assertEqual(result["max_uncovered_px"], 65)
         self.assertFalse(result["uncovered_passed"])
         self.assertEqual(result["failed_checks"], ["uncovered_patch"])
         self.assertFalse(result["passed"])
+
 
     def test_identical_toolbar_passes_every_coverage_gate(self) -> None:
         region = dict(FULL, coverage_floor=0.98, max_uncovered_fraction=0.0)
@@ -645,7 +681,7 @@ class TestInkCoverage(unittest.TestCase):
             cand = _toolbar(False).resize((400 * scale, 60 * scale))
             with self.subTest(scale=scale):
                 missing = regions_mod.region_score(ref, cand, region)
-                self.assertEqual(missing["max_uncovered_px"], int(0.0027 * 400 * 60 * scale * scale))
+                self.assertEqual(missing["max_uncovered_px"], math.ceil(0.0027 * 400 * 60 * scale * scale))
                 self.assertGreaterEqual(missing["largest_uncovered_px"], 500 * scale * scale)
                 self.assertEqual(missing["failed_checks"], ["uncovered_patch"])
                 self.assertTrue(regions_mod.region_score(ref, ref, region)["passed"])
@@ -671,7 +707,7 @@ class TestInkCoverage(unittest.TestCase):
                  contextlib.redirect_stdout(stdout):
                 rc = regions_mod.main()
         self.assertEqual(rc, 1)
-        self.assertIn("largest uncovered patch=500px (limit 64px)", stdout.getvalue())
+        self.assertIn("largest uncovered patch=500px (limit 65px)", stdout.getvalue())
         self.assertIn("failed: uncovered_patch", stdout.getvalue())
 
 

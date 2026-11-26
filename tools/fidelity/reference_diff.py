@@ -242,6 +242,17 @@ def similarity_score(a: Image, b: Image) -> float:
     return (histogram_similarity(a, b) * 0.4) + (mean_pixel_distance(a, b) * 0.6)
 
 
+def unit_interval(value: str) -> float:
+    """Parse a finite threshold in the documented 0..1 interval."""
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a number in 0..1") from exc
+    if not math.isfinite(parsed) or not 0.0 <= parsed <= 1.0:
+        raise argparse.ArgumentTypeError("must be a finite number in 0..1")
+    return parsed
+
+
 def is_blank(img: Image, dark_threshold: int = 30) -> bool:
     """True if the image is essentially blank (>95% pixels near-black)."""
     pixels = list(img.getdata())
@@ -266,7 +277,7 @@ def main() -> int:
     parser.add_argument("candidate", type=Path, help="Candidate PNG to compare")
     parser.add_argument(
         "--threshold",
-        type=float,
+        type=unit_interval,
         default=0.85,
         help="Similarity threshold (0..1); below this is FAIL (default 0.85)",
     )
