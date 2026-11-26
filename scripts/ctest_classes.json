@@ -56,6 +56,7 @@
       "vellum.framework.render-pass",
       "vellum.framework.scripted-ui-param-model",
       "vellum.framework.text-button-measure",
+      "vellum.framework.web-view",
       "vellum.framework.widget-bridge",
       "vellum.framework.widget-bridge-param-model",
       "vellum.gpu-runtime-artifact-unit",

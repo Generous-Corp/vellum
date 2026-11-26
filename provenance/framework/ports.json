@@ -1127,6 +1127,46 @@
       "pulp_commits": [],
       "framework_blob": null,
       "reason": "Structural validation for sealed font bytes before platform parsing."
+    },
+    {
+      "framework_path": "framework/core/view/include/vellum/view/web_view.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Vellum's embedded WebView API: WebViewPanel, the structured page bridge and the offline/embedded resource helpers, so a WebView editor can live in a Vellum view tree through NativeViewHost. Ported from Pulp's core/view/include/pulp/view/web_view.hpp by API change: the namespace and include paths respelled to vellum, comments edited, and the page-side bridge wire names kept so existing pages run unchanged."
+    },
+    {
+      "framework_path": "framework/core/view/src/web_view.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "WebViewPanel over CHOC's WKWebView, with the structured message bridge and resource fetchers. Ported from Pulp's core/view/src/web_view.cpp by API change: the namespace and include paths respelled to vellum, comments edited, and the page-side bridge wire names kept so existing pages run unchanged."
+    },
+    {
+      "framework_path": "framework/core/view/src/web_view_backend.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "The WebView backend detector. Written for Vellum: the build's backend is a compile-time constant with a test override, replacing Pulp's link-time provider pair (web_view_backend.cpp and web_view_backend_provider.cpp), whose weak C symbol would be shared with Pulp's copy in one process."
+    },
+    {
+      "framework_path": "framework/core/view/platform/mac/web_view_snapshot_mac.mm",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "In-process WKWebView snapshot to PNG for headless capture of a WebView overlay. Ported from Pulp's core/view/platform/mac/web_view_snapshot_mac.mm by API change: the namespace and include paths respelled to vellum, comments edited, and the page-side bridge wire names kept so existing pages run unchanged."
     }
   ]
 }

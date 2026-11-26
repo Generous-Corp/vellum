@@ -331,9 +331,17 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
         UNITS Vellum::MirrorFoundation)
     target_link_libraries(vellum-framework-native-dialog-delivery-test PRIVATE "-framework CoreFoundation")
     set_tests_properties(vellum.framework.native-dialog-delivery PROPERTIES TIMEOUT 15)
+
+    # A live WKWebView driven by the main run loop, never placed in a window.
+    vellum_add_framework_test(web-view
+        SOURCES web_view_test.mm
+        UNITS Vellum::MirrorView_core)
+    target_link_libraries(vellum-framework-web-view-test PRIVATE
+        "-framework CoreFoundation" "-framework CoreGraphics" "-framework ImageIO")
+    set_tests_properties(vellum.framework.web-view PROPERTIES TIMEOUT 120)
 else()
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
-        main_thread_timer_test.mm native_dialog_delivery_test.cpp)
+        main_thread_timer_test.mm native_dialog_delivery_test.cpp web_view_test.mm)
 endif()
 
 # iOS-only: compiled by tools/mirror/consumer/ios-auv3 against the iOS simulator
