@@ -23,6 +23,9 @@ void copy_float_attribute(const draco::PointAttribute* attribute,
     }
     out.resize(static_cast<size_t>(vertex_count) *
                static_cast<size_t>(component_count));
+    // Integer attributes are converted by value, not normalized: a normalized
+    // uint16 texcoord keeps its raw 0..65535 range. Callers that need the
+    // normalized range must scale it.
     // Convert at most the four floats the buffer below holds, from the
     // attribute's own data type. GetMappedValue copies the stored bytes
     // unconverted and unbounded, so a stream that declares a wide or integer

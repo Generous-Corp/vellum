@@ -612,6 +612,36 @@ FULL = {"x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0}
 
 
 class TestInkCoverage(unittest.TestCase):
+    def test_uncovered_border_pixels_form_only_in_frame_components(self) -> None:
+        cases = (
+            ("bottom", 5, 5, [(1, 4), (2, 4), (3, 4)], 3),
+            ("top", 5, 5, [(1, 0), (2, 0), (3, 0)], 3),
+            ("left", 5, 5, [(0, 1), (0, 2), (0, 3)], 3),
+            ("right", 5, 5, [(4, 1), (4, 2), (4, 3)], 3),
+            ("corners", 5, 5, [(0, 0), (4, 0), (0, 4), (4, 4)], 1),
+            ("diagonal", 5, 5, [(2, 2), (3, 3), (4, 4)], 3),
+            ("row_wrap", 5, 5, [(4, 1), (0, 2)], 1),
+            ("single_row", 7, 1, [(0, 0), (5, 0), (6, 0)], 2),
+            ("single_column", 1, 7, [(0, 0), (0, 5), (0, 6)], 2),
+        )
+        for name, width, height, points, largest in cases:
+            with self.subTest(case=name):
+                background = [(5, 6, 9)] * (width * height)
+                pixels = list(background)
+                for x, y in points:
+                    pixels[y * width + x] = (200, 205, 210)
+                ref = Image(width, height, pixels, "RGB")
+                cand = Image(width, height, background, "RGB")
+                result = regions_mod.region_score(
+                    ref, cand, dict(FULL, threshold=0.0, max_uncovered_fraction=0.0))
+                self.assertEqual(result["reference_ink_px"], len(points))
+                self.assertEqual(result["ink_coverage"], 0.0)
+                self.assertEqual(result["largest_uncovered_px"], largest)
+                self.assertAlmostEqual(
+                    result["largest_uncovered_fraction"], largest / (width * height), places=7)
+                self.assertIn("uncovered_patch", result["failed_checks"])
+                self.assertFalse(result["passed"])
+
     def test_default_size_patch_boundary_rounds_up_to_64_pixels(self) -> None:
         self.assertEqual(regions_mod.uncovered_patch_limit(0.000056, (1320, 860)), 64)
         ref = FakeImage([(1, 1, 1)], size=(1320, 860))
@@ -634,6 +664,7 @@ class TestInkCoverage(unittest.TestCase):
         self.assertFalse(result["passed"])
         self.assertEqual(result["max_uncovered_px"], 64)
         self.assertEqual(result["failed_checks"], ["uncovered_patch"])
+
     def test_missing_slider_fails_the_patch_gate_while_score_passes(self) -> None:
         region = dict(FULL, threshold=0.75, max_uncovered_fraction=0.0027)
         result = regions_mod.region_score(_toolbar(True), _toolbar(False), region)

@@ -143,6 +143,12 @@ vellum_add_framework_test(design-import-jsx-runtime
     SOURCES design_import_jsx_runtime_test.cpp
     UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import)
 
+vellum_add_framework_test(design-import-react-runtime
+    SOURCES design_import_react_runtime_test.cpp
+    UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import)
+target_compile_definitions(vellum-framework-design-import-react-runtime-test PRIVATE
+    VELLUM_REACT_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/fixtures/react-runtime")
+
 vellum_add_framework_test(runtime-import-parsers
     SOURCES runtime_import_parsers_test.cpp
     UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import)
