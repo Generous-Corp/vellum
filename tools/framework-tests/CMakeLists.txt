@@ -56,6 +56,22 @@ set_tests_properties(vellum.framework.web-view-header-consumer PROPERTIES LABELS
 set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
     web_view_header_consumer_test.cpp)
 
+# Exercise the non-macOS stub on every test host without linking the native
+# view library, whose detector would otherwise mask a missing stub symbol.
+add_executable(vellum-framework-web-view-backend-stub-test
+    web_view_backend_stub_test.cpp
+    "${PROJECT_SOURCE_DIR}/framework/core/view/src/web_view_backend_stub.cpp")
+target_include_directories(vellum-framework-web-view-backend-stub-test PRIVATE
+    "${PROJECT_SOURCE_DIR}/framework/core/view/include")
+set_target_properties(vellum-framework-web-view-backend-stub-test PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON)
+add_test(NAME vellum.framework.web-view-backend-stub
+    COMMAND vellum-framework-web-view-backend-stub-test)
+set_tests_properties(vellum.framework.web-view-backend-stub PROPERTIES LABELS framework)
+set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+    web_view_backend_stub_test.cpp)
+
 # The routing policy test supplies parser operations without linking a canvas library.
 add_executable(vellum-framework-font-container-route-test font_container_route_test.cpp)
 target_include_directories(vellum-framework-font-container-route-test PRIVATE

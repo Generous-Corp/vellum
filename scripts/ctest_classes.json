@@ -72,6 +72,7 @@
       "vellum.framework.text-button-measure",
       "vellum.framework.web-compat-react-shims",
       "vellum.framework.web-view",
+      "vellum.framework.web-view-backend-stub",
       "vellum.framework.web-view-header-consumer",
       "vellum.framework.widget-bridge",
       "vellum.framework.widget-bridge-param-model",
