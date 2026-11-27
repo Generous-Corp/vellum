@@ -695,6 +695,11 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
                 "-framework UniformTypeIdentifiers"
                 "-framework UserNotifications"
                 bsm)
+            # view-core's embedded WebView (web_view.cpp, the ports ledger
+            # adds it on macOS) drives WKWebView.
+            if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+                target_link_libraries(vellum-skia-dawn-provider PRIVATE "-framework WebKit")
+            endif()
         endif()
         # Retain a concrete provider binding in this otherwise empty frontend.
         # Loading the frontend must also load its re-exported provider.
