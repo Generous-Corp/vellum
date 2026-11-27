@@ -7,6 +7,8 @@
 #include "strict_json.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <cmath>
 #include <fstream>
 #include <regex>
 #include <set>
@@ -132,27 +134,37 @@ std::vector<std::string> scrape_script_attr(const std::string& html, const std::
         std::string tag_lower = tag;
         for (auto& c : tag_lower)
             c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        // Attribute syntax allows optional whitespace around '=' (HTML
+        // "attribute value syntax"), so `src = "x"` is the same as `src="x"`.
+        auto is_space = [](char ch) {
+            return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' || ch == '\f';
+        };
         size_t a = 0;
-        while ((a = tag_lower.find(needle + "=", a)) != std::string::npos) {
-            if (a > 0) {
-                const char before = tag_lower[a - 1];
-                if (!(before == ' ' || before == '\t' ||
-                      before == '\r' || before == '\n')) {
-                    a += needle.size() + 1;
-                    continue;
-                }
+        while ((a = tag_lower.find(needle, a)) != std::string::npos) {
+            // The name must start a new attribute (e.g. not `data-src`).
+            if (a == 0 || !is_space(tag_lower[a - 1])) {
+                a += needle.size();
+                continue;
             }
-            // Skip past `attr=`.
-            auto v = a + needle.size() + 1;
+            auto eq = a + needle.size();
+            while (eq < tag.size() && is_space(tag[eq])) ++eq;
+            // Anything other than '=' means a different attribute name
+            // (`srcset`) or a value-less attribute; keep looking.
+            if (eq >= tag.size() || tag[eq] != '=') {
+                a += needle.size();
+                continue;
+            }
+            auto v = eq + 1;
+            while (v < tag.size() && is_space(tag[v])) ++v;
             if (v < tag.size() && (tag[v] == '"' || tag[v] == '\'')) {
                 char q = tag[v++];
                 auto end = tag.find(q, v);
                 if (end != std::string::npos)
                     out.push_back(tag.substr(v, end - v));
             } else {
-                auto end = tag.find_first_of(" \t>", v);
+                auto end = tag.find_first_of(" \t\r\n\f>", v);
                 if (end == std::string::npos) end = tag.size();
-                out.push_back(tag.substr(v, end - v));
+                if (end > v) out.push_back(tag.substr(v, end - v));
             }
             break;
         }
@@ -174,10 +186,44 @@ std::vector<std::string> scrape_tailwind_tokens(const std::string& html) {
     static const std::regex token_re(
         R"REX("([a-zA-Z][a-zA-Z0-9_-]{1,40})"\s*:)REX",
         std::regex::ECMAScript);
-    auto begin = std::sregex_iterator(html.begin(), html.end(), token_re);
-    auto end = std::sregex_iterator{};
-    for (auto it = begin; it != end; ++it)
-        seen.insert((*it)[1].str());
+    auto collect = [&seen](const std::string& text, const std::regex& re) {
+        auto begin = std::sregex_iterator(text.begin(), text.end(), re);
+        for (auto it = begin; it != std::sregex_iterator{}; ++it)
+            seen.insert((*it)[1].str());
+    };
+    collect(html, token_re);
+
+    // A tailwind.config object is JavaScript, so its keys may also be
+    // single-quoted ('surface-container': ...) or bare identifiers
+    // (primary: ...). Those spellings are only read inside inline scripts
+    // that mention tailwind, so CSS (`{color:red}`) and prose do not add
+    // tokens. A bare key must follow '{' or ',' (object-literal position).
+    static const std::regex single_quoted_re(
+        R"REX('([a-zA-Z][a-zA-Z0-9_-]{1,40})'\s*:)REX",
+        std::regex::ECMAScript);
+    static const std::regex bare_key_re(
+        R"REX([{,]\s*([a-zA-Z_$][a-zA-Z0-9_$]{1,40})\s*:)REX",
+        std::regex::ECMAScript);
+    std::string html_lower = html;
+    for (auto& c : html_lower)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    size_t i = 0;
+    while (i < html_lower.size()) {
+        auto open = html_lower.find("<script", i);
+        if (open == std::string::npos) break;
+        auto body_start = html_lower.find('>', open);
+        if (body_start == std::string::npos) break;
+        ++body_start;
+        auto body_end = html_lower.find("</script", body_start);
+        if (body_end == std::string::npos) body_end = html_lower.size();
+        if (html_lower.substr(body_start, body_end - body_start).find("tailwind") !=
+            std::string::npos) {
+            const std::string body = html.substr(body_start, body_end - body_start);
+            collect(body, single_quoted_re);
+            collect(body, bare_key_re);
+        }
+        i = body_end;
+    }
     return {seen.begin(), seen.end()};
 }
 
@@ -217,8 +263,18 @@ std::optional<ImportsManifest> parse_compat_json(const std::string& text) {
                 if (auto nv = member_string(f, "notes")) e.notes = *nv;
                 if (auto mv = member_string(f, "match")) e.match = *mv;
                 if (auto cv = member(f, "min-confidence-pct")) {
-                    if (cv->isInt()) e.min_confidence_pct = static_cast<int>(cv->getInt64());
-                    else if (cv->isFloat()) e.min_confidence_pct = static_cast<int>(cv->getFloat64());
+                    // A percentage outside [0, 100] (or a non-finite float)
+                    // is malformed: ignore it like a non-numeric value rather
+                    // than narrowing it, which is undefined for out-of-range
+                    // floats and silently wraps large integers.
+                    if (cv->isInt()) {
+                        const auto v = cv->getInt64();
+                        if (v >= 0 && v <= 100) e.min_confidence_pct = static_cast<int>(v);
+                    } else if (cv->isFloat()) {
+                        const double v = cv->getFloat64();
+                        if (std::isfinite(v) && v >= 0.0 && v <= 100.0)
+                            e.min_confidence_pct = static_cast<int>(v);
+                    }
                 }
                 auto fp = member(f, "fingerprint");
                 if (fp && fp->isArray()) {
