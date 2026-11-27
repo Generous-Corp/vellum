@@ -167,7 +167,7 @@
       "source": "https://github.com/google/draco/archive/refs/tags/1.5.9.tar.gz",
       "commit": "554628821c3448319d7d4ae48db170b8c63e1aaf",
       "sha256": "5b84e0e212ccc7b03ace681760a65a66fe2481a5f54df65154cfc8f0cbb87148",
-      "surface": "optional native mesh decoding (VELLUM_ENABLE_DRACO=ON, default OFF; needs VELLUM_ENABLE_MIRROR); the source archive is fetched by URL and SHA-256 by cmake/VellumDraco.cmake, built decoder-only as a position-independent static library and linked into vellum-skia-dawn-provider, where framework/core/render/src/draco_decoder.cpp turns vellum::render::decode_draco from the stub into a decoder; never part of a default build; bytes not mirrored"
+      "surface": "native mesh decoding (VELLUM_ENABLE_DRACO, default OFF for a plain configure, ON in the SDK build, so the published SDK carries it; needs VELLUM_ENABLE_MIRROR); the source archive is fetched by URL and SHA-256 by cmake/VellumDraco.cmake, built whole as a position-independent static library (transcoder, tools and tests off) with only the decoder objects linked into vellum-skia-dawn-provider, where framework/core/render/src/draco_decoder.cpp turns vellum::render::decode_draco from the stub into a decoder; its ans.h is BSD-3-Clause, based on libvpx; bytes not mirrored"
     }
   ],
   "runtime_toolchain_dependencies": {

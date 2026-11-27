@@ -1544,7 +1544,9 @@ SOFTWARE.
 
 With `VELLUM_ENABLE_DRACO=ON` the provider library carries the decoder half of
 Draco 1.5.9 (https://github.com/google/draco), fetched by SHA-256 and built
-from source. The default build leaves it out. The Apache License, Version 2.0
+from source. A plain configure leaves it out; the SDK build turns it on, so the
+published SDK carries it. Draco's `src/draco/compression/entropy/ans.h` is
+BSD-3-Clause code based on libvpx's `ans.h`. The Apache License, Version 2.0
 is reproduced above, and the upstream license file is installed under
 `sdk/mirror/share/licenses/draco/`.
 

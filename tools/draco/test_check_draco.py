@@ -65,6 +65,83 @@ class SourceChecks(unittest.TestCase):
         self.assertTrue(any("no Draco section" in e for e in cd.source_errors(self.root)))
 
 
+    def refused(self, fragment: str) -> None:
+        errors = cd.source_errors(self.root)
+        self.assertTrue(any(fragment in e for e in errors), (fragment, errors))
+
+    def test_a_digest_changed_everywhere_still_needs_the_module_hash_line(self) -> None:
+        self.edit(cd.MODULE, '    URL_HASH "SHA256=${VELLUM_DRACO_SHA256}"\n', "")
+        self.refused("URL_HASH")
+
+    def test_a_url_hard_coded_to_another_tag_is_refused(self) -> None:
+        self.edit(cd.MODULE, "refs/tags/${VELLUM_DRACO_VERSION}.tar.gz", "refs/tags/1.5.7.tar.gz")
+        self.refused("must fetch exactly")
+
+    def test_a_fork_url_is_refused(self) -> None:
+        self.edit(cd.MODULE, "https://github.com/google/draco/", "https://github.com/evil/draco/")
+        self.refused("must fetch exactly")
+
+    def test_a_floating_branch_url_is_refused(self) -> None:
+        self.edit(cd.MODULE, "refs/tags/${VELLUM_DRACO_VERSION}.tar.gz", "refs/heads/main.tar.gz")
+        self.refused("must fetch exactly")
+
+    def test_a_git_fetch_is_refused(self) -> None:
+        self.edit(cd.MODULE, "    DOWNLOAD_EXTRACT_TIMESTAMP TRUE",
+                  "    GIT_REPOSITORY https://github.com/google/draco\n    GIT_TAG main\n    DOWNLOAD_EXTRACT_TIMESTAMP TRUE")
+        self.refused("GIT_REPOSITORY")
+        self.refused("GIT_TAG")
+
+    def test_a_lock_source_on_a_fork_is_refused(self) -> None:
+        path = self.root / "provenance/third-party-lock.json"
+        lock = json.loads(path.read_text(encoding="utf-8"))
+        for d in lock["dependencies"]:
+            if d.get("name") == "Draco":
+                d["source"] = "https://github.com/evil/draco/archive/refs/tags/1.5.9.tar.gz"
+        path.write_text(json.dumps(lock), encoding="utf-8")
+        self.refused("lock entry's source")
+
+    def test_a_lock_commit_of_zeros_is_refused(self) -> None:
+        path = self.root / "provenance/third-party-lock.json"
+        lock = json.loads(path.read_text(encoding="utf-8"))
+        for d in lock["dependencies"]:
+            if d.get("name") == "Draco":
+                d["commit"] = "0" * 40
+        path.write_text(json.dumps(lock), encoding="utf-8")
+        self.refused("lock entry's commit")
+
+    def test_the_transcoder_on_is_refused(self) -> None:
+        self.edit(cd.MODULE, "set(DRACO_TRANSCODER_SUPPORTED OFF", "set(DRACO_TRANSCODER_SUPPORTED ON")
+        self.refused("DRACO_TRANSCODER_SUPPORTED OFF")
+
+    def test_a_non_apache_row_is_refused(self) -> None:
+        text = (self.root / "DEPENDENCIES.md").read_text(encoding="utf-8")
+        row = next(line for line in text.splitlines() if line.startswith("| Draco "))
+        (self.root / "DEPENDENCIES.md").write_text(
+            text.replace(row, row.replace("Apache-2.0", "GPL-3.0")), encoding="utf-8")
+        self.refused("must name Apache-2.0")
+
+    def test_an_unpinned_download_before_the_guard_is_refused(self) -> None:
+        self.edit(cd.MODULE, "include_guard(GLOBAL)",
+                  "include_guard(GLOBAL)\nfile(DOWNLOAD https://example.com/x.tgz x.tgz)")
+        self.refused("file(DOWNLOAD")
+
+    def test_a_second_fetch_is_refused(self) -> None:
+        self.edit(cd.MODULE, "FetchContent_MakeAvailable(vellum_draco)",
+                  "FetchContent_MakeAvailable(vellum_draco)\nExternalProject_Add(x URL https://example.com/y.tgz)")
+        self.refused("ExternalProject_Add")
+
+    def test_the_root_forcing_the_option_on_is_refused(self) -> None:
+        with open(self.root / "CMakeLists.txt", "a", encoding="utf-8") as handle:
+            handle.write(f"\nset({cd.OPTION} ON CACHE BOOL \"\" FORCE)\n")
+        self.refused("sets VELLUM_ENABLE_DRACO on or forces it")
+
+    def test_an_encoder_symbol_is_recognised(self) -> None:
+        self.assertTrue(cd.is_draco_encoder_symbol("__ZN5draco7Encoder6EncodeEv"))
+        self.assertTrue(cd.is_draco_encoder_symbol("__ZN5draco11MeshEncoderC2Ev"))
+        self.assertFalse(cd.is_draco_encoder_symbol("__ZN5draco7Decoder18DecodeMeshFromBufferEv"))
+
+
+
 class SymbolChecks(unittest.TestCase):
     def test_draco_symbols_are_recognised_and_skia_is_not(self) -> None:
         self.assertTrue(cd.is_draco_symbol("__ZN5draco7Decoder18DecodeMeshFromBufferEPNS_13DecoderBufferE"))

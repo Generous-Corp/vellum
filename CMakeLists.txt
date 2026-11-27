@@ -672,6 +672,18 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}" -I tools/draco/check_draco.py
             source "${CMAKE_CURRENT_SOURCE_DIR}"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(VELLUM_ENABLE_DRACO)
+        set(_vellum_draco_expect on)
+    else()
+        set(_vellum_draco_expect off)
+    endif()
+    if(VELLUM_ENABLE_MIRROR)
+        add_test(NAME vellum.draco-build-state
+            COMMAND "${Python3_EXECUTABLE}" -I tools/draco/check_draco.py
+                build "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}"
+                --expect ${_vellum_draco_expect}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    endif()
     add_test(NAME vellum.draco-check-unit
         COMMAND "${Python3_EXECUTABLE}" -I tools/draco/test_check_draco.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

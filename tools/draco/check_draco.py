@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 
 MODULE = "cmake/VellumDraco.cmake"
+COMMIT = "554628821c3448319d7d4ae48db170b8c63e1aaf"
 OPTION = "VELLUM_ENABLE_DRACO"
 PROVIDER_GLOB = "libvellum-skia-dawn-provider*.dylib"
 UNIT_GLOB = "libvellum-mirror-*.dylib"
@@ -39,6 +40,34 @@ def pins(repo: Path) -> dict[str, str]:
     return {"version": version.group(1), "sha256": digest.group(1)}
 
 
+def module_errors(module: str) -> list[str]:
+    """The fetch is one URL-and-digest archive of the official release tag, nothing else."""
+    errors: list[str] = []
+    body = "\n".join(line.split("#", 1)[0] for line in module.splitlines())
+    url = "https://github.com/google/draco/archive/refs/tags/${VELLUM_DRACO_VERSION}.tar.gz"
+    declares = re.findall(r"FetchContent_Declare\([^)]*\)", body)
+    if len(declares) != 1:
+        errors.append(f"{MODULE} must declare exactly one FetchContent source")
+    else:
+        declare = declares[0]
+        if f'URL "{url}"' not in declare:
+            errors.append(f"{MODULE} must fetch exactly {url}")
+        if 'URL_HASH "SHA256=${VELLUM_DRACO_SHA256}"' not in declare:
+            errors.append(f'{MODULE} must carry URL_HASH "SHA256=${{VELLUM_DRACO_SHA256}}"')
+        for word in ("GIT_REPOSITORY", "GIT_TAG", "SVN_REPOSITORY", "HG_REPOSITORY"):
+            if word in declare:
+                errors.append(f"{MODULE} must not fetch with {word}; only the hashed release archive")
+    if len(re.findall(r"https?://", body)) != 1:
+        errors.append(f"{MODULE} must name exactly one URL, the pinned release archive")
+    for word in ("file(DOWNLOAD", "ExternalProject_Add", "FetchContent_Populate", "execute_process", "add_subdirectory"):
+        if word.lower() in body.lower():
+            errors.append(f"{MODULE} must not use {word}; the only fetch is the hashed FetchContent archive")
+    for flag in ("DRACO_TRANSCODER_SUPPORTED", "DRACO_TESTS"):
+        if not re.search(rf'set\({flag} OFF CACHE BOOL "" FORCE\)', body):
+            errors.append(f"{MODULE} must force {flag} OFF")
+    return errors
+
+
 def source_errors(repo: Path) -> list[str]:
     errors: list[str] = []
     root = (repo / "CMakeLists.txt").read_text(encoding="utf-8")
@@ -47,6 +76,9 @@ def source_errors(repo: Path) -> list[str]:
         errors.append(f"CMakeLists.txt does not declare option({OPTION} ...)")
     elif option.group(1) != "OFF":
         errors.append(f"{OPTION} defaults to {option.group(1)}; it must default to OFF")
+    if re.search(rf"set\(\s*{OPTION}\s+(ON|TRUE|1)\b", root) or \
+            re.search(rf"set\(\s*{OPTION}\s+\S+\s+CACHE[^)]*FORCE", root):
+        errors.append(f"CMakeLists.txt sets {OPTION} on or forces it; it may only be the OFF option")
     if "include(cmake/VellumDraco.cmake)" not in root:
         errors.append("CMakeLists.txt does not include cmake/VellumDraco.cmake")
 
@@ -61,6 +93,8 @@ def source_errors(repo: Path) -> list[str]:
             if 0 <= at < guard.start():
                 errors.append(f"{MODULE} uses {what} before its early return")
 
+    errors += module_errors(module)
+
     try:
         pin = pins(repo)
     except ValueError as error:
@@ -70,12 +104,20 @@ def source_errors(repo: Path) -> list[str]:
     if pin["sha256"] not in row or pin["version"] not in row:
         errors.append(f"the Draco row of DEPENDENCIES.md does not carry {pin['version']} "
                       f"and SHA-256 {pin['sha256']}")
+    if "Apache-2.0" not in row:
+        errors.append("the Draco row of DEPENDENCIES.md must name Apache-2.0")
+    if COMMIT not in row:
+        errors.append(f"the Draco row of DEPENDENCIES.md must carry commit {COMMIT}")
     lock = json.loads((repo / "provenance/third-party-lock.json").read_text(encoding="utf-8"))
     entries = [d for d in lock["dependencies"] if d.get("name") == "Draco"]
     if len(entries) != 1:
         errors.append("provenance/third-party-lock.json must hold exactly one Draco entry")
     elif entries[0].get("sha256") != pin["sha256"] or entries[0].get("version") != pin["version"]:
         errors.append("the Draco entry of provenance/third-party-lock.json differs from the module's pin")
+    elif entries[0].get("source") != f"https://github.com/google/draco/archive/refs/tags/{pin['version']}.tar.gz":
+        errors.append("the Draco lock entry's source must be the google/draco release archive of the pinned tag")
+    elif entries[0].get("commit") != COMMIT:
+        errors.append(f"the Draco lock entry's commit must be {COMMIT}")
     elif entries[0].get("license") != "Apache-2.0":
         errors.append("the Draco lock entry must name Apache-2.0")
     notice = (repo / "NOTICE.md").read_text(encoding="utf-8")
@@ -107,7 +149,18 @@ def is_draco_symbol(symbol: str) -> bool:
     return "5draco" in symbol
 
 
+def is_draco_encoder_symbol(symbol: str) -> bool:
+    """A Draco class whose name says it encodes (Itanium: N5draco<len>...Encoder...)."""
+    return is_draco_symbol(symbol) and re.search(r"5draco\d+\w*Encoder", symbol) is not None
+
+
 def build_errors(build: Path, expect: str) -> list[str]:
+    cache = build / "CMakeCache.txt"
+    if cache.exists():
+        configured = re.search(rf"^{OPTION}:BOOL=(\w+)", cache.read_text(encoding="utf-8"), re.MULTILINE)
+        value = configured.group(1) if configured else "OFF"
+        if (value == "ON") != (expect == "on"):
+            return [f"expected a draco-{expect} build, but {OPTION}={value}"]
     providers = sorted(build.glob(PROVIDER_GLOB), key=lambda path: path.stat().st_mtime)
     if not providers:
         return [f"no provider library in {build}"]
@@ -117,7 +170,8 @@ def build_errors(build: Path, expect: str) -> list[str]:
     identity = provider.name[len("libvellum-skia-dawn-provider"):]
     units = sorted(build.glob(UNIT_GLOB.replace("*.dylib", "*" + identity)))
     errors: list[str] = []
-    in_provider = sum(is_draco_symbol(s) for s in defined_symbols(provider))
+    provider_symbols = defined_symbols(provider)
+    in_provider = sum(is_draco_symbol(s) for s in provider_symbols)
     in_units = {u.name: sum(is_draco_symbol(s) for s in defined_symbols(u)) for u in units}
     if not units:
         errors.append(f"no mirror unit library of identity {identity} in {build}")
@@ -130,6 +184,9 @@ def build_errors(build: Path, expect: str) -> list[str]:
     else:
         if not in_provider:
             errors.append(f"{provider.name} defines no Draco symbol with {OPTION} on")
+        encoders = [sym for sym in provider_symbols if is_draco_encoder_symbol(sym)]
+        if encoders:
+            errors.append(f"{provider.name} links {len(encoders)} Draco encoder symbols; only the decoder closure may be linked")
         for name, count in in_units.items():
             if count:
                 errors.append(f"{name} defines {count} Draco symbols; the decoder must live only in the provider")

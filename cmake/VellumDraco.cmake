@@ -8,9 +8,10 @@
 # position-independent static library, vellum-draco is the compile and link
 # usage for the one source that needs it (framework/core/render/src/
 # draco_decoder.cpp), and the mirror build (tools/mirror/VellumMirror.cmake)
-# turns the decoder on in the render-2d unit. Only the decoder library is
-# built: the encoder, transcoder and tools are off, so no third_party code of
-# Draco's is compiled.
+# turns the decoder on in the render-2d unit. Draco's static library is built
+# whole, with the transcoder, tools and tests off (Draco 1.5.9 has no
+# encoder-off switch); only the decoder objects are linked into the provider,
+# so it must stay a normal archive link, never whole-archive.
 
 include_guard(GLOBAL)
 
@@ -39,7 +40,7 @@ if(CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
 endif()
 
 # These values must equal the Draco row of DEPENDENCIES.md and
-# provenance/third-party-lock.json (tools/provenance/test_draco_pin.py). The
+# provenance/third-party-lock.json (checked by tools/draco/check_draco.py). The
 # SHA-256 is of the GitHub source archive for the tag; the commit is recorded
 # for the reader and checked against the lock, not used to fetch.
 set(VELLUM_DRACO_VERSION "1.5.9" CACHE STRING "Pinned Draco release tag")
@@ -55,7 +56,7 @@ FetchContent_Declare(vellum_draco
     EXCLUDE_FROM_ALL)
 
 # Draco's own options, scoped so they do not leak into Vellum's cache: the
-# decoder is all the mirror needs, and the static library is linked into a
+# decoder is all the provider links, and the static library is linked into a
 # shared provider, so it must be position independent.
 set(_vellum_draco_saved_pic "${CMAKE_POSITION_INDEPENDENT_CODE}")
 set(_vellum_draco_saved_shared "${BUILD_SHARED_LIBS}")

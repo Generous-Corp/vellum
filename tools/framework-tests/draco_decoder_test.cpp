@@ -73,7 +73,7 @@ FRAMEWORK_TEST(draco_refuses_bytes_that_are_not_a_draco_mesh) {
     CHECK(!vellum::render::decode_draco(garbage, sizeof(garbage), triangle_ids()).success);
     CHECK(!vellum::render::decode_draco(nullptr, 0, triangle_ids()).success);
     // The stream with its magic overwritten is not a mesh either.
-    std::vector<std::uint8_t> broken(kTriangle, kTriangle + sizeof(kTriangle));
+    std::vector<std::uint8_t> broken(std::begin(kTriangle), std::end(kTriangle));
     for (int i = 0; i < 5; ++i)
         broken[static_cast<std::size_t>(i)] = 0;
     CHECK(!vellum::render::decode_draco(broken.data(), broken.size(), triangle_ids()).success);
