@@ -202,6 +202,9 @@ if(VELLUM_BUILD_TESTS)
         add_test(NAME vellum.web.backdrop-backend
             COMMAND "${VELLUM_NODE_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/web/tests/backdrop_backend_test.mjs")
+        add_test(NAME vellum.web.perceptual-gate
+            COMMAND "${VELLUM_NODE_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/web/tests/perceptual_gate_test.mjs")
         add_test(NAME vellum.feature-versions-drift
             COMMAND "${VELLUM_NODE_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/versions/generate_feature_versions.mjs" --check)
