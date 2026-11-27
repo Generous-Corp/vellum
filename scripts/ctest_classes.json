@@ -203,6 +203,7 @@
       "vellum.app-host-text-ime-accessibility",
       "vellum.app-host-visual-fixtures",
       "vellum.framework.gpu-surface-device",
+      "vellum.framework.headless-surface-gpu",
       "vellum.framework.native-trace",
       "vellum.framework.threejs-render",
       "vellum.framework.threejs-scene",
