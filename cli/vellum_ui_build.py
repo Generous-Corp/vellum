@@ -82,6 +82,8 @@ def _source_files(source: Path) -> list[SourceFile]:
         if not path.is_file() or path.suffix.lower() not in SOURCE_SUFFIXES:
             continue
         relative = path.relative_to(source).as_posix()
+        if relative == MANIFEST_NAME:
+            raise UiBuildError(f"source file uses the reserved build manifest name: {relative}")
         data = path.read_bytes()
         files.append(SourceFile(relative, path, _sha256(data), len(data)))
     if not files:
@@ -218,7 +220,7 @@ def _validate_manifest(manifest: Any, source: Path, out: Path, files: list[Sourc
     output_files = {
         p.relative_to(out).as_posix()
         for p in out.rglob("*")
-        if p.is_file() and p.name != MANIFEST_NAME
+        if p.is_file() and p.relative_to(out).as_posix() != MANIFEST_NAME
     }
     source_paths = set(source_map)
     for extra in sorted(output_files - source_paths):

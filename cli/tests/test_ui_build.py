@@ -178,6 +178,20 @@ class UiBuildContractTests(unittest.TestCase):
         self.assertNotEqual(self.run_cli("build").returncode, 0)
         self.assertFalse((outside / "a.css").exists())
 
+    def test_reserved_manifest_name_source_is_rejected(self):
+        (self.source / "ui-build-manifest.json").write_text("{}\n", encoding="utf-8")
+        completed = self.run_cli("build")
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("reserved", completed.stdout + completed.stderr)
+
+    def test_nested_manifest_named_output_is_untracked(self):
+        self.assertEqual(self.run_cli("build").returncode, 0)
+        (self.out / "sub").mkdir()
+        (self.out / "sub" / "ui-build-manifest.json").write_text("{}\n", encoding="utf-8")
+        completed = self.run_cli("check")
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("untracked", completed.stdout + completed.stderr)
+
     def test_lint_command_filters_explicit_generated_vendor_roles(self):
         vendor = self.source / "vendor" / "runtime.js"
         vendor.parent.mkdir()
