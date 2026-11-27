@@ -423,6 +423,11 @@ class TestRegionHelpers(unittest.TestCase):
         load_regions.assert_not_called()
 
     def test_main_rejects_malformed_size_before_image_loading(self) -> None:
+        for size in ("bad", "0x8", "8x0", "-1x8", "8x-1", "0x0", "-1x-1"):
+            with self.subTest(size=size):
+                self._assert_invalid_size(size)
+
+    def _assert_invalid_size(self, size: str) -> None:
         stdout = io.StringIO()
         stderr = io.StringIO()
         with tempfile.TemporaryDirectory() as tdir:
@@ -431,8 +436,8 @@ class TestRegionHelpers(unittest.TestCase):
             cand_path = tmp / "cand.png"
             ref_path.write_text("ref", encoding="utf-8")
             cand_path.write_text("cand", encoding="utf-8")
-            with mock.patch.object(sys, "argv", [str(SCRIPT), str(ref_path), str(cand_path), "--size", "bad"]), \
-                 mock.patch.object(regions_mod, "load_normalized") as load_normalized, \
+            with mock.patch.object(sys, "argv", [str(SCRIPT), str(ref_path), str(cand_path), f"--size={size}"]), \
+                 mock.patch.object(regions_mod, "load_normalized", side_effect=OSError("image loading must not run")) as load_normalized, \
                  contextlib.redirect_stdout(stdout), \
                  contextlib.redirect_stderr(stderr):
                 rc = regions_mod.main()

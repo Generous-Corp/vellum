@@ -434,6 +434,8 @@ def main() -> int:
     regions = load_regions(args.regions)
     try:
         w, h = (int(x) for x in args.size.split("x"))
+        if w <= 0 or h <= 0:
+            raise ValueError(args.size)
     except ValueError:
         print(f"error: malformed --size {args.size}", file=sys.stderr)
         return 2
