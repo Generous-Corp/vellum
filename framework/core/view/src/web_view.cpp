@@ -11,7 +11,6 @@
 #include <atomic>
 #include <cctype>
 #include <filesystem>
-#include <list>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -483,14 +482,12 @@ public:
             }
         };
         if (options.fetch_resource) {
-            choc_opts.fetchResource = [this, fetch = options.fetch_resource](const std::string& path)
+            choc_opts.fetchResource = [fetch = options.fetch_resource](const std::string& path)
                 -> std::optional<choc::ui::WebView::Options::Resource> {
                 if (auto resource = fetch(path)) {
-                    std::lock_guard lock(resource_mutex_);
-                    resource_buffers_.push_back(std::move(resource->data));
-                    const auto& bytes = resource_buffers_.back();
                     return choc::ui::WebView::Options::Resource{
-                        std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()),
+                        std::string_view(reinterpret_cast<const char*>(resource->data.data()),
+                                         resource->data.size()),
                         resource->mime_type,
                     };
                 }
@@ -680,11 +677,6 @@ private:
         });
     }
 
-    // CHOC's Resource stores a non-owning string_view. Keep every fetched
-    // buffer stable for the panel lifetime so asynchronous resource loads
-    // never outlive the vector returned by the Vellum callback.
-    std::list<std::vector<uint8_t>> resource_buffers_;
-    std::mutex resource_mutex_;
     std::unique_ptr<choc::ui::WebView> webview_;
     std::mutex mutex_;
     std::unordered_map<std::string, EvalCallback> pending_eval_;
