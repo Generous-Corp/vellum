@@ -14,10 +14,12 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -294,6 +296,15 @@ constexpr int kNoGpuExit = 1;
 constexpr int kNoGpuExit = 77;
 #endif
 
+std::unique_ptr<HeadlessSurface> create_probe(std::string& error) {
+    const char* forced = std::getenv("VELLUM_TEST_FORCE_HEADLESS_SURFACE_FAILURE");
+    if (forced != nullptr && std::strcmp(forced, "1") == 0) {
+        error = "forced by the required-GPU negative control";
+        return nullptr;
+    }
+    return HeadlessSurface::create(config(), &error);
+}
+
 } // namespace
 
 int main() {
@@ -304,7 +315,7 @@ int main() {
         return kNoGpuExit;
     }
     std::string err;
-    auto probe = HeadlessSurface::create(config(), &err);
+    auto probe = create_probe(err);
     if (!probe) {
         std::printf("%s no headless GPU surface: %s\n", kNoGpuExit == 77 ? "SKIP" : "FAIL",
                     err.c_str());
