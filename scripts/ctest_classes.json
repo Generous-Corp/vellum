@@ -207,6 +207,7 @@
       "vellum.framework.gpu-surface-device",
       "vellum.framework.headless-surface-gpu",
       "vellum.framework.native-trace",
+      "vellum.framework.runtime-effect-names-gpu",
       "vellum.framework.skia-surface-frames",
       "vellum.framework.text-raster-policy",
       "vellum.framework.threejs-render",

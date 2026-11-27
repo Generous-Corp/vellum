@@ -202,7 +202,16 @@ if(TARGET vellum-dawn-headers AND TARGET vellum-gpu)
     target_compile_definitions(vellum-framework-text-raster-policy-test PRIVATE
         VELLUM_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/framework/external/fonts/JetBrainsMono-Regular.ttf")
     set_tests_properties(vellum.framework.text-raster-policy PROPERTIES SKIP_RETURN_CODE 77)
+    # Caller-supplied SkSL whose names match Graphite's own runtime-effect names.
+    vellum_add_framework_test(runtime-effect-names-gpu
+        SOURCES runtime_effect_names_gpu_test.cpp
+        UNITS Vellum::MirrorRender_2d Vellum::DawnHeaders Vellum::Gpu)
+    target_include_directories(vellum-framework-runtime-effect-names-gpu-test PRIVATE
+        "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
+    set_tests_properties(vellum.framework.runtime-effect-names-gpu PROPERTIES SKIP_RETURN_CODE 77)
 else()
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+        "runtime_effect_names_gpu_test.cpp")
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
         "text_raster_policy_test.cpp")
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
