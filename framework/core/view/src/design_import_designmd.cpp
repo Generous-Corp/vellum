@@ -1335,6 +1335,23 @@ std::string export_tailwind_v3_json(const DesignMdParseResult& parsed) {
     return o.str();
 }
 
+namespace {
+
+// A raw line break would end the declaration early. Write each one as the CSS
+// escape for a line feed (`\a `), which stays inside the value.
+std::string escape_css_line_breaks(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\r' && i + 1 < s.size() && s[i + 1] == '\n') continue;
+        if (s[i] == '\n' || s[i] == '\r') out += "\\a ";
+        else out += s[i];
+    }
+    return out;
+}
+
+} // namespace
+
 std::string export_tailwind_v4_css(const DesignMdParseResult& parsed) {
     const auto& t = parsed.ir.tokens;
     std::ostringstream o;
@@ -1363,7 +1380,8 @@ std::string export_tailwind_v4_css(const DesignMdParseResult& parsed) {
     for (const auto& [group, ns] : typo_namespaces) {
         auto it = typo.find(group);
         if (it == typo.end()) continue;
-        for (const auto& [level, value] : it->second) {
+        for (const auto& [level, raw] : it->second) {
+            const std::string value = group == "fontFamily" ? escape_css_line_breaks(raw) : raw;
             o << "  --" << ns << "-" << level << ": " << value << ";\n";
         }
     }

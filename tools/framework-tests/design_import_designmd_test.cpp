@@ -119,4 +119,12 @@ FRAMEWORK_TEST(angle_units_in_color_functions_are_valid_colors) {
     CHECK(!has_color_shape_warning(parse_colors("  a: \"lch(50% 40 120deg)\"\n")));
 }
 
+FRAMEWORK_TEST(tailwind_v4_escapes_line_breaks_in_font_family_names) {
+    const auto parsed = parse_designmd(
+        "---\nname: Test\ntypography:\n  body:\n    fontFamily: \"Inter\\nSans\"\n---\n");
+    const std::string css = export_tailwind_v4_css(parsed);
+    CHECK(contains(css, "  --font-body: Inter\\a Sans;\n"));
+    CHECK(!contains(css, "Inter\nSans"));
+}
+
 int main() { return framework_test::run_all(); }
