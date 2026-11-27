@@ -47,7 +47,7 @@ void operator delete[](void* p) noexcept { std::free(p); }
 void operator delete(void* p, std::size_t) noexcept { std::free(p); }
 void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 
-namespace vellum::test {
+namespace rt_probe {
 class RtAllocationProbe {
   public:
     RtAllocationProbe() {
@@ -57,7 +57,7 @@ class RtAllocationProbe {
     ~RtAllocationProbe() { probe_state::armed = false; }
     std::size_t allocation_count() const { return probe_state::count; }
 };
-} // namespace vellum::test
+} // namespace rt_probe
 
 using namespace vellum;
 using vellum::view::DesignFrameElement;
@@ -1309,12 +1309,12 @@ TEST_CASE("unchanged custom controls do not repaint on every host tick",
 
     view::clear_design_control_factories();
     RepaintingControl* control = nullptr;
-    view::register_design_control_factory("host-tick-control",
-                                          [&](const view::DesignControlContext&) {
-                                              auto widget = std::make_unique<RepaintingControl>();
-                                              control = widget.get();
-                                              return widget;
-                                          });
+    const auto make_control = [&](const view::DesignControlContext&) {
+        auto widget = std::make_unique<RepaintingControl>();
+        control = widget.get();
+        return widget;
+    };
+    view::register_design_control_factory("host-tick-control", make_control);
     DesignFrameElement element;
     element.kind = DesignFrameElement::Kind::custom;
     element.factory_id = "host-tick-control";
@@ -1373,7 +1373,7 @@ public:
         DesignFrameView::paint(canvas);
         // Measure only OUR read: the probe is scoped to the two calls under
         // test, so the base class's own painting cannot mask or inflate it.
-        vellum::test::RtAllocationProbe probe;
+        rt_probe::RtAllocationProbe probe;
         const int i = element_for_param_key(key);
         const std::string& text = element_display_text(i);
         const bool bound = element_has_display_text(i);
