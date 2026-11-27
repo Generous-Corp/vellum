@@ -253,6 +253,24 @@ class BakedEmitTests(unittest.TestCase):
                         self.assertEqual(payload["status"], "asset_localization_failed")
                         self.assertFalse((self.out / "gen").exists())
 
+    def test_relative_emitter_override_executes_the_verified_file(self) -> None:
+        (self.out / "emitter").symlink_to(Path(TOOL).resolve())
+        trap_dir = self.out / "path-bin"
+        trap_dir.mkdir()
+        trap = trap_dir / "emitter"
+        trap.write_text("#!/bin/sh\nexit 87\n")
+        trap.chmod(0o700)
+        for override in ["./emitter", "emitter"]:
+            completed = subprocess.run(
+                [sys.executable, str(CLI), "--json", "import", "--source-type", "design-ir",
+                 str(IR_FIXTURE), "--mode", "baked", "--emit", "cpp", "--out", "ui.cpp"],
+                cwd=self.out, env={**os.environ, "VELLUM_DESIGN_EMIT": override, "PATH": str(trap_dir)},
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(json.loads(completed.stdout)["status"], "emitted")
+            self.assertTrue((self.out / "ui.cpp").is_file())
+
     def test_non_executable_emitter_is_structured_failure(self) -> None:
         tool = self.out / "not-executable"
         tool.write_text("#!/bin/sh\nexit 0\n")

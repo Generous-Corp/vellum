@@ -1423,12 +1423,12 @@ def design_emit_path() -> Path | None:
     explicit = os.environ.get("VELLUM_DESIGN_EMIT")
     if explicit:
         path = Path(explicit).expanduser()
-        return path if path.is_file() else None
+        return path.resolve() if path.is_file() else None
     sdk_root = os.environ.get("VELLUM_SDK_ROOT")
     if not sdk_root:
         return None
     path = Path(sdk_root).expanduser() / "sdk" / "bin" / DESIGN_EMIT_NAME
-    return path if path.is_file() else None
+    return path.resolve() if path.is_file() else None
 
 
 def validate_baked_emit(args: argparse.Namespace) -> None:
