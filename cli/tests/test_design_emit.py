@@ -229,22 +229,22 @@ class BakedEmitTests(unittest.TestCase):
                 self.assertFalse((self.out / "gen" / "ui.cpp").exists())
 
     def test_cpp_refuses_document_and_symlink_asset_escapes(self) -> None:
-        secret = self.out / "private.bin"
-        secret.write_bytes(b"outside document")
+        outside_file = self.out / "outside.bin"
+        outside_file.write_bytes(b"outside document")
         doc_dir = self.out / "document"
         doc_dir.mkdir()
-        (doc_dir / "link.bin").symlink_to(secret)
+        (doc_dir / "link.bin").symlink_to(outside_file)
         source = doc_dir / "input.ir.json"
-        for raw in [str(secret), "../private.bin", "link.bin"]:
+        for raw in [str(outside_file), "../outside.bin", "link.bin"]:
             for field in ["asset_path", "fader_body_asset_path", "fader_indicator_asset_path", "manifest", "font"]:
                 document = json.loads(IR_FIXTURE.read_text())
                 if field == "manifest":
                     document["assetManifest"]["assets"] = [{
-                        "asset_id": "secret", "local_path": raw,
-                        "content_hash": hashlib.sha256(secret.read_bytes()).hexdigest(),
+                        "asset_id": "outside", "local_path": raw,
+                        "content_hash": hashlib.sha256(outside_file.read_bytes()).hexdigest(),
                     }]
                 elif field == "font":
-                    document["fontFamilyAssets"] = [{"family": "private", "resolved_path": raw}]
+                    document["fontFamilyAssets"] = [{"family": "outside", "resolved_path": raw}]
                 else:
                     document["root"].setdefault("attributes", {})[field] = raw
                 source.write_text(json.dumps(document))
