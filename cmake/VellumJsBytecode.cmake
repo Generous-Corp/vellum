@@ -154,6 +154,9 @@ function(vellum_add_js_bytecode target)
         else()
             # One byte, not empty: a zero-length array does not compile everywhere.
             file(WRITE "${_out_dir}/unavailable.vjsbc" "-")
+            # Timestamps alone can miss a stale blob on coarse-mtime filesystems, so
+            # drop it at configure time and let the build always recreate the placeholder.
+            file(REMOVE "${_blob}")
             add_custom_command(
                 OUTPUT "${_blob}"
                 COMMAND "${CMAKE_COMMAND}" -E copy "${_out_dir}/unavailable.vjsbc" "${_blob}"
