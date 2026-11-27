@@ -75,24 +75,26 @@ FRAMEWORK_TEST(native_accessibility_subtree_survives_cpu_and_metal_window_hosts)
             NSView* container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 100, 40)];
             [container setAccessibilityElement:NO];
             NSTextField* field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 100, 20)];
-            field.accessibilityLabel = @"Nested native field";
+            id native_element = NSAccessibilityUnignoredDescendant(field);
+            CHECK(native_element != nil);
+            CHECK([[native_element accessibilityRole] isEqualToString:NSAccessibilityTextFieldRole]);
             [container addSubview:field];
             CHECK(host->attach_native_child_view((__bridge void*)container, 0, 0, 100, 40));
-            CHECK([[view accessibilityChildren] containsObject:field]);
+            CHECK([[view accessibilityChildren] containsObject:native_element]);
             CHECK([view accessibilityChildren].count == 2U);
             container.hidden = YES;
-            CHECK(![[view accessibilityChildren] containsObject:field]);
+            CHECK(![[view accessibilityChildren] containsObject:native_element]);
             container.hidden = NO;
-            CHECK([[view accessibilityChildren] containsObject:field]);
+            CHECK([[view accessibilityChildren] containsObject:native_element]);
             view.hidden = YES;
             CHECK([view accessibilityChildren].count == 0U);
             view.hidden = NO;
             root.set_visible(false);
             CHECK([view accessibilityChildren].count == 0U);
             root.set_visible(true);
-            CHECK([[view accessibilityChildren] containsObject:field]);
+            CHECK([[view accessibilityChildren] containsObject:native_element]);
             host->detach_native_child_view((__bridge void*)container);
-            CHECK(![[view accessibilityChildren] containsObject:field]);
+            CHECK(![[view accessibilityChildren] containsObject:native_element]);
             CHECK([view accessibilityChildren].count == 1U);
         }
     }
