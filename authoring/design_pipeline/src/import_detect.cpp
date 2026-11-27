@@ -7,6 +7,7 @@
 #include "strict_json.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <regex>
 #include <set>
@@ -133,24 +134,35 @@ std::vector<std::string> scrape_script_attr(const std::string& html, const std::
         for (auto& c : tag_lower)
             c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         size_t a = 0;
-        while ((a = tag_lower.find(needle + "=", a)) != std::string::npos) {
+        while ((a = tag_lower.find(needle, a)) != std::string::npos) {
             if (a > 0) {
                 const char before = tag_lower[a - 1];
                 if (!(before == ' ' || before == '\t' ||
                       before == '\r' || before == '\n')) {
-                    a += needle.size() + 1;
+                    a += needle.size();
                     continue;
                 }
             }
-            // Skip past `attr=`.
-            auto v = a + needle.size() + 1;
+            // HTML permits whitespace around the equals sign.
+            auto equals = a + needle.size();
+            while (equals < tag_lower.size() &&
+                   std::isspace(static_cast<unsigned char>(tag_lower[equals])))
+                ++equals;
+            if (equals >= tag_lower.size() || tag_lower[equals] != '=') {
+                a += needle.size();
+                continue;
+            }
+            auto v = equals + 1;
+            while (v < tag.size() &&
+                   std::isspace(static_cast<unsigned char>(tag[v])))
+                ++v;
             if (v < tag.size() && (tag[v] == '"' || tag[v] == '\'')) {
                 char q = tag[v++];
                 auto end = tag.find(q, v);
                 if (end != std::string::npos)
                     out.push_back(tag.substr(v, end - v));
             } else {
-                auto end = tag.find_first_of(" \t>", v);
+                auto end = tag.find_first_of(" \t\r\n>", v);
                 if (end == std::string::npos) end = tag.size();
                 out.push_back(tag.substr(v, end - v));
             }

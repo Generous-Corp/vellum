@@ -472,25 +472,28 @@ TEST_CASE("snapshot_input accepts script tag and attribute whitespace boundaries
           << "<script\ttype=\"tab/module\"></script>\n"
           << "<script\rtype=\"cr/module\"></script>\n"
           << "<script\ntype=\"nl/module\"></script>\n"
+          << "<script src = \"equals-space.js\" type = \"equals/module\"></script>\n"
           << "<scripture src=\"not-a-script.js\"></scripture>\n";
     }
 
     auto snap = det::snapshot_input(dir);
-    REQUIRE(snap.script_srcs.size() == 4);
+    REQUIRE(snap.script_srcs.size() == 5);
     CHECK(snap.script_srcs[0] == "tab.js");
     CHECK(snap.script_srcs[1] == "cr.js");
     CHECK(snap.script_srcs[2] == "nl.js");
     CHECK(snap.script_srcs[3] == "space.js");
+    CHECK(snap.script_srcs[4] == "equals-space.js");
     CHECK(std::find(snap.script_srcs.begin(), snap.script_srcs.end(), "ignored.js") ==
           snap.script_srcs.end());
     CHECK(std::find(snap.script_srcs.begin(), snap.script_srcs.end(), "not-a-script.js") ==
           snap.script_srcs.end());
 
-    REQUIRE(snap.script_types.size() == 4);
+    REQUIRE(snap.script_types.size() == 5);
     CHECK(snap.script_types[0] == "space/module");
     CHECK(snap.script_types[1] == "tab/module");
     CHECK(snap.script_types[2] == "cr/module");
     CHECK(snap.script_types[3] == "nl/module");
+    CHECK(snap.script_types[4] == "equals/module");
     CHECK(std::find(snap.script_types.begin(), snap.script_types.end(), "ignored/module") ==
           snap.script_types.end());
 
