@@ -45,7 +45,10 @@ class BakedEmitTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
-        self.out = Path(self.temp.name)
+        # The CLI resolves its source path, and macOS temp dirs sit behind the
+        # /var -> /private/var symlink, so build every path from the resolved
+        # directory or absolute assets look like they leave the document.
+        self.out = Path(self.temp.name).resolve()
 
     def tearDown(self) -> None:
         self.temp.cleanup()
