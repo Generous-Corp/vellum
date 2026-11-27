@@ -139,7 +139,20 @@ bool localize_ir_assets(
     };
 
     for (auto& asset : ir.asset_manifest.assets) {
-        if (!asset.local_path || asset.local_path->empty()) continue;
+        if (!asset.local_path || asset.local_path->empty()) {
+            if (asset.original_uri.starts_with("file://")) {
+                asset.local_path = asset.original_uri.substr(7);
+            } else if (svg_ids.contains(asset.asset_id) && !asset.original_uri.starts_with("data:")) {
+                const auto source = vellum::view::resolve_asset_file(asset, input_directory);
+                if (!source) {
+                    fail("cannot resolve SVG asset: " + asset.asset_id);
+                    continue;
+                }
+                asset.local_path = source->string();
+            } else {
+                continue;
+            }
+        }
         auto localized = *asset.local_path;
         fs::path validated_source;
         localize(localized, asset.content_hash, &validated_source);

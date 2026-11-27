@@ -182,6 +182,35 @@ class BakedEmitTests(unittest.TestCase):
         self.assertIn(base64.b64encode(local_svg.encode()).decode(), generated)
         self.assertNotIn(base64.b64encode(outside_svg.encode()).decode(), generated)
 
+    def test_svg_file_uri_without_local_path_obeys_containment(self) -> None:
+        doc = self.out / "document"
+        doc.mkdir()
+        svg = '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="red"/></svg>'
+        private = self.out / "private.svg"
+        private.write_text(svg)
+        document = json.loads(IR_FIXTURE.read_text())
+        document["root"].update(render_mode="faithful_svg", svg_asset_id="frame")
+        document["assetManifest"]["assets"] = [{
+            "asset_id": "frame", "original_uri": private.as_uri(), "mime": "image/svg+xml",
+            "content_hash": hashlib.sha256(svg.encode()).hexdigest(),
+        }]
+        source = doc / "input.ir.json"
+        source.write_text(json.dumps(document))
+        for extra in [("--dry-run",), ()]:
+            with self.subTest(extra=extra):
+                code, payload = vellum("--source-type", "design-ir", str(source), "--mode", "baked",
+                                       "--emit", "cpp", "--out", str(self.out / "gen" / "ui.cpp"), *extra)
+                self.assertEqual(code, 5, payload)
+                self.assertEqual(payload["status"], "asset_localization_failed")
+                self.assertFalse((self.out / "gen").exists())
+        local = doc / "frame.svg"
+        local.write_text(svg)
+        document["assetManifest"]["assets"][0]["original_uri"] = local.as_uri()
+        source.write_text(json.dumps(document))
+        preview = self.assert_preview_matches_write(source)
+        generated = next(f["content"] for f in preview["data"]["files"] if f["role"] == "cpp.source")
+        self.assertIn(base64.b64encode(svg.encode()).decode(), generated)
+
     def test_cpp_refuses_conflicting_duplicate_hashes_in_preview_and_write(self) -> None:
         source = self.ir_with_absolute_asset()
         document = json.loads(source.read_text())
