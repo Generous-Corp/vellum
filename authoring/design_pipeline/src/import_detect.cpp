@@ -123,7 +123,8 @@ std::string ascii_lower(std::string s) {
 // a full HTML parser into the CLI build, but it follows the attribute syntax:
 // optional whitespace around '=', quoted values may contain '>' or text that
 // looks like another attribute, and unquoted values end at whitespace or '>'.
-// Script bodies are skipped, so markup inside a script is not read as a tag.
+// Script bodies and HTML comments are skipped, so markup inside a script or a
+// commented-out <script> is not read as a tag.
 std::vector<ScriptElement> scan_script_elements(const std::string& html) {
     std::vector<ScriptElement> out;
     const std::string html_lower = ascii_lower(html);
@@ -132,6 +133,15 @@ std::vector<ScriptElement> scan_script_elements(const std::string& html) {
     while (i < n) {
         auto open = html_lower.find("<script", i);
         if (open == std::string::npos) break;
+        // Markup inside an HTML comment is inert: skip a comment that starts
+        // before this candidate (an unterminated comment runs to the end).
+        auto comment = html_lower.find("<!--", i);
+        if (comment != std::string::npos && comment < open) {
+            auto comment_end = html_lower.find("-->", comment + 4);
+            if (comment_end == std::string::npos) break;
+            i = comment_end + 3;
+            continue;
+        }
         size_t p = open + 7;
         if (p < n && !(html[p] == '>' || html[p] == '/' || is_html_space(html[p]))) {
             i = p;  // <scriptish>, not a script element

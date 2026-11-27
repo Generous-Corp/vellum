@@ -218,6 +218,10 @@ TEST_CASE("snapshot_input scrapes script attributes and frontmatter edge cases",
 <script type=text/babel></script>
 <script data-condition="a > b" src="/assets/quoted-gt.js"></script>
 <script data-note='src=/fake.js type=fake' src="/assets/real.js"></script>
+<!-- <script src="/commented-out.js" type="commented"></script> -->
+<!--
+<script>tailwind.config = {theme:{colors:{commentedToken:'#fff'}}}</script>
+-->
 <script>
   window.tailwind = { theme: { extend: { colors: {
     "surface-container": "#fff",
@@ -238,7 +242,11 @@ TEST_CASE("snapshot_input scrapes script attributes and frontmatter edge cases",
     // not read as another attribute.
     REQUIRE(html.script_srcs[4] == "/assets/quoted-gt.js");
     REQUIRE(html.script_srcs[5] == "/assets/real.js");
+    // Commented-out scripts contribute neither attributes nor tokens, and the
+    // active script after the comments is still read.
     REQUIRE(html.script_types.size() == 3);
+    REQUIRE(std::find(html.tailwind_tokens.begin(), html.tailwind_tokens.end(),
+                      "commentedToken") == html.tailwind_tokens.end());
     REQUIRE(html.script_types[0] == "module");
     REQUIRE(html.script_types[1] == "text/x-template");
     REQUIRE(html.script_types[2] == "text/babel");
