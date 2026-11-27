@@ -9,6 +9,9 @@
     "skia": "be7d7c3e996e567eda7dc9774274f7a0103cdb8c",
     "dawn": "1716e88cc9e58398fab5d4473f7f2e858667b677"
   },
+  "upstream_binding": {
+    "upstream_commit": "b8723167802ffdf7a2033d92200346e9781e8213"
+  },
   "platforms": {
     "macos-arm64": {
       "asset": "skia-build-mac-universal-gpu-release.zip",
