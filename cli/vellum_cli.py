@@ -1794,8 +1794,60 @@ def forwarded_arguments(args: argparse.Namespace) -> list[str]:
     return forwarded
 
 
+DESIGN_DEBUG_NAME = "vellum-design-debug.exe" if os.name == "nt" else "vellum-design-debug"
+
+
+def design_debug_path() -> Path | None:
+    """The native design-debug runner: $VELLUM_DESIGN_DEBUG, else the installed SDK's."""
+    explicit = os.environ.get("VELLUM_DESIGN_DEBUG")
+    if explicit:
+        path = Path(explicit).expanduser()
+    else:
+        sdk_root = os.environ.get("VELLUM_SDK_ROOT")
+        if not sdk_root:
+            return None
+        path = Path(sdk_root).expanduser() / "bin" / DESIGN_DEBUG_NAME
+    return path.resolve() if path.is_file() and os.access(path, os.X_OK) else None
+
+
+def design_debug_command(arguments: list[str], *, json_output: bool) -> int:
+    """Forward native arguments and wrap captured output when JSON is requested."""
+    tool = design_debug_path()
+    if tool is None:
+        emit(result(
+            "design-debug", ok=False, status="capability_unavailable",
+            message="This SDK does not provide 'design-debug'.",
+        ), json_output=json_output)
+        return EXIT_UNAVAILABLE
+    try:
+        completed = subprocess.run(
+            [str(tool), *arguments], check=False, capture_output=json_output,
+            text=True, encoding="utf-8", errors="replace",
+        )
+    except OSError as error:
+        emit(result(
+            "design-debug", ok=False, status="backend_execution_error",
+            message=f"Could not execute design-debug runner: {error}",
+        ), json_output=json_output)
+        return EXIT_BACKEND
+    if not json_output:
+        return completed.returncode
+    ok = completed.returncode == 0
+    emit(result(
+        "design-debug", ok=ok, status="ok" if ok else "backend_failed",
+        message="Design-debug completed." if ok else "Design-debug runner failed.",
+        data={"stdout": completed.stdout, "stderr": completed.stderr,
+              "exit_code": completed.returncode},
+    ), json_output=True)
+    return 0 if ok else EXIT_BACKEND
+
+
 def main(argv: Iterable[str] | None = None) -> int:
     raw = list(argv if argv is not None else sys.argv[1:])
+    if raw[:1] == ["design-debug"]:
+        return design_debug_command(raw[1:], json_output=False)
+    if raw[:2] == ["--json", "design-debug"]:
+        return design_debug_command(raw[2:], json_output=True)
     json_output = "--json" in raw
     if json_output:
         raw.remove("--json")
