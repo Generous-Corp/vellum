@@ -358,11 +358,15 @@ FRAMEWORK_TEST(snapshot_captures_rendered_content) {
     if (pixel)
         std::printf("  snapshot %zux%zu centre rgba(%d,%d,%d,%d)\n", w, h, (*pixel)[0],
                     (*pixel)[1], (*pixel)[2], (*pixel)[3]);
-    CHECK(w == 160 && h == 120);
+    // The PNG is in device pixels, so a Retina runner returns a multiple of the point size.
+    const auto scaled_to = [](size_t pw, size_t ph, size_t w_pt, size_t h_pt) {
+        return pw >= w_pt && pw % w_pt == 0 && ph == pw / w_pt * h_pt;
+    };
+    CHECK(scaled_to(w, h, 160, 120));
     // set_size() resizes the native view, and the next snapshot follows it.
     panel->set_size(200, 150);
     centre_pixel(panel->snapshot_png(), w, h);
-    CHECK(w == 200 && h == 150);
+    CHECK(scaled_to(w, h, 200, 150));
     if (const char* out = std::getenv("VELLUM_WEB_VIEW_SNAPSHOT_PNG"))
         std::ofstream(out, std::ios::binary).write(reinterpret_cast<const char*>(png.data()),
                                                    std::streamsize(png.size()));
