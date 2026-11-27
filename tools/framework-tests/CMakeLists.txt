@@ -185,7 +185,16 @@ if(TARGET vellum-dawn-headers AND TARGET vellum-gpu)
     target_include_directories(vellum-framework-skia-surface-frames-test PRIVATE
         "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
     set_tests_properties(vellum.framework.skia-surface-frames PROPERTIES SKIP_RETURN_CODE 77)
+    # Canvas path fills and strokes rasterized on the device and read back.
+    vellum_add_framework_test(canvas-path-raster
+        SOURCES canvas_path_raster_test.cpp
+        UNITS Vellum::MirrorRender_2d Vellum::MirrorView_core Vellum::DawnHeaders Vellum::Gpu)
+    target_include_directories(vellum-framework-canvas-path-raster-test PRIVATE
+        "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
+    set_tests_properties(vellum.framework.canvas-path-raster PROPERTIES SKIP_RETURN_CODE 77)
 else()
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+        "canvas_path_raster_test.cpp")
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
         "skia_surface_frames_test.cpp")
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
