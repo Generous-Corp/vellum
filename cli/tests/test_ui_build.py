@@ -178,6 +178,11 @@ class UiBuildContractTests(unittest.TestCase):
         self.assertNotEqual(self.run_cli("build").returncode, 0)
         self.assertFalse((outside / "a.css").exists())
 
+    def test_built_files_are_world_readable(self):
+        self.assertEqual(self.run_cli("build").returncode, 0)
+        for path in (self.out / "Editor.tsx", self.out / "ui-build-manifest.json"):
+            self.assertEqual(path.stat().st_mode & 0o777, 0o644, path.name)
+
     def test_reserved_manifest_name_source_is_rejected(self):
         (self.source / "ui-build-manifest.json").write_text("{}\n", encoding="utf-8")
         completed = self.run_cli("build")

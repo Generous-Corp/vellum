@@ -291,6 +291,7 @@ def run(command: str, source_arg: Path, out_arg: Path, *, json_output: bool = Fa
                                              delete=False) as tmp:
                 tmp.write(f.path.read_bytes())
                 temp_name = Path(tmp.name)
+            os.chmod(temp_name, 0o644)
             os.replace(temp_name, destination)
         manifest = _canonical_manifest(source, files, lint)
         manifest_path = _manifest_path(out)
@@ -299,6 +300,7 @@ def run(command: str, source_arg: Path, out_arg: Path, *, json_output: bool = Fa
             json.dump(manifest, tmp, indent=2, sort_keys=True)
             tmp.write("\n")
             temp_name = Path(tmp.name)
+        os.chmod(temp_name, 0o644)
         os.replace(temp_name, manifest_path)
         receipt = {"ok": True, "command": command, "manifest": manifest_path.as_posix(),
                    "files": len(files), "source_digest": manifest["source_digest"]}
