@@ -97,7 +97,7 @@ SESSION = "session/editor_session.js"
 # chrome, measured without the shape. Sliders add their name, value and track.
 TEXT_REGIONS = ["wordmark", "info/glyph", "source/name", "source/caption", "bypass/text",
                 "tab/0/text", "tab/1/text", "tab/2/text"]
-CHROME_REGIONS = ["source", "source/orb", "tabs", "tab/0", "info", "bypass"]
+CHROME_REGIONS = ["source", "source/chip", "source/orb", "tabs", "tab/0", "info", "bypass"]
 SLIDER_TEXT = [f"{key}/{part}" for key in ("mix", "size", "gain") for part in ("name", "value")]
 SLIDER_TRACKS = [f"{key}/track" for key in ("mix", "size", "gain")]
 ALL_INK = {f"ink:{name}" for name in TEXT_REGIONS + SLIDER_TEXT + CHROME_REGIONS + SLIDER_TRACKS}
@@ -113,7 +113,7 @@ NEGATIVE_CONTROLS = {
              "PARAMETERS = Object.freeze({mix: 2, size: 1,", "mapping", None),
     "missing-chip": (VIEW, "vector: box => chip(box, radius('source'), CHROME_FILL, CHROME_STROKE)},",
                      "vector: box => ({viewBox: [0, 0, box.width, box.height], ops: []})},", "gate",
-                     {"ink:source"}),
+                     {"ink:source/chip"}),
     "missing-label": (VIEW, """        {id: 'source/name', kind: 'label', color: 'value',
             format: state => sourceLabel(state.impulseResponseName)},
 """, "", "gate", {"ink:source/name"}),
@@ -142,9 +142,19 @@ REFERENCE = ROOT / "web/tests/fixtures/superconvolver-native/native-820x560-luma
 
 def gate_regions(bounds: dict[str, Any]) -> list[dict[str, Any]]:
     """Every region the gate inks, with the draw ids its surface leaves out."""
+    source = bounds["source"]
+    # Keep this interior strip clear of the orb and labels so the missing-chip
+    # control measures the chip's own fill rather than child marks.
+    scale = source["height"] / (36 if source["height"] < 37 else 38)
+    chip_surface = {"x": source["x"] + 5 * scale,
+                    "y": source["y"] + source["height"] * 0.3,
+                    "width": 5 * scale, "height": source["height"] * 0.4}
     regions = []
     for key in TEXT_REGIONS + SLIDER_TEXT + CHROME_REGIONS:
-        regions.append({"name": key, "box": bounds[key], "omit": [key]})
+        if key == "source/chip":
+            regions.append({"name": key, "box": chip_surface, "omit": ["source"]})
+        else:
+            regions.append({"name": key, "box": bounds[key], "omit": [key]})
     for key in SLIDERS:
         regions.append({"name": f"{key}/track", "box": bounds[f"{key}/track"],
                         "omit": [f"{key}/{part}" for part in ("track", "fill", "thumb", "thumb-disc")]})
