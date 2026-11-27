@@ -240,6 +240,9 @@
         "script": "tools/fidelity/test_reference_diff.py"
       },
       {
+        "script": "tools/fidelity/test_golden_regression.py"
+      },
+      {
         "script": "tools/fidelity/test_layout_parity.py"
       },
       {
