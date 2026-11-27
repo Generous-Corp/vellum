@@ -253,7 +253,7 @@ the provider.
 
 | Dependency | Pinned identity | License | Used by | Notes |
 |---|---|---|---|---|
-| Draco | `1.5.9` (`554628821c3448319d7d4ae48db170b8c63e1aaf`), `google/draco` source archive SHA-256 `5b84e0e212ccc7b03ace681760a65a66fe2481a5f54df65154cfc8f0cbb87148` | Apache-2.0; `src/draco/compression/entropy/ans.h` is BSD-3-Clause, based on libvpx's `ans.h` | `vellum-draco`, built as one position-independent static library and linked into `Vellum::SkiaDawnProvider`, only with `VELLUM_ENABLE_DRACO=ON` (the SDK build sets it) | MIT-compatible. Bytes not mirrored; the license ships under `sdk/mirror/share/licenses/draco/`. Notice in `NOTICE.md` |
+| Draco | `1.5.9` (`554628821c3448319d7d4ae48db170b8c63e1aaf`), `google/draco` source archive SHA-256 `5b84e0e212ccc7b03ace681760a65a66fe2481a5f54df65154cfc8f0cbb87148` | Apache-2.0; `src/draco/compression/entropy/ans.h` says it is based on libvpx's `ans.h` (BSD-licensed; the file carries only Draco's Apache header) | `vellum-draco`, built as one position-independent static library and linked into `Vellum::SkiaDawnProvider`, only with `VELLUM_ENABLE_DRACO=ON` (the SDK build sets it) | MIT-compatible. Bytes not mirrored; the license ships under `sdk/mirror/share/licenses/draco/`. Notice in `NOTICE.md` |
 
 ## Developer prerequisites
 
