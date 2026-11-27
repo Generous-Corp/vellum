@@ -130,6 +130,35 @@ FRAMEWORK_TEST(element_tree_exposes_roles_labels_and_state) {
     }
 }
 
+FRAMEWORK_TEST(native_child_accessibility_survives_host_override) {
+    @autoreleasepool {
+        [NSApplication sharedApplication];
+        View root;
+        add_named(root, Role::button, "Generated button");
+        auto host = PluginViewHost::create(root, {.size = {200, 100}});
+        CHECK(host != nullptr);
+        if (!host) return;
+        NSView* view = editor_view(*host);
+        NSTextField* field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 100, 20)];
+        field.accessibilityLabel = @"Native field";
+        CHECK(host->attach_native_child_view((__bridge void*)field, 0, 0, 100, 20));
+        CHECK([[view accessibilityChildren] containsObject:field]);
+        CHECK([field accessibilityParent] == view);
+        CHECK([view accessibilityChildren].count == 2U);
+        field.hidden = YES;
+        CHECK(![[view accessibilityChildren] containsObject:field]);
+        field.hidden = NO;
+        CHECK([[view accessibilityChildren] containsObject:field]);
+        root.set_access_hidden("true");
+        CHECK([view accessibilityChildren].count == 0U);
+        root.set_access_hidden("false");
+        CHECK([[view accessibilityChildren] containsObject:field]);
+        host->detach_native_child_view((__bridge void*)field);
+        CHECK(![[view accessibilityChildren] containsObject:field]);
+        CHECK([view accessibilityChildren].count == 1U);
+    }
+}
+
 FRAMEWORK_TEST(accessibility_children_do_not_leak_elements) {
     @autoreleasepool {
         View root;

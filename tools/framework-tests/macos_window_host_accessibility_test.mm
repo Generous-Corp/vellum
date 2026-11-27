@@ -62,6 +62,42 @@ FRAMEWORK_TEST(cpu_window_content_view_exposes_its_accessibility_tree) {
     }
 }
 
+FRAMEWORK_TEST(native_accessibility_subtree_survives_cpu_and_metal_window_hosts) {
+    @autoreleasepool {
+        [NSApplication sharedApplication];
+        for (bool gpu : {false, true}) {
+            View root;
+            add_named(root, Role::button, "Generated button");
+            auto host = make_host(root, "Native children", gpu);
+            CHECK(host != nullptr);
+            if (!host) continue;
+            NSView* view = (__bridge NSView*)host->native_content_view_handle();
+            NSView* container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 100, 40)];
+            [container setAccessibilityElement:NO];
+            NSTextField* field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 100, 20)];
+            field.accessibilityLabel = @"Nested native field";
+            [container addSubview:field];
+            CHECK(host->attach_native_child_view((__bridge void*)container, 0, 0, 100, 40));
+            CHECK([[view accessibilityChildren] containsObject:field]);
+            CHECK([view accessibilityChildren].count == 2U);
+            container.hidden = YES;
+            CHECK(![[view accessibilityChildren] containsObject:field]);
+            container.hidden = NO;
+            CHECK([[view accessibilityChildren] containsObject:field]);
+            view.hidden = YES;
+            CHECK([view accessibilityChildren].count == 0U);
+            view.hidden = NO;
+            root.set_visible(false);
+            CHECK([view accessibilityChildren].count == 0U);
+            root.set_visible(true);
+            CHECK([[view accessibilityChildren] containsObject:field]);
+            host->detach_native_child_view((__bridge void*)container);
+            CHECK(![[view accessibilityChildren] containsObject:field]);
+            CHECK([view accessibilityChildren].count == 1U);
+        }
+    }
+}
+
 FRAMEWORK_TEST(window_content_view_is_a_group_named_for_the_window) {
     @autoreleasepool {
         [NSApplication sharedApplication];

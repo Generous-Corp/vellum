@@ -14,6 +14,7 @@
 
 #import <Cocoa/Cocoa.h>
 #include <objc/runtime.h>
+#include <objc/message.h>
 #include <cstdio>
 #include <vector>
 
@@ -44,6 +45,19 @@ void collect_exposure_flags(const View& parent, bool parent_visible, std::vector
 
 NSArray* editor_accessibility_children(VellumMirrorView* host) {
     NSMutableArray* children = [NSMutableArray array];
+    if (host.isHiddenOrHasHiddenAncestor ||
+        (host.rootView && (!host.rootView->visible() || host.rootView->access_hidden() == "true")))
+        return children;
+
+    // Start at the class that supplied the inherited implementation, not at the
+    // runtime subclass (Metal hosts inherit this override too).
+    objc_super parent{host, class_getSuperclass([VellumMirrorView class])};
+    auto inherited_children = reinterpret_cast<NSArray* (*)(objc_super*, SEL)>(objc_msgSendSuper);
+    for (id child in inherited_children(&parent, @selector(accessibilityChildren))) {
+        if ([child isKindOfClass:[NSView class]] && [(NSView*)child isHiddenOrHasHiddenAncestor])
+            continue;
+        [children addObject:child];
+    }
     if (View* root = host.rootView) {
         NSArray* elements = build_accessibility_elements(*root, host);
         std::vector<bool> shown;
