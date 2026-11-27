@@ -1141,7 +1141,7 @@
     {
       "framework_path": "framework/core/view/platform/mac/accessibility_mac_geometry.hpp",
       "change": "added",
-      "target": "pulp-view-core",
+      "target": null,
       "origin": "native",
       "pulp_path": null,
       "pulp_commits": [],
