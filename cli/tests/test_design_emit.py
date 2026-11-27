@@ -6,9 +6,11 @@ $VELLUM_DESIGN_EMIT. Every input is a synthetic checked-in fixture.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -112,6 +114,91 @@ class BakedEmitTests(unittest.TestCase):
         self.assertNotEqual(code, 0, payload)
         self.assertEqual(payload["status"], "asset_localization_failed")
         self.assertFalse((self.out / "gen" / "ui.cpp").exists())
+
+    def assert_preview_matches_write(self, source: Path) -> dict:
+        output = self.out / "gen" / "ui.cpp"
+        args = ("--source-type", "design-ir", str(source), "--mode", "baked",
+                "--emit", "cpp", "--out", str(output))
+        code, preview = vellum(*args, "--dry-run")
+        self.assertEqual(code, 0, preview)
+        self.assertFalse(output.parent.exists())
+        code, written = vellum(*args)
+        self.assertEqual(code, 0, written)
+        for item in preview["data"]["files"]:
+            self.assertEqual(item["content"], Path(item["path"]).read_text())
+        return preview
+
+    def test_cpp_dry_run_localizes_absolute_assets_without_writing(self) -> None:
+        self.assert_preview_matches_write(self.ir_with_absolute_asset())
+
+    def test_cpp_relative_assets_resolve_from_input_directory(self) -> None:
+        source = self.ir_with_absolute_asset()
+        document = json.loads(source.read_text())
+        document["assetManifest"]["assets"][0]["local_path"] = "source-art/swatch.png"
+        source.write_text(json.dumps(document))
+        preview = self.assert_preview_matches_write(source)
+        generated = next(f["content"] for f in preview["data"]["files"] if f["role"] == "cpp.source")
+        digest = hashlib.sha256(b"synthetic swatch bytes").hexdigest()
+        self.assertIn(f"assets/{digest}.png", generated)
+        self.assertEqual((self.out / "gen" / "assets" / f"{digest}.png").read_bytes(),
+                         b"synthetic swatch bytes")
+
+    def test_cpp_dry_run_preserves_faithful_svg_bytes(self) -> None:
+        source = self.ir_with_absolute_asset()
+        document = json.loads(source.read_text())
+        svg = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" fill="red"/></svg>'
+        image = self.out / "source-art" / "frame.svg"
+        image.write_text(svg)
+        asset = document["assetManifest"]["assets"][0]
+        asset.update(local_path=str(image), original_uri="frame.svg", mime="image/svg+xml",
+                     content_hash=hashlib.sha256(svg.encode()).hexdigest())
+        document["root"].update(render_mode="faithful_svg", svg_asset_id=asset["asset_id"])
+        source.write_text(json.dumps(document))
+        preview = self.assert_preview_matches_write(source)
+        generated = next(f["content"] for f in preview["data"]["files"] if f["role"] == "cpp.source")
+        self.assertIn("std::make_unique<vellum::view::DesignFrameView>", generated)
+        self.assertIn(base64.b64encode(svg.encode()).decode(), generated)
+
+    def test_cpp_refuses_conflicting_duplicate_hashes_in_preview_and_write(self) -> None:
+        source = self.ir_with_absolute_asset()
+        document = json.loads(source.read_text())
+        asset = document["assetManifest"]["assets"][0]
+        document["assetManifest"]["assets"].append({**asset, "asset_id": "image:other", "content_hash": "0" * 64})
+        source.write_text(json.dumps(document))
+        for extra in [("--dry-run",), ()]:
+            with self.subTest(extra=extra):
+                code, payload = vellum("--source-type", "design-ir", str(source), "--mode", "baked",
+                                       "--emit", "cpp", "--out", str(self.out / "gen" / "ui.cpp"), *extra)
+                self.assertEqual(code, 5, payload)
+                self.assertEqual(payload["status"], "asset_localization_failed")
+                self.assertFalse((self.out / "gen" / "ui.cpp").exists())
+
+    def test_non_executable_emitter_is_structured_failure(self) -> None:
+        tool = self.out / "not-executable"
+        tool.write_text("#!/bin/sh\nexit 0\n")
+        tool.chmod(0o600)
+        code, payload = vellum("--source-type", "design-ir", str(IR_FIXTURE), "--mode", "baked",
+                               "--emit", "cpp", env={"VELLUM_DESIGN_EMIT": str(tool)})
+        self.assertEqual(code, 5, payload)
+        self.assertEqual(payload["status"], "emit_failed")
+
+    @unittest.skipUnless(os.name == "posix", "requires POSIX file size limits")
+    def test_buffered_write_failure_is_reported(self) -> None:
+        import resource
+        def refuse_file_writes() -> None:
+            signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+            resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
+        source = self.out / "minimal.ir.json"
+        document = json.loads(IR_FIXTURE.read_text())
+        document["root"]["children"] = []
+        source.write_text(json.dumps(document))
+        completed = subprocess.run(
+            [TOOL, "--source-type", "design-ir", "--input", str(source), "--emit", "swiftui", "--no-tokens",
+             "--output", str(self.out / "Minimal.swift"), "--json"],
+            text=True, capture_output=True, check=False, preexec_fn=refuse_file_writes,
+        )
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(json.loads(completed.stdout)["status"], "write_failed")
 
     def test_emit_requires_baked_mode(self) -> None:
         code, payload = vellum("--source-type", "design-ir", str(IR_FIXTURE), "--emit", "cpp",

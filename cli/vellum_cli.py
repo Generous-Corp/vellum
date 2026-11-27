@@ -1495,7 +1495,13 @@ def baked_emit_import(args: argparse.Namespace) -> dict[str, Any]:
         command.append("--dry-run")
     if args.strict_fidelity:
         command.append("--strict-fidelity")
-    completed = subprocess.run(command, check=False, text=True, capture_output=True)
+    try:
+        completed = subprocess.run(command, check=False, text=True, capture_output=True)
+    except OSError as error:
+        raise CliFailure(
+            f"The baked emitter could not execute: {error}",
+            status="emit_failed", exit_code=EXIT_BACKEND,
+        ) from error
     try:
         receipt = json.loads(completed.stdout)
     except json.JSONDecodeError:
