@@ -226,6 +226,22 @@ def _validate_manifest(manifest: Any, source: Path, out: Path, files: list[Sourc
     return errors
 
 
+def _reject_output_symlinks(out: Path) -> None:
+    """Fail closed if anything under the output root is a symlink.
+
+    A committed symlink in the output tree could redirect `build` writes outside
+    the project, or make `check` accept an external file as valid output.
+    """
+    if not out.exists():
+        return
+    for dirpath, dirnames, filenames in os.walk(out, followlinks=False):
+        for name in (*dirnames, *filenames):
+            path = Path(dirpath) / name
+            if path.is_symlink():
+                raise UiBuildError(
+                    f"output tree contains a symlink; remove it: {path.relative_to(out).as_posix()}")
+
+
 def _args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -260,6 +276,8 @@ def run(command: str, source_arg: Path, out_arg: Path, *, json_output: bool = Fa
         raise UiBuildError("output root must be outside the source root")
     files = _source_files(source)
     lint = _load_lint(source)
+    if command in ("build", "check"):
+        _reject_output_symlinks(out)
     if command == "build":
         out.mkdir(parents=True, exist_ok=True)
         for f in files:

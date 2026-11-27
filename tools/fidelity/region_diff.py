@@ -1,0 +1,495 @@
+#!/usr/bin/env python3
+"""region_diff.py: per-region masked similarity for import validation.
+
+Companion to reference_diff.py. The full-image score (the existing
+script) hides broken UI sub-regions: a canvas that's empty drags down the
+score while the chrome looks fine, and a broken chrome region can pass if
+the canvas happens to match. This script computes a per-region score so
+the harness can fail on the FIRST broken region rather than averaging
+everything into one number.
+
+Regions are defined as percent-of-window rects, so they scale across
+different output sizes (the reference may be 2640x1620, the native render
+1213x812; the same region maps proportionally to each).
+
+Histogram and mean-pixel scores are dominated by a region's background, so a
+missing element that is small next to its region scores as a match. Each
+region therefore also reports reference-ink coverage: how much of the
+reference's ink (pixels that stand out from the region's modal colour) the
+candidate also inks, and the largest connected patch of reference ink the
+candidate left empty. A region gates on them only when it declares
+`coverage_floor` (minimum covered fraction) or `max_uncovered_fraction`
+(largest allowed empty patch, as a fraction of the whole --size frame, so the
+limit means the same element size at any --size, capture size or DPR).
+
+Default regions are Spectr's editor.html shape. Override with
+`--regions <path-to-json>` for other fixtures.
+
+Usage:
+    region_diff.py <reference.png> <candidate.png>
+    region_diff.py <reference.png> <candidate.png> --json
+    region_diff.py <reference.png> <candidate.png> \
+        --regions regions.json
+
+Exit codes:
+    0  - every region meets its threshold, OR --strict was not passed
+         (region failures are informational without --strict)
+    1  - one or more regions below threshold AND --strict was passed
+    2  - cannot compare (missing file, size mismatch, malformed regions JSON)
+"""
+
+from __future__ import annotations
+import argparse
+import json
+import math
+import sys
+from collections import Counter
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fidelity_image import Image, open_image  # noqa: E402
+
+
+# Default regions for Spectr's editor.html. Coordinates are percent of
+# window (0..1): (x, y) is top-left, (w, h) is width/height. Thresholds
+# are per-region similarity scores below which the region is judged
+# broken. Canvas regions tolerate more variance because Skia raster + AA
+# vary; chrome regions are tighter because text + button layout should
+# match deterministically. The patch limit, 0.000056 of the frame, is 64 px
+# at the default 1320x860: two Chromium captures of the static chrome leave
+# no uncovered ink, real imports leave patches of at most 0.000023 (text
+# antialiasing), and a missing 90x16 control leaves about 0.00085.
+SPECTR_REGIONS = {
+    "title_chrome": {
+        "x": 0.00, "y": 0.00, "w": 0.30, "h": 0.05,
+        "threshold": 0.80,
+        "edge_threshold": 0.42,
+        "max_uncovered_fraction": 0.000056,
+        "notes": "SPECTR title + ZOOMABLE FILTER BANK",
+    },
+    "mode_toggles": {
+        "x": 0.30, "y": 0.00, "w": 0.40, "h": 0.05,
+        "threshold": 0.75,
+        "edge_threshold": 0.42,
+        "max_uncovered_fraction": 0.000056,
+        "notes": "LIVE / PRECISION / IIR / FFT / HYBRID buttons",
+    },
+    "band_dropdown": {
+        "x": 0.70, "y": 0.00, "w": 0.30, "h": 0.05,
+        "threshold": 0.75,
+        "edge_threshold": 0.42,
+        "max_uncovered_fraction": 0.000056,
+        "notes": "64 bands dropdown + zoom indicator",
+    },
+    "central_canvas": {
+        "x": 0.00, "y": 0.05, "w": 1.00, "h": 0.85,
+        "threshold": 0.55,
+        # The spectrum animates, so two captures of it disagree on 5-11% of
+        # its ink and on patches of thousands of pixels. Only gross absence
+        # is gated here.
+        "coverage_floor": 0.50,
+        "notes": "Spectrum gradient + band columns + ruler; canvas paint, looser threshold for raster variance",
+    },
+    "bottom_toolbar": {
+        "x": 0.00, "y": 0.90, "w": 1.00, "h": 0.10,
+        "threshold": 0.75,
+        "edge_threshold": 0.42,
+        "coverage_floor": 0.98,
+        "max_uncovered_fraction": 0.000056,
+        "notes": "CLEAR/SCULPT/PEAK/PRESETS/SNAPSHOT/A/B + morph slider",
+    },
+}
+
+
+def load_normalized(path: Path, target_size: tuple[int, int]) -> Image:
+    img = open_image(path, "RGB")
+    if img.size != target_size:
+        img = img.resize_lanczos(target_size)
+    return img
+
+
+def crop_region(img: Image, region: dict) -> Image:
+    """Crop image to a percent-of-window rect."""
+    W, H = img.size
+    x = int(region["x"] * W)
+    y = int(region["y"] * H)
+    w = max(1, int(region["w"] * W))
+    h = max(1, int(region["h"] * H))
+    return img.crop((x, y, x + w, y + h))
+
+
+def uncovered_patch_limit(max_uncovered_fraction: float, frame_size: tuple[int, int]) -> int:
+    """Return the inclusive pixel limit for a frame-relative patch fraction."""
+    return math.ceil(max_uncovered_fraction * frame_size[0] * frame_size[1])
+
+
+def histogram_similarity(a: Image, b: Image) -> float:
+    ha = a.histogram()
+    hb = b.histogram()
+    dot = sum(x * y for x, y in zip(ha, hb))
+    na = sum(x * x for x in ha) ** 0.5
+    nb = sum(y * y for y in hb) ** 0.5
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
+
+
+def mean_pixel_distance(a: Image, b: Image) -> float:
+    if a.size != b.size:
+        # Resize candidate region to reference region; cheap.
+        b = b.resize_lanczos(a.size)
+    pa = list(a.getdata())
+    pb = list(b.getdata())
+    if len(pa) != len(pb):
+        return 0.0
+    total = 0
+    for (r1, g1, b1), (r2, g2, b2) in zip(pa, pb):
+        total += ((r1 - r2) ** 2 + (g1 - g2) ** 2 + (b1 - b2) ** 2) ** 0.5
+    avg = total / len(pa)
+    return 1.0 - (avg / 441.7)
+
+
+def edge_overlap(a: Image, b: Image) -> float:
+    """Return a tolerant edge IoU for layout-sensitive chrome.
+
+    Histogram and mean-pixel scores are intentionally forgiving of raster
+    differences, but that also lets vertically shifted labels, clipped copy,
+    and missing icons pass inside a mostly-dark toolbar.  Edge overlap makes
+    those geometric failures visible while a one-pixel dilation keeps Skia
+    and Chromium antialiasing differences from becoming false failures.
+    """
+    def mask(img: Image) -> list[bool]:
+        edges = img.convert("L").find_edges().max_filter(3)
+        return [value >= 24 for (value,) in edges.getdata()]
+
+    ma = mask(a)
+    mb = mask(b if b.size == a.size else b.resize_lanczos(a.size))
+    union = sum(x or y for x, y in zip(ma, mb))
+    if union == 0:
+        return 1.0
+    intersection = sum(x and y for x, y in zip(ma, mb))
+    return intersection / union
+
+
+def is_blank(img: Image, dark_threshold: int = 30) -> bool:
+    pixels = list(img.getdata())
+    if not pixels:
+        return True
+    near_black = sum(
+        1 for (r, g, b) in pixels if max(r, g, b) < dark_threshold
+    )
+    return near_black / len(pixels) > 0.95
+
+
+def ink_coverage(ref: Image, cand: Image, ink_threshold: int = 8) -> dict:
+    """Did the candidate put ink where the reference has ink?
+
+    Ink is a pixel whose largest channel difference from the reference
+    region's modal colour exceeds `ink_threshold`; both images are measured
+    against that same modal colour. A reference ink pixel is covered when the
+    candidate pixel carries at least half of its contrast. The half keeps a
+    dithered gradient that sits one level either side of the threshold, and
+    lighter or heavier antialiasing, from counting as missing, while an
+    element the candidate never drew leaves background and stays uncovered.
+    Coverage is presence only: a pixel drawn in the wrong colour still counts.
+
+    `covered` is a fraction of the reference's ink, so a missing element that
+    is small next to a heavily inked region barely moves it.
+    `largest_uncovered_px` is the area of the largest 8-connected patch of
+    uncovered reference ink, which a missing element shows at its own size
+    however much ink surrounds it.
+    """
+    if cand.size != ref.size:
+        cand = cand.resize_lanczos(ref.size)
+    pr = list(ref.getdata())
+    pc = list(cand.getdata())
+    if not pr or len(pr) != len(pc):
+        return {
+            "reference_ink_px": 0,
+            "candidate_ink_px": 0,
+            "covered": 1.0,
+            "ink_ratio": 1.0,
+            "largest_uncovered_px": 0,
+            "reference_modal_rgb": [0, 0, 0],
+        }
+
+    bins = Counter((r >> 3, g >> 3, b >> 3) for r, g, b in pr)
+    modal_bin = bins.most_common(1)[0][0]
+    members = [p for p in pr if (p[0] >> 3, p[1] >> 3, p[2] >> 3) == modal_bin]
+    modal = tuple(sum(p[c] for p in members) / len(members) for c in range(3))
+
+    def contrast(p: tuple[int, int, int]) -> float:
+        return max(abs(p[0] - modal[0]), abs(p[1] - modal[1]), abs(p[2] - modal[2]))
+
+    reference_ink = 0
+    candidate_ink = 0
+    uncovered: set[int] = set()
+    for i, (a, b) in enumerate(zip(pr, pc)):
+        da = contrast(a)
+        db = contrast(b)
+        if db > ink_threshold:
+            candidate_ink += 1
+        if da > ink_threshold:
+            reference_ink += 1
+            if db < 0.5 * da:
+                uncovered.add(i)
+
+    width = ref.size[0]
+    height = ref.size[1]
+    largest = 0
+    pending = set(uncovered)
+    while pending:
+        stack = [pending.pop()]
+        area = 0
+        while stack:
+            i = stack.pop()
+            area += 1
+            y, x = divmod(i, width)
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    nx = x + dx
+                    ny = y + dy
+                    if (dx or dy) and 0 <= nx < width and 0 <= ny < height:
+                        j = ny * width + nx
+                        if j in pending:
+                            pending.remove(j)
+                            stack.append(j)
+        largest = max(largest, area)
+
+    return {
+        "reference_ink_px": reference_ink,
+        "candidate_ink_px": candidate_ink,
+        "covered": 1.0 if reference_ink == 0 else (reference_ink - len(uncovered)) / reference_ink,
+        "ink_ratio": candidate_ink / max(reference_ink, 1),
+        "largest_uncovered_px": largest,
+        "reference_modal_rgb": [int(round(v)) for v in modal],
+    }
+
+
+def region_score(ref_full: Image, cand_full: Image, region: dict) -> dict:
+    ref_crop = crop_region(ref_full, region)
+    cand_crop = crop_region(cand_full, region)
+    hist = histogram_similarity(ref_crop, cand_crop)
+    pix = mean_pixel_distance(ref_crop, cand_crop)
+    edge_threshold = region.get("edge_threshold")
+    edges = edge_overlap(ref_crop, cand_crop) if edge_threshold is not None else 1.0
+    score = (hist * 0.4) + (pix * 0.6)
+    blank_cand = is_blank(cand_crop)
+    blank_ref = is_blank(ref_crop)
+    threshold = region.get("threshold", 0.75)
+    # A deliberately empty/dark gutter is valid when the reference is empty
+    # too.  The safety gate exists to catch missing candidate content, not to
+    # reject matching negative space around a faithfully imported panel.
+    blank_mismatch = blank_cand and not blank_ref
+    edge_passed = edge_threshold is None or edges >= edge_threshold
+    coverage = ink_coverage(ref_crop, cand_crop)
+    coverage_floor = region.get("coverage_floor")
+    frame_px = ref_full.size[0] * ref_full.size[1]
+    largest_fraction = coverage["largest_uncovered_px"] / max(frame_px, 1)
+    max_uncovered = region.get("max_uncovered_fraction")
+    coverage_passed = coverage_floor is None or coverage["covered"] >= coverage_floor
+    max_uncovered_px = (
+        None
+        if max_uncovered is None
+        else uncovered_patch_limit(max_uncovered, ref_full.size)
+    )
+    uncovered_passed = max_uncovered_px is None or coverage["largest_uncovered_px"] <= max_uncovered_px
+    failed_checks = [
+        name for name, ok in (
+            ("score", score >= threshold),
+            ("edges", edge_passed),
+            ("blank", not blank_mismatch),
+            ("coverage", coverage_passed),
+            ("uncovered_patch", uncovered_passed),
+        ) if not ok
+    ]
+    passed = not failed_checks
+    return {
+        "score": round(score, 4),
+        "histogram_similarity": round(hist, 4),
+        "pixel_similarity": round(pix, 4),
+        "edge_overlap": round(edges, 4),
+        "threshold": threshold,
+        "edge_threshold": edge_threshold,
+        "edge_passed": edge_passed,
+        "passed": passed,
+        "blank_candidate": blank_cand,
+        "blank_reference": blank_ref,
+        "blank_mismatch": blank_mismatch,
+        "ink_coverage": round(coverage["covered"], 4),
+        "coverage_floor": coverage_floor,
+        "coverage_passed": coverage_passed,
+        "largest_uncovered_px": coverage["largest_uncovered_px"],
+        "largest_uncovered_fraction": round(largest_fraction, 7),
+        "max_uncovered_fraction": max_uncovered,
+        "max_uncovered_px": max_uncovered_px,
+        "uncovered_passed": uncovered_passed,
+        "reference_ink_px": coverage["reference_ink_px"],
+        "candidate_ink_px": coverage["candidate_ink_px"],
+        "ink_ratio": round(coverage["ink_ratio"], 4),
+        "failed_checks": failed_checks,
+        "rect_pct": {k: region[k] for k in ("x", "y", "w", "h")},
+        "notes": region.get("notes", ""),
+    }
+
+
+def load_regions(path: Path | None) -> dict:
+    if path is None:
+        return SPECTR_REGIONS
+    if not path.exists():
+        print(f"error: regions JSON not found: {path}", file=sys.stderr)
+        sys.exit(2)
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+    except json.JSONDecodeError as e:
+        print(f"error: malformed regions JSON: {e}", file=sys.stderr)
+        sys.exit(2)
+    if not isinstance(data, dict) or not data:
+        print(f"error: regions JSON must be a non-empty object", file=sys.stderr)
+        sys.exit(2)
+    # Validate each region has the required fields and that values are the
+    # right shape. Without this, a malformed value (e.g. "x": "0.10" or a
+    # string threshold) propagates into region_score() and crashes mid-run
+    # instead of giving the user a clear configuration error up front.
+    for name, region in data.items():
+        if not isinstance(region, dict):
+            print(f"error: region '{name}' must be an object", file=sys.stderr)
+            sys.exit(2)
+        for required in ("x", "y", "w", "h"):
+            if required not in region:
+                print(f"error: region '{name}' missing '{required}'", file=sys.stderr)
+                sys.exit(2)
+            value = region[required]
+            # bool is a subclass of int in Python; reject it explicitly so
+            # `"x": true` doesn't silently become 1.
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                print(
+                    f"error: region '{name}' has non-numeric {required}={value!r}",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+            if not math.isfinite(float(value)) or not 0.0 <= float(value) <= 1.0:
+                print(
+                    f"error: region '{name}' has invalid {required}={value!r} (expected finite number in 0..1)",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+        for dimension in ("w", "h"):
+            if region[dimension] <= 0.0:
+                print(
+                    f"error: region '{name}' has invalid {dimension}={region[dimension]!r} (expected positive number in 0..1)",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+        if region["x"] + region["w"] > 1.0 or region["y"] + region["h"] > 1.0:
+            print(
+                f"error: region '{name}' extends beyond the unit frame "
+                "(rectangle must be contained in the normalized 0..1 frame)",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        for threshold_name in ("threshold", "edge_threshold", "coverage_floor", "max_uncovered_fraction"):
+            if threshold_name not in region:
+                continue
+            thr = region[threshold_name]
+            if isinstance(thr, bool) or not isinstance(thr, (int, float)) or not (0.0 <= float(thr) <= 1.0):
+                print(
+                    f"error: region '{name}' has invalid {threshold_name}={thr!r} (expected number in 0..1)",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+    return data
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("reference", type=Path, help="Reference PNG (ground truth)")
+    parser.add_argument("candidate", type=Path, help="Candidate PNG to compare")
+    parser.add_argument(
+        "--size",
+        default="1320x860",
+        help="Normalize both images to this WxH before regioning (default 1320x860)",
+    )
+    parser.add_argument(
+        "--regions",
+        type=Path,
+        default=None,
+        help="JSON file with region definitions (default: built-in Spectr regions)",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output machine-readable JSON instead of human text",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit non-zero if ANY region fails its threshold; without --strict, region failures are informational and the script exits 0",
+    )
+    args = parser.parse_args()
+
+    for p in (args.reference, args.candidate):
+        if not p.exists():
+            print(f"error: file not found: {p}", file=sys.stderr)
+            return 2
+
+    regions = load_regions(args.regions)
+    try:
+        w, h = (int(x) for x in args.size.split("x"))
+        if w <= 0 or h <= 0:
+            raise ValueError(args.size)
+    except ValueError:
+        print(f"error: malformed --size {args.size}", file=sys.stderr)
+        return 2
+    target = (w, h)
+
+    try:
+        ref = load_normalized(args.reference, target)
+        cand = load_normalized(args.candidate, target)
+    except Exception as e:
+        print(f"error: failed to load images: {e}", file=sys.stderr)
+        return 2
+
+    results = {name: region_score(ref, cand, region) for name, region in regions.items()}
+    failed_names = [n for n, r in results.items() if not r["passed"]]
+    all_passed = not failed_names
+
+    if args.json:
+        print(json.dumps({
+            "reference": str(args.reference),
+            "candidate": str(args.candidate),
+            "size_normalized_to": args.size,
+            "regions": results,
+            "failed_regions": failed_names,
+            "all_passed": all_passed,
+        }, indent=2))
+    else:
+        verdict = "PASS ✓" if all_passed else "FAIL ✗"
+        print(f"{verdict}  {len(results) - len(failed_names)}/{len(results)} regions pass")
+        print()
+        for name, r in results.items():
+            mark = "✓" if r["passed"] else "✗"
+            blank = " (BLANK)" if r["blank_candidate"] else ""
+            print(f"  {mark} {name:18s} score={r['score']:.3f} threshold={r['threshold']:.3f}{blank}")
+            limit = "" if r["max_uncovered_px"] is None else f" (limit {r['max_uncovered_px']}px)"
+            print(f"    ink coverage={r['ink_coverage']:.3f} largest uncovered patch={r['largest_uncovered_px']}px{limit}")
+            if r["failed_checks"]:
+                print(f"    failed: {', '.join(r['failed_checks'])}")
+            print(f"    rect: x={r['rect_pct']['x']:.2f} y={r['rect_pct']['y']:.2f} w={r['rect_pct']['w']:.2f} h={r['rect_pct']['h']:.2f}")
+            if r["notes"]:
+                print(f"    {r['notes']}")
+        if failed_names:
+            print()
+            print(f"  Failed regions: {', '.join(failed_names)}")
+
+    # --strict gates the non-zero exit. Without it, region failures are
+    # informational only (still printed / still in JSON output) but the
+    # script exits 0 so callers can run the diff without forcing a fail.
+    if all_passed or not args.strict:
+        return 0
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
