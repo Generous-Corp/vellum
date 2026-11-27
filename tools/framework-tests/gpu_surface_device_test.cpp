@@ -218,7 +218,8 @@ int main() {
         return kNoGpuExit;
     }
     auto probe = GpuSurface::create_dawn();
-    if (!probe || !probe->initialize(offscreen(64, 64)) || !probe->adapter_info().native_bridge) {
+    if (!probe || !probe->initialize(offscreen(64, 64)) || !probe->adapter_info().native_bridge ||
+        probe->adapter_info().null_backend) {
         std::printf("%s no Dawn adapter available\n", kNoGpuExit == 77 ? "SKIP" : "FAIL");
         return kNoGpuExit;
     }
