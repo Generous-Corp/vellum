@@ -216,6 +216,8 @@ TEST_CASE("snapshot_input scrapes script attributes and frontmatter edge cases",
 <script srcset="/not-src.js" src= "/assets/after-equals.js"></script>
 <scriptish src="/not-a-script.js"></scriptish>
 <script type=text/babel></script>
+<script data-condition="a > b" src="/assets/quoted-gt.js"></script>
+<script data-note='src=/fake.js type=fake' src="/assets/real.js"></script>
 <script>
   window.tailwind = { theme: { extend: { colors: {
     "surface-container": "#fff",
@@ -227,11 +229,15 @@ TEST_CASE("snapshot_input scrapes script attributes and frontmatter edge cases",
     auto html = det::snapshot_input(scratch.path / "case.html");
     REQUIRE_FALSE(html.is_directory);
     REQUIRE(html.filename == "case.html");
-    REQUIRE(html.script_srcs.size() == 4);
+    REQUIRE(html.script_srcs.size() == 6);
     REQUIRE(html.script_srcs[0] == "/assets/app.js");
     REQUIRE(html.script_srcs[1] == "/assets/inline.js");
     REQUIRE(html.script_srcs[2] == "/assets/spaced.js");
     REQUIRE(html.script_srcs[3] == "/assets/after-equals.js");
+    // A quoted '>' does not end the tag, and text inside a quoted value is
+    // not read as another attribute.
+    REQUIRE(html.script_srcs[4] == "/assets/quoted-gt.js");
+    REQUIRE(html.script_srcs[5] == "/assets/real.js");
     REQUIRE(html.script_types.size() == 3);
     REQUIRE(html.script_types[0] == "module");
     REQUIRE(html.script_types[1] == "text/x-template");
@@ -280,6 +286,7 @@ TEST_CASE("snapshot_input reads every tailwind.config key spelling",
 <!doctype html>
 <style>body{color:red}</style>
 <script>var settings = {unrelatedKey: 1};</script>
+<script type="application/ld+json">{"jsonLdOnly": "example"}</script>
 <script>
   tailwind.config = {theme:{extend:{colors:{primary:'#fff','surface-container':'#000',"on-primary":'#111'}}}}
 </script>
@@ -297,6 +304,7 @@ TEST_CASE("snapshot_input reads every tailwind.config key spelling",
     // Bare keys outside a tailwind script (CSS, unrelated scripts) are not tokens.
     CHECK_FALSE(has_token("color"));
     CHECK_FALSE(has_token("unrelatedKey"));
+    CHECK_FALSE(has_token("jsonLdOnly"));  // double-quoted, but not tailwind
 
     for (const char* token : {"primary", "surface-container", "on-primary"}) {
         det::FingerprintClause clause;
