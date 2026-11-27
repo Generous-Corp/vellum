@@ -761,6 +761,46 @@ class TestCaptureCli(CaptureTestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("escapes capture directory", result.stderr)
 
+    def test_an_absolute_capture_asset_path_is_refused(self):
+        fx = self.fixture()
+        ir = json.loads(fx.ir.read_text())
+        ir["assetManifest"]["assets"][0]["original_uri"] = "pulp-capture:////outside.png"
+        fx.ir.write_text(json.dumps(ir))
+        result = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("capture asset", result.stderr)
+        self.assertIn("escapes capture directory", result.stderr)
+
+    def test_a_traversing_capture_asset_path_is_refused(self):
+        fx = self.fixture()
+        ir = json.loads(fx.ir.read_text())
+        ir["assetManifest"]["assets"][0]["original_uri"] = "pulp-capture:///../outside.png"
+        fx.ir.write_text(json.dumps(ir))
+        result = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("capture asset", result.stderr)
+        self.assertIn("escapes capture directory", result.stderr)
+
+    def test_an_absolute_snapshot_asset_path_is_refused(self):
+        fx = self.fixture()
+        envelope = json.loads((fx.capture / "capture.json").read_text())
+        envelope["documents"][0]["snapshot_asset"] = "/outside/dom-snapshot.json"
+        (fx.capture / "capture.json").write_text(json.dumps(envelope))
+        result = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("snapshot asset", result.stderr)
+        self.assertIn("escapes capture directory", result.stderr)
+
+    def test_a_traversing_snapshot_asset_path_is_refused(self):
+        fx = self.fixture()
+        envelope = json.loads((fx.capture / "capture.json").read_text())
+        envelope["documents"][0]["snapshot_asset"] = "../dom-snapshot.json"
+        (fx.capture / "capture.json").write_text(json.dumps(envelope))
+        result = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("snapshot asset", result.stderr)
+        self.assertIn("escapes capture directory", result.stderr)
+
     def test_a_non_numeric_backend_id_is_a_usage_error(self):
         lowered = PANEL_LOWERED + [("card/odd", "not-a-number")]
         fx = self.fixture(lowered=lowered)

@@ -37,6 +37,7 @@
       "vellum.effects",
       "vellum.feature-versions",
       "vellum.feature-versions-drift",
+      "vellum.fidelity-golden-regression",
       "vellum.fidelity-layout-parity",
       "vellum.fidelity-montage",
       "vellum.fidelity-reference-diff",
