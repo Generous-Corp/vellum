@@ -70,6 +70,14 @@ Fields are always present. Scripts should branch on `ok` and `status`, not
 human prose. Exit codes are: `0` success, `2` usage, `3` project/lock error, `4`
 unavailable capability, and `5` backend/protocol failure.
 
+For `--json design-debug`, the CLI captures the native runner's output in
+`data.stdout` and `data.stderr`, and records its exit code in `data.exit_code`.
+A successful runner returns status `ok` and exit 0; a failed runner returns
+`backend_failed` and exit 5. A launch error returns `backend_execution_error`
+and exit 5. Without `--json`, the runner's streams and exit code pass through.
+Discovery uses `VELLUM_DESIGN_DEBUG`, then `$VELLUM_SDK_ROOT/bin/vellum-design-debug`;
+a missing or non-executable runner returns `capability_unavailable` and exit 4.
+
 ## Backend protocol
 
 The CLI discovers an executable in this order:
@@ -105,6 +113,7 @@ stable outer schema.
 | `dev --target macos|web` | yes (supervisor) | watches, builds, and drives a target reload adapter; see [Development loop](dev.md) |
 | `import` / `reimport` | no | implemented by the installed `@vellum/design-ir` backend |
 | `design check` / `design diff` | no | deterministically regenerate the active source and authored overlay without writing; `check` fails on generated drift and `diff` reports it |
+| `design-debug --prompt TEXT --script FILE [--response-file FILE]` | no | macOS: runs the installed `vellum-design-debug` (or `$VELLUM_DESIGN_DEBUG`) with its arguments unchanged. It loads the design-chat script into a headless widget bridge, applies a recorded response (or runs the `--ai-cli` / `VELLUM_AI_CLI` template), and writes before/after/diff PNGs plus `latest-report.json`. A missing runner reports `capability_unavailable` (exit 4). |
 | `build` / `run` | no | macOS builds/launches a real `.app`; web builds a static app and reports its local serve command; finite headless runs are available |
 | `test` | no | macOS executes bounded native scenarios; web executes the shared scenario contract in Chrome |
 | `capture` | no | macOS captures PNGs and composes bounded capture matrices/montages; web runs a bounded interaction plan in Chrome and writes the settled page as a PNG |
