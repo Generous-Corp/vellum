@@ -11,6 +11,7 @@
 #include <vellum/canvas/canvas.hpp>
 #include <vellum/render/headless_surface.hpp>
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -102,11 +103,18 @@ bool write_solid_png(const std::string& path, uint32_t w, uint32_t h, uint8_t r,
     return out.good();
 }
 
+// One directory per invocation (clock-keyed), so concurrent runs never share or
+// truncate each other's fixtures; main() removes it on exit.
+std::filesystem::path fixture_dir() {
+    static const auto dir = std::filesystem::temp_directory_path() /
+                            ("vellum-headless-surface-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    return dir;
+}
+
 std::string temp_path(const char* leaf) {
-    auto dir = std::filesystem::temp_directory_path() / "vellum-headless-surface";
     std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
-    return (dir / leaf).string();
+    std::filesystem::create_directories(fixture_dir(), ec);
+    return (fixture_dir() / leaf).string();
 }
 
 std::string base64(const std::vector<uint8_t>& bytes) {
@@ -278,20 +286,33 @@ FRAMEWORK_TEST(a_file_backed_image_keeps_drawing_across_frames) {
     }
 }
 
+// Exit code when the GPU is unavailable: a skip normally, a failure in the GPU
+// lane (VELLUM_REQUIRE_GPU=ON), so an initialization regression cannot hide.
+#ifdef VELLUM_REQUIRE_GPU_DEVICE
+constexpr int kNoGpuExit = 1;
+#else
+constexpr int kNoGpuExit = 77;
+#endif
+
 } // namespace
 
 int main() {
     std::string bootstrap_error;
     if (!gpu_runtime::register_native_dawn_bootstrap("framework-test", &bootstrap_error)) {
-        std::printf("SKIP Dawn bootstrap unavailable: %s\n", bootstrap_error.c_str());
-        return 77;
+        std::printf("%s Dawn bootstrap unavailable: %s\n", kNoGpuExit == 77 ? "SKIP" : "FAIL",
+                    bootstrap_error.c_str());
+        return kNoGpuExit;
     }
     std::string err;
     auto probe = HeadlessSurface::create(config(), &err);
     if (!probe) {
-        std::printf("SKIP no headless GPU surface: %s\n", err.c_str());
-        return 77;
+        std::printf("%s no headless GPU surface: %s\n", kNoGpuExit == 77 ? "SKIP" : "FAIL",
+                    err.c_str());
+        return kNoGpuExit;
     }
     probe.reset();
-    return framework_test::run_all();
+    const int rc = framework_test::run_all();
+    std::error_code ec;
+    std::filesystem::remove_all(fixture_dir(), ec);
+    return rc;
 }

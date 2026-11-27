@@ -187,6 +187,14 @@ FRAMEWORK_TEST(an_offscreen_resize_reports_the_size_and_configures_no_swapchain)
     CHECK(surface->swapchain_stats().configure_count == 0);
 }
 
+// Exit code when the GPU is unavailable: a skip normally, a failure in the GPU
+// lane (VELLUM_REQUIRE_GPU=ON), so an initialization regression cannot hide.
+#ifdef VELLUM_REQUIRE_GPU_DEVICE
+constexpr int kNoGpuExit = 1;
+#else
+constexpr int kNoGpuExit = 77;
+#endif
+
 } // namespace
 
 int main() {
@@ -194,13 +202,14 @@ int main() {
     // is the host, so it registers the library's own native table.
     std::string bootstrap_error;
     if (!gpu_runtime::register_native_dawn_bootstrap("framework-test", &bootstrap_error)) {
-        std::printf("SKIP Dawn bootstrap unavailable: %s\n", bootstrap_error.c_str());
-        return 77;
+        std::printf("%s Dawn bootstrap unavailable: %s\n", kNoGpuExit == 77 ? "SKIP" : "FAIL",
+                    bootstrap_error.c_str());
+        return kNoGpuExit;
     }
     auto probe = GpuSurface::create_dawn();
     if (!probe || !probe->initialize(offscreen(64, 64)) || !probe->adapter_info().native_bridge) {
-        std::printf("SKIP no Dawn adapter available\n");
-        return 77;
+        std::printf("%s no Dawn adapter available\n", kNoGpuExit == 77 ? "SKIP" : "FAIL");
+        return kNoGpuExit;
     }
     probe.reset();
     return framework_test::run_all();
