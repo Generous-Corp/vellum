@@ -40,6 +40,7 @@
 #include <string_view>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace vellum::view {
 
@@ -118,10 +119,71 @@ bool looks_like_hex_color(const std::string& s) {
 // the upstream spec prescribes — so acceptance is a syntactic predicate. The
 // goal is only to recognize a valid CSS color so we don't emit a spurious
 // `color-shape` warning for, e.g., `rgb(...)`, `oklch(...)`, or `cornflowerblue`.
+bool is_css_functional_color(const std::string& s);
+
+// Split `text` on commas that sit outside any parentheses.
+std::vector<std::string> split_top_level_commas(const std::string& text) {
+    std::vector<std::string> parts;
+    int depth = 0;
+    size_t start = 0;
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == '(') ++depth;
+        else if (text[i] == ')') --depth;
+        else if (text[i] == ',' && depth == 0) {
+            parts.push_back(text.substr(start, i - start));
+            start = i + 1;
+        }
+    }
+    parts.push_back(text.substr(start));
+    return parts;
+}
+
+bool is_css_color_text(const std::string& s);
+
+// `color-mix(in <space>, <color> [<pct>], <color> [<pct>])`. A weight is only
+// valid as an explicit percentage in 0%..100%; a bare number produces a wrong
+// blend in a CSS engine, so it is not accepted as a valid color.
+bool is_valid_color_mix_argument_list(const std::string& inner) {
+    const auto parts = split_top_level_commas(inner);
+    if (parts.size() != 3) return false;
+    const std::string method = choc::text::toLowerCase(choc::text::trim(parts[0]));
+    if (method.compare(0, 3, "in ") != 0) return false;
+    static const std::regex trailing_weight(R"(^(.*?)\s+([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)(%?)$)");
+    static const std::regex whole_percent(R"(^[+]?(?:\d+\.?\d*|\.\d+)%$)");
+    for (size_t i = 1; i < 3; ++i) {
+        std::string part = choc::text::trim(parts[i]);
+        std::string color = part;
+        std::smatch m;
+        if (std::regex_match(part, m, trailing_weight)) {
+            const std::string weight = m[2].str() + m[3].str();
+            if (!m[3].matched || m[3].length() == 0 || !std::regex_match(weight, whole_percent))
+                return false;
+            double pct = 0.0;
+            try { pct = std::stod(m[2].str()); } catch (const std::exception&) { return false; }
+            if (pct > 100.0) return false;
+            color = choc::text::trim(m[1].str());
+        } else {
+            // The weight may also lead the color: `<pct> <color>`.
+            static const std::regex leading_weight(R"(^([+-]?(?:\d+\.?\d*|\.\d+))(%?)\s+(.+)$)");
+            if (std::regex_match(part, m, leading_weight)) {
+                if (m[2].length() == 0) return false;
+                double pct = 0.0;
+                try { pct = std::stod(m[1].str()); } catch (const std::exception&) { return false; }
+                if (pct < 0.0 || pct > 100.0) return false;
+                color = choc::text::trim(m[3].str());
+            }
+        }
+        if (color.empty() || !is_css_color_text(color)) return false;
+    }
+    return true;
+}
+
 bool is_css_functional_color(const std::string& s) {
     auto paren = s.find('(');
     if (paren == std::string::npos || s.empty() || s.back() != ')') return false;
     std::string fn = choc::text::toLowerCase(choc::text::trim(s.substr(0, paren)));
+    if (fn == "color-mix")
+        return is_valid_color_mix_argument_list(s.substr(paren + 1, s.size() - paren - 2));
     static const std::unordered_set<std::string> fns = {
         "rgb", "rgba", "hsl", "hsla", "hwb",
         "lab", "lch", "oklab", "oklch",
@@ -173,6 +235,10 @@ bool looks_like_css_color(const std::string& s) {
     return looks_like_hex_color(s)
         || is_css_functional_color(s)
         || is_css_named_color(s);
+}
+
+bool is_css_color_text(const std::string& s) {
+    return looks_like_css_color(s);
 }
 
 bool is_token_reference(const std::string& s) {
@@ -1300,6 +1366,70 @@ std::string export_tailwind_v4_css(const DesignMdParseResult& parsed) {
         for (const auto& [level, value] : it->second) {
             o << "  --" << ns << "-" << level << ": " << value << ";\n";
         }
+    }
+    o << "}\n";
+    return o.str();
+}
+
+namespace {
+
+// Reduce a token path to a CSS custom-property name segment.
+std::string css_ident(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        const auto u = static_cast<unsigned char>(c);
+        out += (std::isalnum(u) || c == '_' || c == '-') ? c : '-';
+    }
+    return out;
+}
+
+// A custom-property value ends at `;` or `}` and cannot hold a line break.
+std::string css_value(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        if (c == '\n' || c == '\r') out += ' ';
+        else if (c == ';' || c == '}') out += ' ';
+        else out += c;
+    }
+    return choc::text::trim(out);
+}
+
+} // namespace
+
+std::string export_css_vars(const DesignMdParseResult& parsed, const std::string& prefix) {
+    const auto& t = parsed.ir.tokens;
+    std::string lead = css_ident(prefix);
+    while (!lead.empty() && lead.front() == '-') lead.erase(lead.begin());
+    while (!lead.empty() && lead.back() == '-') lead.pop_back();
+    if (!lead.empty()) lead += "-";
+
+    std::vector<std::pair<std::string, std::string>> vars;
+    for (const auto& [name, value] : t.colors)
+        vars.emplace_back("--" + lead + "color-" + css_ident(name), css_value(value));
+    for (const auto& [name, value] : t.dimensions) {
+        const std::string group = split_prefix_suffix(name).first;
+        if (group != "rounded" && group != "spacing") continue;
+        std::ostringstream v;
+        v << value << "px";
+        vars.emplace_back("--" + lead + css_ident(name), v.str());
+    }
+    constexpr std::string_view typo{"typography."};
+    for (const auto& [key, value] : t.strings) {
+        if (key.compare(0, typo.size(), typo) != 0) continue;
+        vars.emplace_back("--" + lead + "typography-" + css_ident(key.substr(typo.size())),
+                          css_value(value));
+    }
+    std::sort(vars.begin(), vars.end());
+
+    std::ostringstream o;
+    o << ":root {\n";
+    const std::string* previous = nullptr;
+    for (const auto& var : vars) {
+        if (previous && *previous == var.first) continue;
+        o << "  " << var.first << ": " << var.second << ";\n";
+        previous = &var.first;
     }
     o << "}\n";
     return o.str();

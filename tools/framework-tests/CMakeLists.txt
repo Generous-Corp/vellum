@@ -155,6 +155,10 @@ vellum_add_framework_test(runtime-import-parsers
 target_compile_definitions(vellum-framework-runtime-import-parsers-test PRIVATE
     VELLUM_REPO_ROOT="${PROJECT_SOURCE_DIR}")
 
+vellum_add_framework_test(design-import-designmd
+    SOURCES design_import_designmd_test.cpp
+    UNITS Vellum::MirrorDesign_import)
+
 vellum_add_framework_test(native-materializer-part3
     SOURCES native_materializer_part3_test.cpp
     UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import Vellum::MirrorCanvas)
