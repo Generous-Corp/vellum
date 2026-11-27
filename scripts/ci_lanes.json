@@ -237,6 +237,12 @@
         "script": "tools/fidelity/test_reference_diff.py"
       },
       {
+        "script": "tools/fidelity/test_layout_parity.py"
+      },
+      {
+        "script": "tools/fidelity/test_region_diff.py"
+      },
+      {
         "script": "scripts/test_source_support_manifest.py"
       },
       {
