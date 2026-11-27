@@ -17,7 +17,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "cli"))
 from vellum_png import RgbaImage, read_png  # noqa: E402
 
-MODES = {"RGB": 3, "RGBA": 4}
+MODES = {"L": 1, "RGB": 3, "RGBA": 4}
 
 
 class Image:
@@ -111,10 +111,71 @@ class Image:
             resized = [_unpremultiply(pixel) for pixel in resized]
         return Image(width, height, resized, self.mode)
 
+    def crop(self, box: tuple[int, int, int, int]) -> "Image":
+        """Pillow's crop: the area outside the image is zero."""
+        left, top, right, bottom = box
+        width, height = max(0, right - left), max(0, bottom - top)
+        zero = (0,) * MODES[self.mode]
+        pixels = []
+        for y in range(top, top + height):
+            for x in range(left, left + width):
+                inside = 0 <= x < self.width and 0 <= y < self.height
+                pixels.append(self._pixels[y * self.width + x] if inside else zero)
+        return Image(width, height, pixels, self.mode)
+
+    def convert(self, mode: str) -> "Image":
+        """Convert RGB or RGBA to L (Pillow's ITU-R 601 weights) or RGB."""
+        if mode == self.mode:
+            return Image(self.width, self.height, list(self._pixels), mode)
+        if mode == "L" and self.mode in ("RGB", "RGBA"):
+            pixels = [((p[0] * 19595 + p[1] * 38470 + p[2] * 7471 + 0x8000) >> 16,)
+                      for p in self._pixels]
+        elif mode == "RGB" and self.mode == "RGBA":
+            pixels = [p[:3] for p in self._pixels]
+        else:
+            raise ValueError(f"unsupported conversion {self.mode} -> {mode}")
+        return Image(self.width, self.height, pixels, mode)
+
+    def find_edges(self) -> "Image":
+        """Pillow's FIND_EDGES on an L image; border pixels are copied."""
+        if self.mode != "L":
+            raise ValueError("find_edges needs an L image")
+        width, height = self.size
+        src = [p[0] for p in self._pixels]
+        out = list(src)
+        for y in range(1, height - 1):
+            for x in range(1, width - 1):
+                total = 8 * src[y * width + x] + 0.5
+                for dy in (-1, 0, 1):
+                    row = (y + dy) * width
+                    for dx in (-1, 0, 1):
+                        if dx or dy:
+                            total -= src[row + x + dx]
+                out[y * width + x] = 0 if total < 0 else 255 if total > 255 else int(total)
+        return Image(width, height, [(v,) for v in out], "L")
+
+    def max_filter(self, size: int = 3) -> "Image":
+        """Pillow's MaxFilter: edge-replicated window maximum on an L image."""
+        if self.mode != "L" or size % 2 == 0:
+            raise ValueError("max_filter needs an L image and an odd size")
+        width, height = self.size
+        margin = size // 2
+        src = [p[0] for p in self._pixels]
+        out = []
+        for y in range(height):
+            rows = [min(max(y + dy, 0), height - 1) * width for dy in range(-margin, margin + 1)]
+            for x in range(width):
+                columns = [min(max(x + dx, 0), width - 1) for dx in range(-margin, margin + 1)]
+                out.append((max(src[r + c] for r in rows for c in columns),))
+        return Image(width, height, out, "L")
+
     def to_rgba(self) -> RgbaImage:
         data = bytearray()
         for pixel in self._pixels:
-            data.extend(pixel if len(pixel) == 4 else (*pixel, 255))
+            if len(pixel) == 1:
+                data.extend((pixel[0], pixel[0], pixel[0], 255))
+            else:
+                data.extend(pixel if len(pixel) == 4 else (*pixel, 255))
         return RgbaImage(self.width, self.height, bytes(data))
 
 

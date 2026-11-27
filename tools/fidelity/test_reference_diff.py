@@ -309,6 +309,14 @@ class MainFlowTests(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn("malformed --size", stderr)
 
+    def test_main_rejects_threshold_outside_normalized_range(self) -> None:
+        for threshold in ("-0.1", "1.1", "nan"):
+            with self.subTest(threshold=threshold):
+                rc, stdout, stderr = self._run_main(["--threshold", threshold])
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn("--threshold", stderr)
+
     def test_main_reports_load_errors_as_compare_errors(self) -> None:
         stdout = io.StringIO()
         stderr = io.StringIO()
