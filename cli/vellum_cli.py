@@ -1483,6 +1483,145 @@ def detect_command(args: argparse.Namespace) -> dict[str, Any]:
                   status="detected" if detected else "no_detected_source",
                   message=message, data=data)
 
+BAKED_EMITS = ("cpp", "swiftui")
+BAKED_EMIT_SOURCES = ("design-ir", "figma", "figma-plugin", "pencil", "v0", "designmd")
+DESIGN_EMIT_NAME = "vellum-design-emit.exe" if os.name == "nt" else "vellum-design-emit"
+
+
+def design_emit_path() -> Path | None:
+    """The native baked emitter: $VELLUM_DESIGN_EMIT, else the installed SDK's."""
+    explicit = os.environ.get("VELLUM_DESIGN_EMIT")
+    if explicit:
+        path = Path(explicit).expanduser()
+        return path.resolve() if path.is_file() else None
+    sdk_root = os.environ.get("VELLUM_SDK_ROOT")
+    if not sdk_root:
+        return None
+    path = Path(sdk_root).expanduser() / "sdk" / "bin" / DESIGN_EMIT_NAME
+    return path.resolve() if path.is_file() else None
+
+
+def validate_baked_emit(args: argparse.Namespace) -> None:
+    """Refuse a baked C++ or SwiftUI emit the native emitter cannot serve."""
+    if args.mode != "baked":
+        raise CliFailure(
+            f"--emit {args.emit} requires --mode baked.",
+            status="invalid_arguments", exit_code=EXIT_USAGE,
+        )
+    if args.source == "illustrator" or args.source_type not in BAKED_EMIT_SOURCES:
+        hint = ""
+        if args.source_type == "jsx":
+            hint = (" Import it with --mode baked --emit ir-json first, then emit that"
+                    " file with --source-type design-ir.")
+        raise CliFailure(
+            f"--emit {args.emit} supports --source-type {', '.join(BAKED_EMIT_SOURCES)}.{hint}",
+            status="invalid_arguments", exit_code=EXIT_USAGE,
+        )
+    if Path(args.source).suffix.casefold() == ".fig":
+        raise CliFailure(
+            f"--emit {args.emit} does not read local .fig files yet; pass a Figma JSON or plugin export.",
+            status="invalid_arguments", exit_code=EXIT_USAGE,
+        )
+    if args.strict_fidelity and args.emit != "swiftui":
+        raise CliFailure(
+            "--strict-fidelity gates only --emit swiftui; the baked C++ lane reports losses without failing.",
+            status="invalid_arguments", exit_code=EXIT_USAGE,
+        )
+    inapplicable = [
+        flag for flag, used in (
+            ("--file", bool(args.file)), ("--frame", args.frame is not None),
+            ("--page", args.page is not None), ("--outline", args.outline),
+            ("--manifest", args.manifest is not None), ("--source-out", args.source_out is not None),
+            ("--validate-only", args.validate_only), ("--provenance", args.provenance is not None),
+            ("--project", args.project is not None), ("--interaction-plan", args.interaction_plan is not None),
+        ) if used
+    ]
+    if inapplicable:
+        raise CliFailure(
+            f"{', '.join(inapplicable)} do not apply to --emit {args.emit}.",
+            status="invalid_arguments", exit_code=EXIT_USAGE,
+        )
+
+
+def baked_emit_import(args: argparse.Namespace) -> dict[str, Any]:
+    """Lower a design to a baked C++ or SwiftUI view without a project."""
+    tool = design_emit_path()
+    if tool is None:
+        raise CliFailure(
+            f"This SDK does not provide 'import --emit {args.emit}'.",
+            status="capability_unavailable", exit_code=EXIT_UNAVAILABLE,
+        )
+    source = Path(args.source).expanduser().resolve()
+    if not source.is_file():
+        raise CliFailure(
+            f"Import source does not exist: {source}",
+            status="source_not_found", exit_code=EXIT_PROJECT,
+        )
+    command = [str(tool), "--source-type", args.source_type, "--input", str(source),
+               "--emit", args.emit, "--json"]
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.dry_run:
+        command.append("--dry-run")
+    if args.strict_fidelity:
+        command.append("--strict-fidelity")
+    try:
+        completed = subprocess.run(command, check=False, text=True, capture_output=True)
+    except OSError as error:
+        raise CliFailure(
+            f"The baked emitter could not execute: {error}",
+            status="emit_failed", exit_code=EXIT_BACKEND,
+        ) from error
+    try:
+        receipt = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        receipt = None
+    if not isinstance(receipt, dict):
+        raise CliFailure(
+            f"The baked emitter returned no result (exit {completed.returncode}): {completed.stderr.strip()}",
+            status="emit_failed", exit_code=EXIT_BACKEND,
+        )
+    diagnostics = [
+        {"level": "warning", "code": "fidelity" if line.startswith("fidelity:") else "emitter",
+         "message": line}
+        for line in completed.stderr.splitlines() if line.strip()
+    ]
+    code = baked_emit_exit_code(completed.returncode)
+    if code == EXIT_USAGE:
+        raise CliFailure(str(receipt.get("message")), status=str(receipt.get("status")),
+                         exit_code=EXIT_USAGE, diagnostics=diagnostics)
+    message = str(receipt.get("message", ""))
+    files = receipt.get("files", [])
+    if args.dry_run and not args.json and code == 0:
+        message = "\n".join(
+            f"=== {item.get('role')} ({item.get('path')}) ===\n\n{item.get('content', '')}"
+            for item in files
+        )
+    # A failed emit returns ok=false; main() reports it with the backend exit.
+    return result(
+        f"import {args.emit}", ok=code == 0,
+        status=str(receipt.get("status", "emitted" if code == 0 else "emit_failed")),
+        message=message or f"The baked emitter failed (exit {completed.returncode}).",
+        data={"files": files, "losses": receipt.get("losses", [])},
+        diagnostics=diagnostics,
+    )
+
+
+def baked_emit_exit_code(tool_exit: int) -> int:
+    """Map a vellum-design-emit exit status onto the CLI contract.
+
+    The tool exits 0 (written or printed), 1 (input, asset or write failure),
+    2 (usage or refused source) or 4 (strict fidelity failed). The CLI's 4 means
+    an unavailable capability, so a fidelity failure, like any other failed
+    emit, is a backend failure (5); only usage keeps its own status. main()
+    applies the 5 to any result that is not ok.
+    """
+    if tool_exit == 0:
+        return 0
+    if tool_exit == EXIT_USAGE:
+        return EXIT_USAGE
+    return EXIT_BACKEND
+
 
 def standalone_asset_import(args: argparse.Namespace) -> dict[str, Any]:
     from vellum_import_assets import AssetImportError, import_jsx, validate_preconverted_svg
@@ -1665,7 +1804,9 @@ def parser() -> argparse.ArgumentParser:
             ("--provenance", {}),
             ("--manifest", {"help": "control-map sidecar for preconverted SVG"}),
             ("--validate-only", {"action": "store_true", "help": "validate an import without generating files"}),
-            ("--emit", {"choices": ["js", "ir-json", "materialized-runtime"], "default": "js"}),
+            ("--emit", {"choices": ["js", "ir-json", "materialized-runtime", *BAKED_EMITS], "default": "js"}),
+            ("--dry-run", {"action": "store_true", "help": "print a baked emit instead of writing it"}),
+            ("--strict-fidelity", {"action": "store_true", "help": "fail a baked SwiftUI emit that reports fidelity losses"}),
             ("--mode", {"choices": ["live", "baked"], "default": "live"}),
             ("--source-out", {"help": "output directory for materialized runtime source"}),
             ("--page", {"help": "Figma page name for frame lookup, or Illustrator page number"}),
@@ -1707,8 +1848,8 @@ def forwarded_arguments(args: argparse.Namespace) -> list[str]:
     ignored = {"json", "command", "project"}
     if args.command == "import":
         ignored.update({"output", "provenance", "timeout", "illustrator_input", "manifest",
-                        "validate_only", "emit", "mode", "source_out",
-                        "detect_only", "report_new_format", "compat"})
+                        "validate_only", "emit", "mode", "source_out", "dry_run",
+                        "strict_fidelity", "detect_only", "report_new_format", "compat"})
     forwarded: list[str] = []
     for key, value in vars(args).items():
         if key in ignored or value is None or value is False:
@@ -1808,13 +1949,21 @@ def main(argv: Iterable[str] | None = None) -> int:
                     "--compat applies only to --detect-only or --report-new-format.",
                     status="invalid_arguments", exit_code=EXIT_USAGE,
                 )
-            if detecting and (not isinstance(args.source, str) or args.file or args.frame
-                              or args.outline or args.page is not None):
+            if detecting:
+                if (not isinstance(args.source, str) or args.file or args.frame
+                        or args.outline or args.page is not None):
+                    raise CliFailure(
+                        "--detect-only takes one file or directory and no import options.",
+                        status="invalid_arguments", exit_code=EXIT_USAGE,
+                    )
+            elif args.emit not in BAKED_EMITS and (args.dry_run or args.strict_fidelity):
                 raise CliFailure(
-                    "--detect-only takes one file or directory and no import options.",
+                    "--dry-run and --strict-fidelity apply only to --emit cpp or swiftui.",
                     status="invalid_arguments", exit_code=EXIT_USAGE,
                 )
-            if args.source_type in {"jsx", "preconverted-svg"} and not detecting:
+            elif args.emit in BAKED_EMITS:
+                validate_baked_emit(args)
+            elif args.source_type in {"jsx", "preconverted-svg"}:
                 if args.source_type == "preconverted-svg" and args.validate_only is False:
                     raise CliFailure(
                         "preconverted-svg requires --validate-only",
@@ -1918,6 +2067,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             payload = compare_command(args)
         elif args.command == "import" and (args.detect_only or args.report_new_format):
             payload = detect_command(args)
+        elif args.command == "import" and args.emit in BAKED_EMITS:
+            payload = baked_emit_import(args)
         elif args.command == "import" and args.source_type in {"jsx", "preconverted-svg"}:
             payload = standalone_asset_import(args)
         elif args.command == "import" and is_illustrator:
