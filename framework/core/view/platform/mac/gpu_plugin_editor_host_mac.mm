@@ -77,7 +77,8 @@ NSArray* editor_accessibility_children(VellumMirrorMetalView* host) {
             [element release];
         }
     };
-    if (host.rootView) append_text_nodes(host.rootView);
+    if (host.rootView && host.rootView->visible() && host.rootView->access_hidden() != "true")
+        append_text_nodes(host.rootView);
     append_text_nodes(nullptr);
     // Native controls attached through attach_native_child_view are plain
     // subviews of the host. Overriding accessibilityChildren replaces AppKit's

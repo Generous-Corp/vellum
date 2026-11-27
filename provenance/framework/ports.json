@@ -1137,6 +1137,16 @@
       "pulp_commits": [],
       "framework_blob": null,
       "reason": "Owner-aware default text accessibility registry for platforms without a native backend."
+    },
+    {
+      "framework_path": "framework/core/view/platform/mac/accessibility_mac_geometry.hpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Convert editor accessibility bounds with the live host viewport map."
     }
   ]
 }

@@ -211,6 +211,18 @@ int main(int argc, char** argv) {
     }
     if (!has_button || !has_first_text || !has_global_text)
         return fail("the editor view did not expose its named button");
+    // Hiding the root suppresses its registered text as well as its view tree.
+    // Process-wide announcements have no root and remain exposed.
+    for (bool aria_hidden : {false, true}) {
+        if (aria_hidden) probe.set_access_hidden("true");
+        else probe.set_visible(false);
+        NSArray* hidden = host_view.accessibilityChildren;
+        if (hidden.count != 1U ||
+            ![[hidden.firstObject accessibilityLabel] isEqualToString:@"All editors"])
+            return fail("hidden root still exposes editor-owned accessibility children");
+        probe.set_visible(true);
+        probe.set_access_hidden("false");
+    }
     vellum::view::unregister_text_accessibility_node_for_owner(&probe, first_text.id);
     vellum::view::unregister_text_accessibility_node_for_owner(&second_probe, second_text.id);
     vellum::view::unregister_text_accessibility_node("global-editor-text");
@@ -233,6 +245,36 @@ int main(int argc, char** argv) {
         return fail("root did not keep its design bounds");
     if (gpu->window_to_root_point({80, 140}) != Point{40, 20})
         return fail("viewport inverse did not account for the scale and letterbox");
+    // Exercise the actual AppKit screen conversion without showing a window.
+    NSWindow* accessibility_window = [[NSWindow alloc]
+        initWithContentRect:NSMakeRect(100, 150, 400, 400)
+        styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];
+    [accessibility_window setReleasedWhenClosed:NO];
+    [accessibility_window.contentView addSubview:parent];
+    probe.child_at(0)->set_bounds({10, 20, 30, 40});
+    auto verify_frame = [&](NSRect root_rect) {
+        NSRect expected = [host_view convertRect:root_rect toView:nil];
+        expected = [accessibility_window convertRectToScreen:expected];
+        return NSEqualRects([host_view.accessibilityChildren.firstObject accessibilityFrame], expected);
+    };
+    if (!verify_frame(NSMakeRect(20, 180, 60, 80)))
+        return fail("accessibility frame ignores viewport scale or vertical letterbox");
+    gpu->set_design_viewport_top_align(true);
+    if (!verify_frame(NSMakeRect(20, 280, 60, 80)))
+        return fail("accessibility frame did not follow top alignment");
+    gpu->set_size(600, 200);
+    if (!verify_frame(NSMakeRect(120, 80, 60, 80)))
+        return fail("accessibility frame did not follow resize and horizontal letterbox");
+    gpu->set_design_viewport(0, 0);
+    if (!verify_frame(NSMakeRect(10, 140, 30, 40)))
+        return fail("accessibility frame did not return to identity");
+    [parent removeFromSuperview];
+    [accessibility_window close];
+    [accessibility_window release];
+    gpu->set_size(400, 400);
+    gpu->set_design_viewport(200, 100);
+    gpu->set_design_viewport_top_align(false);
+
 
     // AppKit points count up from the bottom edge.
     for (auto type : {NSEventTypeLeftMouseDown, NSEventTypeLeftMouseUp}) {
