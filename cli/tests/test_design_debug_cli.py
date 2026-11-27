@@ -40,6 +40,95 @@ def vellum(*arguments: str, env: dict[str, str] | None = None) -> subprocess.Com
     )
 
 
+@unittest.skipIf(os.name == "nt", "executable script fixtures require POSIX")
+class DesignDebugDispatchTests(unittest.TestCase):
+    """Exercise CLI dispatch with a local runner fixture, without a native SDK."""
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.tool = self.root / "bin" / "vellum-design-debug"
+        self.tool.parent.mkdir()
+        self.tool.write_text(
+            f"#!{sys.executable}\nimport json, sys\n"
+            "print(json.dumps(sys.argv[1:]))\n"
+            "print('runner diagnostic', file=sys.stderr)\n"
+            "sys.exit(7 if '--fail' in sys.argv else 0)\n", encoding="utf-8",
+        )
+        self.tool.chmod(0o755)
+        self.env = {"VELLUM_DESIGN_DEBUG": str(self.tool), "VELLUM_SDK_ROOT": ""}
+
+    def run_cli(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+        return vellum(*arguments, env=self.env)
+
+    def payload(self, completed: subprocess.CompletedProcess[str]) -> dict:
+        self.assertEqual(completed.stderr, "")
+        self.assertEqual(len(completed.stdout.splitlines()), 1, completed.stdout)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["schema"], "vellum.cli.result.v1")
+        self.assertEqual(payload["command"], "design-debug")
+        return payload
+
+    def test_sdk_bin_fallback(self) -> None:
+        self.env.update(VELLUM_DESIGN_DEBUG="", VELLUM_SDK_ROOT=str(self.root))
+        completed = self.run_cli("design-debug", "--prompt", "two words")
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(json.loads(completed.stdout), ["--prompt", "two words"])
+
+    def test_human_output_and_arguments_are_forwarded(self) -> None:
+        completed = self.run_cli("design-debug", "--prompt", "two words")
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(json.loads(completed.stdout), ["--prompt", "two words"])
+        self.assertEqual(completed.stderr, "runner diagnostic\n")
+
+    def test_available_runner_json_success(self) -> None:
+        completed = self.run_cli("--json", "design-debug", "--prompt", "two words")
+        self.assertEqual(completed.returncode, 0)
+        payload = self.payload(completed)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(json.loads(payload["data"]["stdout"]), ["--prompt", "two words"])
+        self.assertEqual(payload["data"]["stderr"], "runner diagnostic\n")
+        self.assertEqual(payload["data"]["exit_code"], 0)
+
+    def test_available_runner_json_failure(self) -> None:
+        completed = self.run_cli("--json", "design-debug", "--fail")
+        self.assertEqual(completed.returncode, 5)
+        payload = self.payload(completed)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["status"], "backend_failed")
+        self.assertEqual(payload["data"]["exit_code"], 7)
+        self.assertEqual(payload["data"]["stderr"], "runner diagnostic\n")
+
+    def test_missing_explicit_runner_does_not_fall_back(self) -> None:
+        self.env.update(VELLUM_DESIGN_DEBUG=str(self.root / "absent"),
+                        VELLUM_SDK_ROOT=str(self.root))
+        completed = self.run_cli("--json", "design-debug")
+        self.assertEqual(completed.returncode, 4)
+        self.assertEqual(self.payload(completed)["status"], "capability_unavailable")
+
+    def test_nonexecutable_runner_is_unavailable(self) -> None:
+        self.tool.chmod(0o644)
+        for explicit in (str(self.tool), ""):
+            with self.subTest(explicit=bool(explicit)):
+                self.env.update(VELLUM_DESIGN_DEBUG=explicit, VELLUM_SDK_ROOT=str(self.root))
+                completed = self.run_cli("--json", "design-debug")
+                self.assertEqual(completed.returncode, 4, completed.stderr)
+                self.assertEqual(self.payload(completed)["status"], "capability_unavailable")
+
+    def test_launch_error_is_structured(self) -> None:
+        self.tool.write_text("#!/nonexistent/vellum-test-interpreter\n", encoding="utf-8")
+        completed = self.run_cli("--json", "design-debug")
+        self.assertEqual(completed.returncode, 5, completed.stderr)
+        payload = self.payload(completed)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["status"], "backend_execution_error")
+        human = self.run_cli("design-debug")
+        self.assertEqual(human.returncode, 5)
+        self.assertNotIn("Traceback", human.stderr)
+
+
 @unittest.skipUnless(TOOL, "VELLUM_DESIGN_DEBUG is unset; the vellum.cli-design-debug ctest sets it")
 class DesignDebugCliTests(unittest.TestCase):
     @classmethod
