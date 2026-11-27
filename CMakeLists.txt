@@ -593,6 +593,12 @@ if(VELLUM_BUILD_TESTS)
                 "$<TARGET_FILE:vellum-design-ab>"
             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     endif()
+    add_test(NAME vellum.fidelity-montage
+        COMMAND "${Python3_EXECUTABLE}" tools/fidelity/test_montage.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.fidelity-reference-diff
+        COMMAND "${Python3_EXECUTABLE}" tools/fidelity/test_reference_diff.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.source-support-manifest
         COMMAND "${Python3_EXECUTABLE}"
             scripts/test_source_support_manifest.py

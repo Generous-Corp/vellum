@@ -85,6 +85,13 @@ vellum_add_framework_test(gpu-surface-lease
 target_include_directories(vellum-framework-gpu-surface-lease-test PRIVATE
     "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
 
+vellum_add_framework_test(render-surface-logic
+    SOURCES render_surface_logic_test.cpp
+    UNITS Vellum::MirrorRender_2d)
+# gpu_surface.hpp wraps the gpu_runtime header.
+target_include_directories(vellum-framework-render-surface-logic-test PRIVATE
+    "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     vellum_add_framework_test(canvas-raster-parity
         SOURCES canvas_raster_parity_test.cpp
