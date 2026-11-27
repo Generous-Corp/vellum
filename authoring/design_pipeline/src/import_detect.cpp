@@ -7,7 +7,10 @@
 #include "strict_json.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <cstddef>
 #include <fstream>
+#include <optional>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -99,64 +102,295 @@ std::string lower_trim(std::string s) {
     return s;
 }
 
-// Extract all <script ...> attribute values for `attr` from `html`.
-// Hand-rolled to avoid pulling a full HTML parser into the CLI build.
-std::vector<std::string> scrape_script_attr(const std::string& html, const std::string& attr) {
-    std::vector<std::string> out;
-    std::string html_lower = html;
-    for (auto& c : html_lower)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    std::string needle = attr;
-    for (auto& c : needle)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+bool is_html_space(char c) {
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f';
+}
 
+// Whether `lower` opens the element `name` at `pos`: "<name" followed by a
+// tag delimiter or the end of the text, so "<scriptish" is not "<script".
+bool opens_element(const std::string& lower, size_t pos, std::string_view name) {
+    if (lower.size() - pos < name.size() + 1 || lower[pos] != '<' ||
+        lower.compare(pos + 1, name.size(), name) != 0)
+        return false;
+    const size_t after = pos + 1 + name.size();
+    return after == lower.size() || is_html_space(lower[after]) ||
+           lower[after] == '>' || lower[after] == '/';
+}
+
+// Reads the attributes of a start tag from `pos` (just past the tag name) to
+// its '>', following HTML attribute syntax: whitespace may surround '=', a
+// quoted value may hold '>', and an unquoted value ends at whitespace or '>'.
+// Stores the first value of attribute `needle` (lowercase) in `value`, and
+// whether the tag ends in "/>" in `self_closing`. Returns the index of the
+// closing '>', or npos for an unterminated tag.
+size_t read_start_tag(const std::string& html, const std::string& lower, size_t pos,
+                      std::string_view needle, std::optional<std::string>& value,
+                      bool& self_closing) {
+    const size_t n = html.size();
+    size_t i = pos;
+    while (i < n) {
+        bool slash = false;
+        while (i < n && (is_html_space(lower[i]) || lower[i] == '/')) slash = lower[i++] == '/';
+        if (i >= n) break;
+        if (lower[i] == '>') {
+            self_closing = slash;
+            return i;
+        }
+        const size_t name_start = i;
+        // A leading '=' belongs to the attribute name in HTML.
+        ++i;
+        while (i < n && !is_html_space(lower[i]) && lower[i] != '/' &&
+               lower[i] != '>' && lower[i] != '=')
+            ++i;
+        const std::string_view name(lower.data() + name_start, i - name_start);
+        size_t j = i;
+        while (j < n && is_html_space(lower[j])) ++j;
+        if (j >= n || lower[j] != '=') {
+            // An attribute with no value is present with an empty one.
+            if (!value && name == needle) value = std::string();
+            i = j;
+            continue;
+        }
+        ++j;
+        while (j < n && is_html_space(lower[j])) ++j;
+        if (j >= n) break;
+        std::string attr_value;
+        if (html[j] == '"' || html[j] == '\'') {
+            const char quote = html[j++];
+            const size_t close = html.find(quote, j);
+            if (close == std::string::npos) break;
+            attr_value = html.substr(j, close - j);
+            i = close + 1;
+        } else {
+            size_t close = j;
+            while (close < n && !is_html_space(lower[close]) && lower[close] != '>') ++close;
+            attr_value = html.substr(j, close - j);
+            i = close;
+        }
+        if (!value && name == needle) value = std::move(attr_value);
+    }
+    return std::string::npos;
+}
+
+bool is_ascii_alpha(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+// The index of the end tag "</name" at or after `from` whose name is not just
+// a prefix of a longer one ("</scripture" does not close a script), or npos.
+size_t find_end_tag(const std::string& lower, size_t from, std::string_view name) {
+    const std::string needle = "</" + std::string(name);
+    for (auto at = lower.find(needle, from); at != std::string::npos;
+         at = lower.find(needle, at + 1)) {
+        const size_t after = at + needle.size();
+        if (after == lower.size() || is_html_space(lower[after]) ||
+            lower[after] == '>' || lower[after] == '/')
+            return at;
+    }
+    return std::string::npos;
+}
+
+std::string ascii_lower(std::string text) {
+    for (auto& c : text) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return text;
+}
+
+// A real <script> element found by find_script_elements: its attributes
+// start at `attrs_begin`, and its text is [content_begin, content_end).
+struct ScriptElement {
+    size_t attrs_begin = 0;
+    size_t content_begin = 0;
+    size_t content_end = 0;
+};
+
+// The <script> elements of `html` (`lower` is its lowercase copy), found with
+// a hand-rolled scan to avoid pulling a full HTML parser into the CLI build.
+// Only real elements count: comments, the contents of raw-text and escapable
+// raw-text elements (style, textarea, title, iframe, xmp, noembed, noframes,
+// and script itself) and all text after <plaintext> are skipped, so
+// commented-out or quoted markup cannot select an import source. Other tags
+// are read past quote-aware, and an end tag must name its element exactly
+// ("</stylesheet>" does not close a style element). A start tag ending in
+// "/>" is taken as an empty element, as XHTML writes it.
+std::vector<ScriptElement> find_script_elements(const std::string& html, const std::string& lower) {
+    static constexpr std::string_view kRawTextElements[] = {
+        "script", "style", "textarea", "title", "iframe", "xmp", "noembed", "noframes"};
+    std::vector<ScriptElement> out;
+    std::optional<std::string> ignored;
     size_t i = 0;
     while (i < html.size()) {
-        // Find next "<script" (case-insensitive) opening.
-        auto open = html_lower.find("<script", i);
+        const auto open = lower.find('<', i);
         if (open == std::string::npos) break;
-        const auto tag_name_end = open + 7;
-        if (tag_name_end < html_lower.size()) {
-            const char next = html_lower[tag_name_end];
-            if (!(next == '>' || next == '/' || next == ' ' ||
-                  next == '\t' || next == '\r' || next == '\n')) {
-                i = tag_name_end;
-                continue;
-            }
+        if (lower.compare(open, 4, "<!--") == 0) {
+            const auto end = lower.find("-->", open + 4);
+            if (end == std::string::npos) break;
+            i = end + 3;
+            continue;
         }
-        // Find the closing '>' of this open tag.
-        auto close = html.find('>', open);
-        if (close == std::string::npos) break;
-        std::string tag = html.substr(open, close - open);
-        // Lowercase a copy for attr lookup; preserve original for value.
-        std::string tag_lower = tag;
-        for (auto& c : tag_lower)
-            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        size_t a = 0;
-        while ((a = tag_lower.find(needle + "=", a)) != std::string::npos) {
-            if (a > 0) {
-                const char before = tag_lower[a - 1];
-                if (!(before == ' ' || before == '\t' ||
-                      before == '\r' || before == '\n')) {
-                    a += needle.size() + 1;
-                    continue;
-                }
+        // Everything after a plaintext start tag is text.
+        if (opens_element(lower, open, "plaintext")) break;
+        i = open + 1;
+        bool raw_text = false;
+        for (const auto element : kRawTextElements) {
+            if (!opens_element(lower, open, element)) continue;
+            raw_text = true;
+            const size_t attrs_begin = open + 1 + element.size();
+            bool self_closing = false;
+            const auto tag_end =
+                read_start_tag(html, lower, attrs_begin, std::string_view(), ignored, self_closing);
+            if (tag_end == std::string::npos) return out;
+            // Exports written as XHTML close an empty element with "/>".
+            const auto close = self_closing ? std::string::npos
+                                            : find_end_tag(lower, tag_end + 1, element);
+            if (element == "script") {
+                const size_t content_end =
+                    self_closing ? tag_end + 1 : (close == std::string::npos ? html.size() : close);
+                out.push_back({attrs_begin, tag_end + 1, content_end});
             }
-            // Skip past `attr=`.
-            auto v = a + needle.size() + 1;
-            if (v < tag.size() && (tag[v] == '"' || tag[v] == '\'')) {
-                char q = tag[v++];
-                auto end = tag.find(q, v);
-                if (end != std::string::npos)
-                    out.push_back(tag.substr(v, end - v));
-            } else {
-                auto end = tag.find_first_of(" \t>", v);
-                if (end == std::string::npos) end = tag.size();
-                out.push_back(tag.substr(v, end - v));
+            if (self_closing) {
+                i = tag_end + 1;
+                break;
             }
+            if (close == std::string::npos) return out;
+            // Read the whole end tag quote-aware: HTML consumes attributes on
+            // an end tag too, so markup quoted there is never an element.
+            const auto end_tag_end = read_start_tag(html, lower, close + 2 + element.size(),
+                                                    std::string_view(), ignored, self_closing);
+            if (end_tag_end == std::string::npos) return out;
+            i = end_tag_end + 1;
             break;
         }
-        i = close + 1;
+        if (raw_text || open + 1 >= html.size()) continue;
+        const char next = lower[open + 1];
+        const bool end_tag = next == '/' && open + 2 < html.size() && is_ascii_alpha(lower[open + 2]);
+        if (is_ascii_alpha(next) || end_tag) {
+            // Any other start or end tag: read past it quote-aware, so markup
+            // quoted in one of its attribute values is never taken for an
+            // element (HTML consumes attributes on end tags too).
+            size_t name_end = open + (end_tag ? 3 : 2);
+            while (name_end < html.size() && !is_html_space(lower[name_end]) &&
+                   lower[name_end] != '/' && lower[name_end] != '>')
+                ++name_end;
+            bool self_closing = false;
+            const auto tag_end =
+                read_start_tag(html, lower, name_end, std::string_view(), ignored, self_closing);
+            if (tag_end == std::string::npos) return out;
+            i = tag_end + 1;
+        } else if (next == '/' || next == '!' || next == '?') {
+            // Doctypes and bogus comments run to the next '>'.
+            const auto tag_end = lower.find('>', open + 2);
+            if (tag_end == std::string::npos) return out;
+            i = tag_end + 1;
+        }
+    }
+    return out;
+}
+
+// The first value of attribute `attr` on the script element `element`.
+std::optional<std::string> script_attr(const std::string& html, const std::string& lower,
+                                       const ScriptElement& element, const std::string& attr) {
+    std::optional<std::string> value;
+    bool self_closing = false;
+    read_start_tag(html, lower, element.attrs_begin, ascii_lower(attr), value, self_closing);
+    return value;
+}
+
+// Extract the `attr` values of every real <script> element in `html`.
+std::vector<std::string> scrape_script_attr(const std::string& html, const std::string& attr) {
+    const std::string lower = ascii_lower(html);
+    std::vector<std::string> out;
+    for (const auto& element : find_script_elements(html, lower))
+        if (auto value = script_attr(html, lower, element, attr)) out.push_back(std::move(*value));
+    return out;
+}
+
+// Whether a script `type` value makes a classic or module JavaScript script,
+// per the HTML JavaScript MIME type essences; any other type (JSON, a
+// template, a bundler payload) is data the browser never runs.
+bool is_javascript_type(const std::optional<std::string>& type) {
+    static constexpr std::string_view kJavaScriptTypes[] = {
+        "", "module", "text/javascript", "application/javascript", "application/x-javascript",
+        "application/ecmascript", "application/x-ecmascript", "text/ecmascript",
+        "text/javascript1.0", "text/javascript1.1", "text/javascript1.2", "text/javascript1.3",
+        "text/javascript1.4", "text/javascript1.5", "text/jscript", "text/livescript",
+        "text/x-ecmascript", "text/x-javascript"};
+    if (!type) return true;
+    const auto value = lower_trim(*type);
+    return std::find(std::begin(kJavaScriptTypes), std::end(kJavaScriptTypes), value) !=
+           std::end(kJavaScriptTypes);
+}
+
+bool is_js_identifier_char(char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '$';
+}
+
+// Whether a '/' that follows the JavaScript already copied to `out` starts a
+// regular expression literal rather than a division: it does at the start,
+// after a punctuator that ends no operand, and after a keyword that takes an
+// expression; after an identifier, number, ')' or ']' it divides.
+bool slash_starts_regex(const std::string& out) {
+    static constexpr std::string_view kKeywords[] = {
+        "await", "case", "delete", "do", "else", "in", "instanceof", "new",
+        "of", "return", "throw", "typeof", "void", "yield"};
+    const auto last = out.find_last_not_of(" \t\r\n\f\v");
+    if (last == std::string::npos) return true;
+    if (is_js_identifier_char(out[last])) {
+        size_t first = last;
+        while (first > 0 && is_js_identifier_char(out[first - 1])) --first;
+        const std::string_view word(out.data() + first, last - first + 1);
+        return std::find(std::begin(kKeywords), std::end(kKeywords), word) != std::end(kKeywords);
+    }
+    return std::string_view("(,=:[!&|?{};+-*%<>~^").find(out[last]) != std::string_view::npos;
+}
+
+// `code` with its JavaScript comments removed. String, template and regular
+// expression literals are kept whole, so "//" inside a URL string or a
+// regex such as /\/\// is not taken for a comment.
+std::string strip_js_comments(std::string_view code) {
+    std::string out;
+    out.reserve(code.size());
+    size_t i = 0;
+    while (i < code.size()) {
+        const char c = code[i];
+        if (c == '"' || c == '\'' || c == '`') {
+            const size_t start = i++;
+            while (i < code.size() && code[i] != c) i += code[i] == '\\' ? 2 : 1;
+            i = std::min(i + 1, code.size());
+            out.append(code.substr(start, i - start));
+        } else if (code.compare(i, 2, "//") == 0) {
+            // A line comment ends at any JavaScript line terminator: LF, CR,
+            // or U+2028 / U+2029 (UTF-8 E2 80 A8 / E2 80 A9).
+            while (i < code.size() && code[i] != '\n' && code[i] != '\r' &&
+                   !(code.compare(i, 3, "\xE2\x80\xA8") == 0 ||
+                     code.compare(i, 3, "\xE2\x80\xA9") == 0))
+                ++i;
+        } else if (code.compare(i, 2, "/*") == 0) {
+            const auto end = code.find("*/", i + 2);
+            i = end == std::string_view::npos ? code.size() : end + 2;
+            out.push_back(' ');
+        } else if (c == '/' && slash_starts_regex(out)) {
+            // A regex literal runs to the next unescaped '/' outside a
+            // [...] class, then its flags.
+            const size_t start = i++;
+            bool in_class = false;
+            while (i < code.size() && code[i] != '\n' && code[i] != '\r') {
+                const char r = code[i];
+                if (r == '\\') {
+                    i += 2;
+                    continue;
+                }
+                ++i;
+                if (r == '[') in_class = true;
+                else if (r == ']') in_class = false;
+                else if (r == '/' && !in_class) break;
+            }
+            while (i < code.size() && is_js_identifier_char(code[i])) ++i;
+            i = std::min(i, code.size());
+            out.append(code.substr(start, i - start));
+        } else {
+            out.push_back(c);
+            ++i;
+        }
     }
     return out;
 }
@@ -165,19 +399,32 @@ std::vector<std::string> scrape_script_attr(const std::string& html, const std::
 // We grep for sequences inside theme.extend.colors / .spacing / similar
 // keys. The detector matches against any-of clauses, so this just needs
 // to surface representative tokens; we don't reconstruct a real tree.
+// Only the code of an inline JavaScript <script> that configures Tailwind
+// (its code, comments removed, names `tailwind`) is read. A script with a
+// src runs the file, not its text, and JSON or template scripts are data,
+// so tokens in comments, other markup, unrelated scripts or page text never
+// count.
 std::vector<std::string> scrape_tailwind_tokens(const std::string& html) {
     std::set<std::string> seen;
-    // Match identifier-like keys "<ident>": before a colon or comma in
+    // Match identifier-like keys "<ident>" or '<ident>': before a colon in
     // a JS/JSON-ish context. Strict enough to skip noise but loose
     // enough to handle Material 3 hyphenated tokens like
     // "surface-container".
     static const std::regex token_re(
-        R"REX("([a-zA-Z][a-zA-Z0-9_-]{1,40})"\s*:)REX",
+        R"REX((["'])([a-zA-Z][a-zA-Z0-9_-]{1,40})\1\s*:)REX",
         std::regex::ECMAScript);
-    auto begin = std::sregex_iterator(html.begin(), html.end(), token_re);
-    auto end = std::sregex_iterator{};
-    for (auto it = begin; it != end; ++it)
-        seen.insert((*it)[1].str());
+    const std::string lower = ascii_lower(html);
+    for (const auto& element : find_script_elements(html, lower)) {
+        if (script_attr(html, lower, element, "src") ||
+            !is_javascript_type(script_attr(html, lower, element, "type")))
+            continue;
+        const std::string code = strip_js_comments(std::string_view(html).substr(
+            element.content_begin, element.content_end - element.content_begin));
+        if (ascii_lower(code).find("tailwind") == std::string::npos) continue;
+        for (auto it = std::sregex_iterator(code.begin(), code.end(), token_re);
+             it != std::sregex_iterator{}; ++it)
+            seen.insert((*it)[2].str());
+    }
     return {seen.begin(), seen.end()};
 }
 

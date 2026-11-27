@@ -55,6 +55,15 @@ std::string lower(std::string text) {
     return text;
 }
 
+// A script type as the html-script-type matcher compares it: lowercased and
+// trimmed of HTML whitespace.
+std::string normalized_type(const std::string& type) {
+    const auto first = type.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return {};
+    const auto last = type.find_last_not_of(" \t\r\n");
+    return lower(type.substr(first, last - first + 1));
+}
+
 // ECMAScript search, the html-script-src clause's semantics; an invalid
 // pattern finds nothing.
 bool regex_finds(const std::string& pattern, const std::string& text) {
@@ -177,8 +186,11 @@ NewFormatReport build_new_format_report(const ImportsManifest& manifest,
                     for (const auto& tok : cl.any_of) add_distinct(known_tokens, tok);
                 if (cl.kind == FingerprintClause::Kind::html_script_src && !cl.regex.empty())
                     add_distinct(src_regexes, cl.regex);
-                if (cl.kind == FingerprintClause::Kind::html_script_type && !cl.value.empty())
-                    add_distinct(known_types, lower(cl.value));
+                if (cl.kind == FingerprintClause::Kind::html_script_type) {
+                    // The matcher never matches an empty value, so none is a baseline.
+                    auto type = normalized_type(cl.value);
+                    if (!type.empty()) add_distinct(known_types, type);
+                }
             }
         }
     }
@@ -210,7 +222,10 @@ NewFormatReport build_new_format_report(const ImportsManifest& manifest,
 
     // Script types against the html-script-type values, both ways.
     std::vector<std::string> types;
-    for (const auto& type : snap.script_types) add_distinct(types, lower(type));
+    for (const auto& raw : snap.script_types) {
+        auto type = normalized_type(raw);
+        if (!type.empty()) add_distinct(types, type);
+    }
     for (const auto& type : known_types) {
         if (!contains(types, type)) add_distinct(r.type_removals, type);
     }

@@ -212,7 +212,7 @@ TEST_CASE("snapshot_input scrapes script attributes and frontmatter edge cases",
 <!doctype html>
 <SCRIPT SRC='/assets/app.js' TYPE='module'></SCRIPT>
 <script data-src="/ignored.js" src=/assets/inline.js></script>
-<script src = "/spaced-equals-ignored.js"></script>
+<script src = "/spaced-equals.js"></script>
 <scriptish src="/not-a-script.js"></scriptish>
 <script type=text/babel></script>
 <script>
@@ -226,9 +226,10 @@ TEST_CASE("snapshot_input scrapes script attributes and frontmatter edge cases",
     auto html = det::snapshot_input(scratch.path / "case.html");
     REQUIRE_FALSE(html.is_directory);
     REQUIRE(html.filename == "case.html");
-    REQUIRE(html.script_srcs.size() == 2);
+    REQUIRE(html.script_srcs.size() == 3);
     REQUIRE(html.script_srcs[0] == "/assets/app.js");
     REQUIRE(html.script_srcs[1] == "/assets/inline.js");
+    REQUIRE(html.script_srcs[2] == "/spaced-equals.js");
     REQUIRE(html.script_types.size() == 2);
     REQUIRE(html.script_types[0] == "module");
     REQUIRE(html.script_types[1] == "text/babel");
@@ -261,6 +262,115 @@ TEST_CASE("snapshot_input scrapes script attributes and frontmatter edge cases",
     key_clause.kind = det::FingerprintClause::Kind::frontmatter_key;
     key_clause.required = "colors";
     REQUIRE(det::match_clause(key_clause, design));
+}
+
+TEST_CASE("snapshot_input reads script attributes with HTML whitespace around '='",
+          "[import-detect]") {
+    ScratchDir scratch("snapshot-attr-spacing");
+
+    write_text(scratch.path / "case.html",
+               "<script type = \"__bundler/template\"></script>\n"
+               "<script type= 'text/babel'></script>\n"
+               "<script\ttype\r\n=\r\nmodule\r\nsrc=/a.js\r></script>\n"
+               "<script data-type=\"ignored\" type =importmap></script>\n"
+               "<script src=\"/first.js\" src=\"/second.js\" type=\"a>b\"></script>\n");
+
+    auto html = det::snapshot_input(scratch.path / "case.html");
+    REQUIRE(html.script_types == std::vector<std::string>{
+        "__bundler/template", "text/babel", "module", "importmap", "a>b"});
+    REQUIRE(html.script_srcs == std::vector<std::string>{"/a.js", "/first.js"});
+
+    det::FingerprintClause type_clause;
+    type_clause.kind = det::FingerprintClause::Kind::html_script_type;
+    type_clause.value = "__bundler/template";
+    REQUIRE(det::match_clause(type_clause, html));
+}
+
+TEST_CASE("Tailwind tokens survive line comments ended by any JS line terminator",
+          "[import-detect]") {
+    ScratchDir scratch("snapshot-line-terminators");
+
+    write_text(scratch.path / "case.html",
+               "<script>// cr comment \"cr-dropped\": 0\rtailwind.config = {\"after-cr\": 1};"
+               "// ls comment\xE2\x80\xA8var a = {\"after-ls\": 2};"
+               "// ps comment\xE2\x80\xA9var b = {\"after-ps\": 3};"
+               "// crlf comment\r\nvar c = {\"after-crlf\": 4};</script>\n");
+
+    auto html = det::snapshot_input(scratch.path / "case.html");
+    REQUIRE(html.tailwind_tokens ==
+            std::vector<std::string>{"after-cr", "after-crlf", "after-ls", "after-ps"});
+}
+
+TEST_CASE("Tailwind tokens survive regex literals and divisions in the config script",
+          "[import-detect]") {
+    ScratchDir scratch("snapshot-regex-literals");
+
+    write_text(scratch.path / "case.html", R"HTML(<script>
+const re = /\/\//; tailwind.config = {"after-regex": 1};
+const cls = /[/]/g, half = 4 / 2; var x = {"after-class": 2}; // "line-dropped": 0
+if (a) return /\/*not a comment*\// ; var y = {"after-return": 3};
+const d = total / count /* "block-dropped": 0 */; var z = {"after-division": 4};
+</script>
+)HTML");
+
+    auto html = det::snapshot_input(scratch.path / "case.html");
+    REQUIRE(html.tailwind_tokens == std::vector<std::string>{
+        "after-class", "after-division", "after-regex", "after-return"});
+}
+
+TEST_CASE("snapshot_input ignores script tags inside comments and raw text",
+          "[import-detect]") {
+    ScratchDir scratch("snapshot-comments");
+
+    write_text(scratch.path / "case.html", R"HTML(
+<!doctype html>
+<!-- <script type="__bundler/template" src="/commented.js"></script> -->
+<style>/* <script type="in-style"></script> */</style>
+<textarea><script type="in-textarea"></script></textarea>
+<title><script type="in-title"></title>
+<script>var s = '<script type="in-script" src="/in-script.js">';</script>
+<div data-example='<script type="__bundler/template" src="/in-attr.js"></script>'></div>
+<p title="<script type=in-p-title>">text</p>
+<style>/* </stylesheet><script type="__bundler/template"></script> */</style>
+<script>document.write('</scripture><script type="in-script-2">');</script>
+<iframe><script type="__bundler/template"></script></iframe>
+<xmp><script type="in-xmp"></script></xmp>
+<noembed><script type="in-noembed"></script></noembed>
+<noframes><script type="in-noframes"></script></noframes>
+<SCRIPT type="real" src="/real.js">{"external-token": 1}</SCRIPT>
+<!-- "on-primary": "#fff" -->
+<p>"page-token": 1</p>
+<style>/* "style-token": 1 */</style>
+<style></style data-example="<script type='__bundler/template' src='/end-tag.js'>">
+<div></div data-example="> <script type='__bundler/template' src='/div-end-tag.js'></script>">
+<script type type="__bundler/template" src src="/second-src.js">tailwind.config = {"src-token": 1}</script>
+<script type="application/json">{"json-token": 1, "tailwind": true}</script>
+<script>var app = {"app-token": 1};</script>
+<script>/* "block-token": 1, tailwind */ // "line-token": 2
+var app2 = {"other-token": 1};</script>
+<script type="text/javascript">
+  // tailwind settings follow
+  tailwind.config = {"inline-token": "https://example.com/x", /* "inner-comment-token": 0 */
+                     "second-token": 'a // b', 'single-token': 1, "mixed-token': 2};
+</script>
+<script type="empty" src=/a/></script>
+<plaintext><script type="after-plaintext"></script>
+<!-- unterminated <script type="after-comment"></script>
+)HTML");
+
+    auto html = det::snapshot_input(scratch.path / "case.html");
+    REQUIRE(html.script_types ==
+            std::vector<std::string>{"real", "", "application/json", "text/javascript", "empty"});
+    REQUIRE(html.script_srcs == std::vector<std::string>{"/real.js", "", "/a/"});
+    // Tailwind tokens come only from the code of an inline JavaScript script
+    // that configures Tailwind.
+    REQUIRE(html.tailwind_tokens ==
+            std::vector<std::string>{"inline-token", "second-token", "single-token"});
+
+    det::FingerprintClause type_clause;
+    type_clause.kind = det::FingerprintClause::Kind::html_script_type;
+    type_clause.value = "__bundler/template";
+    REQUIRE_FALSE(det::match_clause(type_clause, html));
 }
 
 TEST_CASE("clause matcher honors the fingerprint vocabulary", "[import-detect]") {
