@@ -118,6 +118,11 @@ def crop_region(img: Image, region: dict) -> Image:
     return img.crop((x, y, x + w, y + h))
 
 
+def uncovered_patch_limit(max_uncovered_fraction: float, frame_size: tuple[int, int]) -> int:
+    """Return the inclusive pixel limit for a frame-relative patch fraction."""
+    return math.ceil(max_uncovered_fraction * frame_size[0] * frame_size[1])
+
+
 def histogram_similarity(a: Image, b: Image) -> float:
     ha = a.histogram()
     hb = b.histogram()
@@ -283,7 +288,12 @@ def region_score(ref_full: Image, cand_full: Image, region: dict) -> dict:
     largest_fraction = coverage["largest_uncovered_px"] / max(frame_px, 1)
     max_uncovered = region.get("max_uncovered_fraction")
     coverage_passed = coverage_floor is None or coverage["covered"] >= coverage_floor
-    uncovered_passed = max_uncovered is None or largest_fraction <= max_uncovered
+    max_uncovered_px = (
+        None
+        if max_uncovered is None
+        else uncovered_patch_limit(max_uncovered, ref_full.size)
+    )
+    uncovered_passed = max_uncovered_px is None or coverage["largest_uncovered_px"] <= max_uncovered_px
     failed_checks = [
         name for name, ok in (
             ("score", score >= threshold),
@@ -312,7 +322,7 @@ def region_score(ref_full: Image, cand_full: Image, region: dict) -> dict:
         "largest_uncovered_px": coverage["largest_uncovered_px"],
         "largest_uncovered_fraction": round(largest_fraction, 7),
         "max_uncovered_fraction": max_uncovered,
-        "max_uncovered_px": None if max_uncovered is None else int(max_uncovered * frame_px),
+        "max_uncovered_px": max_uncovered_px,
         "uncovered_passed": uncovered_passed,
         "reference_ink_px": coverage["reference_ink_px"],
         "candidate_ink_px": coverage["candidate_ink_px"],
@@ -359,13 +369,23 @@ def load_regions(path: Path | None) -> dict:
                     file=sys.stderr,
                 )
                 sys.exit(2)
-        x, y, w, h = (float(region[key]) for key in ("x", "y", "w", "h"))
-        if (not all(math.isfinite(value) for value in (x, y, w, h))
-                or w <= 0.0 or h <= 0.0
-                or x < 0.0 or y < 0.0 or x + w > 1.0 or y + h > 1.0):
+            if not math.isfinite(float(value)) or not 0.0 <= float(value) <= 1.0:
+                print(
+                    f"error: region '{name}' has invalid {required}={value!r} (expected finite number in 0..1)",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+        for dimension in ("w", "h"):
+            if region[dimension] <= 0.0:
+                print(
+                    f"error: region '{name}' has invalid {dimension}={region[dimension]!r} (expected positive number in 0..1)",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+        if region["x"] + region["w"] > 1.0 or region["y"] + region["h"] > 1.0:
             print(
-                f"error: region '{name}' rectangle must be finite, positive, "
-                "and contained in the normalized 0..1 frame",
+                f"error: region '{name}' extends beyond the unit frame "
+                "(rectangle must be contained in the normalized 0..1 frame)",
                 file=sys.stderr,
             )
             sys.exit(2)
@@ -417,6 +437,8 @@ def main() -> int:
     regions = load_regions(args.regions)
     try:
         w, h = (int(x) for x in args.size.split("x"))
+        if w <= 0 or h <= 0:
+            raise ValueError(args.size)
     except ValueError:
         print(f"error: malformed --size {args.size}", file=sys.stderr)
         return 2
