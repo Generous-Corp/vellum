@@ -1136,6 +1136,15 @@
       "pulp_path": null,
       "pulp_commits": [],
       "framework_blob": null,
+      "platforms": [
+        "linux-arm64",
+        "windows-arm64",
+        "ios-device-arm64",
+        "ios-simulator-arm64",
+        "android-arm64-v8a",
+        "android-x86_64",
+        "wasm32"
+      ],
       "reason": "Owner-aware default text accessibility registry for platforms without a native backend."
     },
     {
