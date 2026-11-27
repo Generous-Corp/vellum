@@ -97,7 +97,9 @@ vellum import --source-type design-ir ./panel.ir.json --mode baked --emit cpp --
 
 - **C++** writes `<name>.cpp`, `<name>.hpp` and `<name>.bindings.json`. A
   directory or extensionless `--out` gets `imported_ui.cpp`; a header path names
-  the header. Absolute asset paths are copied into `assets/` beside the source.
+  the header. Available assets resolve beside the input design and are copied
+  into `assets/` beside the source. Relative names that have no local
+  file remain references to resources supplied by the consumer at runtime.
 - **SwiftUI** writes `<Name>.swift`, `<Name>Theme.swift` and
   `<Name>.bindings.json`. The default is `ImportedPulpView.swift`.
 - Sources are `design-ir`, `figma` (JSON), `figma-plugin`, `fig`,
@@ -109,7 +111,8 @@ vellum import --source-type design-ir ./panel.ir.json --mode baked --emit cpp --
   frame with Node, then emits it as a Figma plugin envelope. Merging several
   frames into one multi-state view is not supported.
 - `--emit cpp|swiftui` without `--mode baked` exits 2.
-- `--dry-run` prints the files instead of writing them; with `--json` each
+- `--dry-run` validates assets and previews the same localized source without
+  creating output files or asset directories; with `--json` each
   `data.files` entry carries its `content`.
 - Fidelity losses are reported as diagnostics and in `data.losses`.
   `--strict-fidelity` fails a SwiftUI emit that has any (status

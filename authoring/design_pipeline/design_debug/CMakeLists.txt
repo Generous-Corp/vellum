@@ -38,3 +38,12 @@ if(VELLUM_BUILD_TESTS)
     set_tests_properties(vellum.design-debug-contracts PROPERTIES
         ENVIRONMENT "VELLUM_AI_CLI=sh -c 'exit 97'")
 endif()
+
+if(VELLUM_BUILD_TESTS)
+    find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME vellum.cli-design-debug
+        COMMAND "${Python3_EXECUTABLE}" cli/tests/test_design_debug_cli.py
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    set_tests_properties(vellum.cli-design-debug PROPERTIES
+        ENVIRONMENT "VELLUM_DESIGN_DEBUG=$<TARGET_FILE:vellum-design-debug>")
+endif()
