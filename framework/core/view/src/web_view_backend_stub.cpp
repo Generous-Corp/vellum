@@ -7,6 +7,7 @@
 #include <vellum/view/web_view.hpp>
 
 #include <atomic>
+#include <memory>
 #include <string>
 
 namespace vellum::view {
@@ -46,6 +47,12 @@ std::string detect_webview_backend() {
 bool webview_backend_available() {
     const auto* provider = active_provider();
     return provider && provider->available ? provider->available() : false;
+}
+
+// No native provider on this platform: a caller that checked
+// webview_backend_available() still links, and create() reports the fallback.
+std::unique_ptr<WebViewPanel> WebViewPanel::create(const WebViewOptions&) {
+    return nullptr;
 }
 
 } // namespace vellum::view

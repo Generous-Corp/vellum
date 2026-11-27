@@ -11,6 +11,8 @@
 #include <atomic>
 #include <cctype>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -438,13 +440,20 @@ std::optional<WebViewOptions::Resource> fetch_webview_directory_resource(
         return std::nullopt;
     }
 
-    auto blob = AssetManager::instance().load_blob(resolved.string());
-    if (!blob.valid()) {
+    // Read from disk each time: AssetManager caches by path, which would keep
+    // serving stale HTML/JS/CSS after a local edit and reload.
+    std::ifstream file(resolved, std::ios::binary);
+    if (!file || !fs::is_regular_file(resolved, ec)) {
+        return std::nullopt;
+    }
+    std::vector<uint8_t> data((std::istreambuf_iterator<char>(file)),
+                              std::istreambuf_iterator<char>());
+    if (file.bad()) {
         return std::nullopt;
     }
 
     return WebViewOptions::Resource{
-        .data = std::move(blob.data),
+        .data = std::move(data),
         .mime_type = guess_webview_mime_type(normalized_path),
     };
 }

@@ -206,6 +206,10 @@ FRAMEWORK_TEST(directory_resource_fetcher_blocks_parent_traversal) {
           contains(std::string(root->data.begin(), root->data.end()), "webview"));
     const auto config = fetch("/data/config.json");
     CHECK(config && config->mime_type == "application/json");
+    // An edit is served on the next request, not from a stale cache.
+    write_text(root_dir / "data" / "config.json", R"({"label":"edited"})");
+    const auto edited = fetch("/data/config.json");
+    CHECK(edited && contains(std::string(edited->data.begin(), edited->data.end()), "edited"));
     CHECK(!fetch("/../vellum_webview_outside.txt").has_value());
     CHECK(!fetch("/data/../../vellum_webview_outside.txt").has_value());
 
