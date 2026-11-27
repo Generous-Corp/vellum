@@ -73,6 +73,21 @@ FRAMEWORK_TEST(a_resize_to_the_configured_size_configures_nothing) {
     CHECK(loop.configures == before);
 }
 
+FRAMEWORK_TEST(a_change_in_one_dimension_alone_configures) {
+    FrameLoop loop;
+    loop.state.request(400, 300);
+    CHECK(loop.frame());
+    CHECK(loop.configures == 1);
+
+    loop.state.request(500, 300);
+    CHECK(loop.frame());
+    CHECK(loop.configures == 2);
+
+    loop.state.request(500, 400);
+    CHECK(loop.frame());
+    CHECK(loop.configures == 3);
+}
+
 FRAMEWORK_TEST(a_zero_size_presents_and_configures_nothing) {
     FrameLoop loop;
     loop.state.request(400, 300);
