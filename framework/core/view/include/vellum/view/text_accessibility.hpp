@@ -60,6 +60,11 @@ struct TextAccessibilityNode {
     /// means "no selection" (i.e. the node has no caret).
     std::size_t selection_start_utf8 = 0;
     std::size_t selection_end_utf8 = 0;
+
+    /// Native content-view handle of the host that exposes this node. Unowned
+    /// nodes remain in the registry but are not exposed by a host. Unregister
+    /// before destroying the host; ids are unique across the process.
+    const void* host_handle = nullptr;
 };
 
 /// Returns the active accessibility backend identifier. The default
