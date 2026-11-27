@@ -14,6 +14,13 @@ build plan and refuses to plan anything it cannot prove:
 - every generated input the build needs is produced here or by its mirrored
   producer, and must hash to the closure's recorded digest.
 
+A closure names the Skia/Dawn archive it was exported against. When Vellum
+locks a different archive, the closure is accepted only by content: the new
+archive must be the one Vellum's records attest and declare release eligible,
+built from the same Skia commit, and every file the closure pins from the old
+archive must be present in the new one with an identical digest. The plan
+records each closure accepted that way.
+
 Once the units are transferred to ``framework/`` the file set is the transfer
 record's, minus the removals and plus the additions of the ports ledger
 (``tools/mirror/framework_ports.py``). A ledger-added source is compiled into
@@ -894,11 +901,63 @@ def restore_patched(name: str, root: Path, paths: list[str]) -> None:
         raise PlanError(f"restoring {name} patched files failed: {completed.stderr.strip()}")
 
 
+RENDERER_ATTESTATION = "provenance/renderer-attestation.json"
+THIRD_PARTY_LOCK = "provenance/third-party-lock.json"
+
+
+def attested_renderer(repo: Path | None, asset_sha256: str) -> dict[str, str] | None:
+    """The source commits of the locked renderer, when Vellum's records attest exactly it.
+
+    Both records must name this archive: the attestation record in its
+    builder-attested state, and the third-party lock with the renderer release
+    eligible. Their Skia commits must agree. Anything else returns None.
+    """
+    if repo is None:
+        return None
+    try:
+        record = json.loads((repo / RENDERER_ATTESTATION).read_text(encoding="utf-8"))
+        renderer = json.loads((repo / THIRD_PARTY_LOCK).read_text(encoding="utf-8"))[
+            "runtime_toolchain_dependencies"]["renderer"]
+        if (record["state"] != "builder-attested" or record["artifact"]["sha256"] != asset_sha256
+                or renderer["release_eligibility"] != "eligible"
+                or renderer["artifact"]["sha256"] != asset_sha256):
+            return None
+        skia = renderer["source_identities"]["skia"]["commit"]
+        if record["source_identities"]["skia"]["commit"] != skia:
+            return None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return {"skia_commit": skia}
+
+
+def archive_mismatch(name: str, entry: dict[str, Any], skia_asset_sha256: str,
+                     repo: Path | None) -> str | None:
+    """Why a closure exported against another archive cannot be checked by content, or None."""
+    refusal = (f"closure was exported against {name} archive {entry['asset_sha256']}, "
+               f"but Vellum locks {skia_asset_sha256}")
+    attested = attested_renderer(repo, skia_asset_sha256)
+    if attested is None:
+        return f"{refusal}, which {RENDERER_ATTESTATION} and {THIRD_PARTY_LOCK} do not attest as eligible"
+    if entry["pin"] != attested["skia_commit"]:
+        return f"{refusal}, built from Skia {attested['skia_commit']}, not the closure's {entry['pin']}"
+    if not entry["files"]:
+        return f"{refusal}, and the closure pins no file to compare"
+    return None
+
+
 def prepare_dependencies(deps: dict[str, dict[str, Any]], deps_dir: Path, skia_dir: Path | None,
-                         skia_asset_sha256: str | None, repo: Path | None = None) -> dict[str, Path]:
+                         skia_asset_sha256: str | None, repo: Path | None = None,
+                         content_equivalence: list[dict[str, Any]] | None = None) -> dict[str, Path]:
+    """Fetch or locate each dependency and prove every file the closures pin from it.
+
+    A closure exported against an archive other than the locked one is
+    accepted only by content (see archive_mismatch); each such acceptance is
+    appended to content_equivalence when given.
+    """
     roots: dict[str, Path] = {}
     for name, entry in sorted(deps.items()):
         recipe = DEPENDENCIES[name]
+        by_content = False
         if recipe["kind"] == "in-tree":
             if repo is None:
                 raise PlanError(f"{name} is an in-tree dependency but no repository was given")
@@ -907,9 +966,10 @@ def prepare_dependencies(deps: dict[str, dict[str, Any]], deps_dir: Path, skia_d
             if skia_dir is None or not skia_asset_sha256:
                 raise PlanError(f"closure needs {name} but no extracted Skia/Dawn archive was given")
             if entry["asset_sha256"] != skia_asset_sha256:
-                raise PlanError(
-                    f"closure was exported against {name} archive {entry['asset_sha256']}, "
-                    f"but Vellum locks {skia_asset_sha256}")
+                problem = archive_mismatch(name, entry, skia_asset_sha256, repo)
+                if problem:
+                    raise PlanError(problem)
+                by_content = True
             root = skia_dir
         else:
             root = deps_dir / f"{name}-{entry['pin']}"
@@ -929,10 +989,28 @@ def prepare_dependencies(deps: dict[str, dict[str, Any]], deps_dir: Path, skia_d
                 raise PlanError(f"{name}@{entry['pin'][:12]} has no {relative}")
             if sha256_file(candidate) != digest:
                 raise PlanError(f"{name}@{entry['pin'][:12]}:{relative} does not match the closure digest")
+        if by_content and content_equivalence is not None:
+            content_equivalence.append({
+                "dependency": name, "pin": entry["pin"],
+                "closure_asset_sha256": entry["asset_sha256"],
+                "locked_asset_sha256": skia_asset_sha256,
+                "files_verified": len(entry["files"])})
         for patch in recipe.get("post_patches", []):
             apply_patch(name, patch, root)
         roots[name] = root
     return roots
+
+
+def check_skia_link(row: dict[str, Any], target: str, skia_asset_sha256: str | None,
+                    content_equivalence: list[dict[str, Any]]) -> None:
+    """A target links the locked archive, or one its closure was proven against by content."""
+    if row.get("asset_sha256") == skia_asset_sha256:
+        return
+    if any(row.get("asset_sha256") == proof["closure_asset_sha256"] and row.get("pin") == proof["pin"]
+           and proof["locked_asset_sha256"] == skia_asset_sha256 for proof in content_equivalence):
+        return
+    raise PlanError(f"{target} links skia archive {row.get('asset_sha256')}, "
+                    f"but Vellum locks {skia_asset_sha256}")
 
 
 def render_build_info(template: str, receipt: dict[str, Any], version: str, config: str, timestamp: str) -> str:
@@ -1419,7 +1497,9 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
     deps = external_dependencies(units)
     closure_pinned = set(deps)
     declared_deps = declared_dependencies(declared, units, closure_pinned)
-    roots = prepare_dependencies({**deps, **declared_deps}, deps_dir, skia_dir, skia_asset_sha256, repo)
+    content_equivalence: list[dict[str, Any]] = []
+    roots = prepare_dependencies({**deps, **declared_deps}, deps_dir, skia_dir, skia_asset_sha256, repo,
+                                 content_equivalence)
     generated = prepare_generated(repo, build_receipt, units, generated_dir)
     # GPU device types are not part of the installed surface: the installed
     # copy of each choke header carries an #error guard (gpu_surface_guard.py).
@@ -1505,12 +1585,9 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
                     raise PlanError(f"{unit}/{name} links {link}, which is neither mirrored nor a recipe target")
             skia = [row for row in target.get("external_link_inputs", []) if row.get("dependency") == "skia"]
             for row in skia:
-                # The target links the archive Vellum locks, not merely one
-                # whose headers happen to match.
-                if row.get("asset_sha256") != skia_asset_sha256:
-                    raise PlanError(
-                        f"{unit}/{name} links skia archive {row.get('asset_sha256')}, "
-                        f"but Vellum locks {skia_asset_sha256}")
+                # The target links the archive Vellum locks: exactly, or an
+                # attested one its closure's pinned files were proven against.
+                check_skia_link(row, f"{unit}/{name}", skia_asset_sha256, content_equivalence)
             others = [row for row in target.get("external_link_inputs", []) if row.get("dependency") != "skia"]
             if others:
                 raise PlanError(f"{unit}/{name} has external link inputs with no recipe: {others}")
@@ -1617,6 +1694,9 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
         "dependencies": {name: {"pin": entry["pin"], "source": entry["source"],
                                  "files_verified": len(entry["files"])}
                           for name, entry in sorted({**deps, **declared_deps}.items())},
+        # Present only when a closure was accepted by content, so plans for an
+        # exactly matching archive are unchanged.
+        **({"renderer_content_equivalence": content_equivalence} if content_equivalence else {}),
         "cmake_dependencies": cmake_deps,
         "licenses": licenses,
         "choc_root": str(roots["choc"]) if "choc" in roots else None,
@@ -1780,6 +1860,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"vellum-mirror-package: planned export {build_plan['export_id']} "
           f"({build_plan['mirror_files_verified']} mirrored files, "
           f"{sum(d['files_verified'] for d in build_plan['dependencies'].values())} pinned inputs verified)")
+    for proof in build_plan.get("renderer_content_equivalence", []):
+        print(f"vellum-mirror-package: {proof['dependency']} closure exported against archive "
+              f"{proof['closure_asset_sha256']} validated by content against locked archive "
+              f"{proof['locked_asset_sha256']} ({proof['files_verified']} pinned files identical)")
     return 0
 
 

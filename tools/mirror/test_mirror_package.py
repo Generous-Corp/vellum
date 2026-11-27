@@ -2563,6 +2563,110 @@ class DependencyPreparationRefusalTest(unittest.TestCase):
             with self.assertRaisesRegex(mp.PlanError, f"exported against skia archive {'c' * 64}, but Vellum locks {'d' * 64}"):
                 mp.prepare_dependencies({"skia": entry}, Path(tmp), Path(tmp), "d" * 64)
 
+    @staticmethod
+    def write_renderer_records(repo: Path, asset: str, *, state: str = "builder-attested",
+                               eligibility: str = "eligible", skia: str = "a" * 40,
+                               record_asset: str | None = None) -> None:
+        (repo / "provenance").mkdir(parents=True, exist_ok=True)
+        (repo / "provenance/renderer-attestation.json").write_text(json.dumps({
+            "state": state, "artifact": {"sha256": record_asset or asset},
+            "source_identities": {"skia": {"commit": skia}}}), encoding="utf-8")
+        (repo / "provenance/third-party-lock.json").write_text(json.dumps({
+            "runtime_toolchain_dependencies": {"renderer": {
+                "release_eligibility": eligibility, "artifact": {"sha256": asset},
+                "source_identities": {"skia": {"commit": skia}}}}}), encoding="utf-8")
+
+    def content_fixture(self, base: Path) -> tuple[dict, Path, Path]:
+        """A closure pinned to archive c*64 whose two headers are present in the extract."""
+        skia_dir = base / "skia"
+        (skia_dir / "include").mkdir(parents=True)
+        files = {}
+        for name, body in (("include/a.h", b"a"), ("include/b.h", b"b")):
+            (skia_dir / name).write_bytes(body)
+            files[name] = hashlib.sha256(body).hexdigest()
+        entry = {"pin": "a" * 40, "source": "s", "asset_sha256": "c" * 64, "root": "a" * 40, "files": files}
+        repo = base / "repo"
+        repo.mkdir()
+        return entry, skia_dir, repo
+
+    def test_a_closure_is_accepted_by_content_against_an_attested_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            entry, skia_dir, repo = self.content_fixture(Path(tmp))
+            self.write_renderer_records(repo, "d" * 64)
+            proofs: list = []
+            roots = mp.prepare_dependencies({"skia": entry}, Path(tmp), skia_dir, "d" * 64, repo, proofs)
+            self.assertEqual(roots["skia"], skia_dir)
+            self.assertEqual(proofs, [{"dependency": "skia", "pin": "a" * 40, "closure_asset_sha256": "c" * 64,
+                                       "locked_asset_sha256": "d" * 64, "files_verified": 2}])
+
+    def test_an_exactly_matching_archive_needs_no_records_and_records_no_proof(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            entry, skia_dir, _ = self.content_fixture(Path(tmp))
+            proofs: list = []
+            mp.prepare_dependencies({"skia": entry}, Path(tmp), skia_dir, "c" * 64, None, proofs)
+            self.assertEqual(proofs, [])
+
+    def test_a_changed_pinned_header_refuses_the_content_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            entry, skia_dir, repo = self.content_fixture(Path(tmp))
+            self.write_renderer_records(repo, "d" * 64)
+            (skia_dir / "include/b.h").write_bytes(b"changed")
+            with self.assertRaisesRegex(mp.PlanError, "include/b.h does not match the closure digest"):
+                mp.prepare_dependencies({"skia": entry}, Path(tmp), skia_dir, "d" * 64, repo, [])
+
+    def test_a_pinned_header_missing_from_the_new_archive_refuses_the_content_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            entry, skia_dir, repo = self.content_fixture(Path(tmp))
+            self.write_renderer_records(repo, "d" * 64)
+            (skia_dir / "include/a.h").unlink()
+            with self.assertRaisesRegex(mp.PlanError, "has no include/a.h"):
+                mp.prepare_dependencies({"skia": entry}, Path(tmp), skia_dir, "d" * 64, repo, [])
+
+    def test_an_archive_the_records_do_not_attest_is_refused_even_with_identical_inputs(self) -> None:
+        cases = {
+            "no records": None,
+            "pending attestation": {"state": "pending-build-provenance"},
+            "blocked eligibility": {"eligibility": "blocked"},
+            "attestation names another archive": {"record_asset": "e" * 64},
+            "lock names another archive": "lock-other",
+        }
+        for label, change in cases.items():
+            with self.subTest(label), tempfile.TemporaryDirectory() as tmp:
+                entry, skia_dir, repo = self.content_fixture(Path(tmp))
+                if change == "lock-other":
+                    self.write_renderer_records(repo, "e" * 64, record_asset="d" * 64)
+                elif change is not None:
+                    self.write_renderer_records(repo, "d" * 64, **change)
+                with self.assertRaisesRegex(mp.PlanError, "do not attest as eligible"):
+                    mp.prepare_dependencies({"skia": entry}, Path(tmp), skia_dir, "d" * 64, repo, [])
+
+    def test_an_attested_archive_from_another_skia_commit_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            entry, skia_dir, repo = self.content_fixture(Path(tmp))
+            self.write_renderer_records(repo, "d" * 64, skia="b" * 40)
+            with self.assertRaisesRegex(mp.PlanError, "built from Skia b{40}, not the closure's a{40}"):
+                mp.prepare_dependencies({"skia": entry}, Path(tmp), skia_dir, "d" * 64, repo, [])
+
+    def test_a_closure_pinning_no_archive_file_cannot_be_accepted_by_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            entry, skia_dir, repo = self.content_fixture(Path(tmp))
+            self.write_renderer_records(repo, "d" * 64)
+            entry["files"] = {}
+            with self.assertRaisesRegex(mp.PlanError, "pins no file to compare"):
+                mp.prepare_dependencies({"skia": entry}, Path(tmp), skia_dir, "d" * 64, repo, [])
+
+    def test_a_skia_link_is_accepted_only_for_the_locked_or_content_proven_archive(self) -> None:
+        proof = {"dependency": "skia", "pin": "a" * 40, "closure_asset_sha256": "c" * 64,
+                 "locked_asset_sha256": "d" * 64, "files_verified": 2}
+        mp.check_skia_link({"asset_sha256": "d" * 64, "pin": "a" * 40}, "u/t", "d" * 64, [])
+        mp.check_skia_link({"asset_sha256": "c" * 64, "pin": "a" * 40}, "u/t", "d" * 64, [proof])
+        for row, proofs in (({"asset_sha256": "c" * 64, "pin": "a" * 40}, []),
+                            ({"asset_sha256": "c" * 64, "pin": "b" * 40}, [proof]),
+                            ({"asset_sha256": "e" * 64, "pin": "a" * 40}, [proof])):
+            with self.subTest(row=row, proofs=bool(proofs)), \
+                    self.assertRaisesRegex(mp.PlanError, f"u/t links skia archive {row['asset_sha256']}"):
+                mp.check_skia_link(row, "u/t", "d" * 64, proofs)
+
     def test_a_recorded_file_the_dependency_lacks_is_refused(self) -> None:
         entry = {"pin": "a" * 40, "source": "s", "asset_sha256": "c" * 64, "root": "a" * 40,
                  "files": {"include/absent.h": "d" * 64}}
