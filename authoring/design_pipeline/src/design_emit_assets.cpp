@@ -5,6 +5,7 @@
 // relative path the generated code embeds. Relative inputs resolve beside the design.
 
 #include "design_emit_assets.hpp"
+#include "design_ir_helpers.hpp"
 
 #include <vellum/runtime/crypto.hpp>
 #include <vellum/runtime/base64.hpp>
@@ -40,6 +41,7 @@ bool localize_ir_assets(
     const fs::path assets_dir = out_dir / "assets";
 
     std::unordered_map<std::string, std::string> rel_by_source;   // abs source → assets/<file>
+    std::unordered_map<std::string, std::string> hash_by_source;
     std::unordered_map<std::string, std::string> source_by_name;  // <file> → abs source
     struct Copy { fs::path source; fs::path destination; std::string hash; };
     std::vector<Copy> copies;
@@ -73,13 +75,24 @@ bool localize_ir_assets(
         fs::path src(path_ref);
         if (src.is_relative()) src = input_directory / src;
         src = fs::absolute(src).lexically_normal();
-        std::error_code lec;
-        if (!fs::is_regular_file(src, lec) || lec) {
-            fail("referenced asset is missing: " + src.string());
+        vellum::view::IRAssetRef reference;
+        reference.content_hash = std::string(content_hash);
+        // Node and font references may reuse a manifest-verified cache asset.
+        if (reference.content_hash.empty()) {
+            if (auto hash = hash_by_source.find(src.string()); hash != hash_by_source.end())
+                reference.content_hash = hash->second;
+        }
+        const auto contained = vellum::view::contained_asset_file(
+            reference, path_ref, input_directory, "asset_path");
+        if (!contained) {
+            fail("referenced asset is missing or outside the document directory: " + path_ref);
             return;
         }
+        src = *contained;
+        std::error_code lec;
         const auto actual_hash = file_sha256(src);
-        if (actual_hash.empty() || (!content_hash.empty() && actual_hash != content_hash)) {
+        if (actual_hash.empty() || (!reference.content_hash.empty() &&
+            !vellum::view::asset_file_matches_declared_sha256(reference, src))) {
             fail("source asset hash mismatch: " + src.string());
             return;
         }
@@ -90,8 +103,8 @@ bool localize_ir_assets(
         }
         // Asset filenames are content hashes in the export lanes, so clashes
         // only happen for genuinely different files; suffix those.
-        std::string name = content_hash.size() == 64
-            ? std::string(content_hash) + src.extension().string()
+        std::string name = !content_hash.empty()
+            ? actual_hash + src.extension().string()
             : src.filename().string();
         for (int n = 2;; ++n) {
             auto used = source_by_name.find(name);
@@ -118,6 +131,7 @@ bool localize_ir_assets(
         // must use '/' on every platform (same reason as the resolve pass).
         std::string rel = (fs::path("assets") / name).generic_string();
         rel_by_source.emplace(src.string(), rel);
+        hash_by_source.emplace(src.string(), actual_hash);
         source_by_name.emplace(std::move(name), src.string());
         path_ref = rel;
     };

@@ -173,6 +173,34 @@ class BakedEmitTests(unittest.TestCase):
                 self.assertEqual(payload["status"], "asset_localization_failed")
                 self.assertFalse((self.out / "gen" / "ui.cpp").exists())
 
+    def test_cpp_refuses_document_and_symlink_asset_escapes(self) -> None:
+        secret = self.out / "private.bin"
+        secret.write_bytes(b"outside document")
+        doc_dir = self.out / "document"
+        doc_dir.mkdir()
+        (doc_dir / "link.bin").symlink_to(secret)
+        source = doc_dir / "input.ir.json"
+        for raw in [str(secret), "../private.bin", "link.bin"]:
+            for field in ["asset_path", "fader_body_asset_path", "fader_indicator_asset_path", "manifest", "font"]:
+                document = json.loads(IR_FIXTURE.read_text())
+                if field == "manifest":
+                    document["assetManifest"]["assets"] = [{
+                        "asset_id": "secret", "local_path": raw,
+                        "content_hash": hashlib.sha256(secret.read_bytes()).hexdigest(),
+                    }]
+                elif field == "font":
+                    document["fontFamilyAssets"] = [{"family": "private", "resolved_path": raw}]
+                else:
+                    document["root"].setdefault("attributes", {})[field] = raw
+                source.write_text(json.dumps(document))
+                for extra in [("--dry-run",), ()]:
+                    with self.subTest(raw=raw, field=field, extra=extra):
+                        code, payload = vellum("--source-type", "design-ir", str(source), "--mode", "baked",
+                                               "--emit", "cpp", "--out", str(self.out / "gen" / "ui.cpp"), *extra)
+                        self.assertEqual(code, 5, payload)
+                        self.assertEqual(payload["status"], "asset_localization_failed")
+                        self.assertFalse((self.out / "gen").exists())
+
     def test_non_executable_emitter_is_structured_failure(self) -> None:
         tool = self.out / "not-executable"
         tool.write_text("#!/bin/sh\nexit 0\n")

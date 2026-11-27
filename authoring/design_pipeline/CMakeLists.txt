@@ -129,6 +129,8 @@ endif()
 # `vellum import --mode baked --emit cpp|swiftui` runs this tool.
 add_executable(vellum-design-emit src/design_emit_main.cpp src/design_emit_assets.cpp)
 target_compile_features(vellum-design-emit PRIVATE cxx_std_20)
+# Use the importer's document containment boundary when planning asset copies.
+target_include_directories(vellum-design-emit PRIVATE "${PROJECT_SOURCE_DIR}/framework/core/view/src")
 target_link_libraries(vellum-design-emit PRIVATE Vellum::DesignPipeline)
 set_target_properties(vellum-design-emit PROPERTIES
     OSX_ARCHITECTURES arm64
