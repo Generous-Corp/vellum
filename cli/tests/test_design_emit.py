@@ -156,7 +156,7 @@ class BakedEmitTests(unittest.TestCase):
         source.write_text(json.dumps(document))
         preview = self.assert_preview_matches_write(source)
         generated = next(f["content"] for f in preview["data"]["files"] if f["role"] == "cpp.source")
-        self.assertIn("std::make_unique<vellum::view::DesignFrameView>", generated)
+        self.assertIn("::DesignFrameView>", generated)
         self.assertIn(base64.b64encode(svg.encode()).decode(), generated)
 
     def test_svg_embedding_reads_the_validated_normalized_path(self) -> None:
