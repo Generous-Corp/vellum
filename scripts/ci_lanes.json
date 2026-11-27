@@ -231,6 +231,12 @@
         "module": "tools.agent_instructions.test_verify"
       },
       {
+        "script": "tools/fidelity/test_montage.py"
+      },
+      {
+        "script": "tools/fidelity/test_reference_diff.py"
+      },
+      {
         "script": "scripts/test_source_support_manifest.py"
       },
       {
