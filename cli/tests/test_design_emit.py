@@ -159,6 +159,29 @@ class BakedEmitTests(unittest.TestCase):
         self.assertIn("std::make_unique<vellum::view::DesignFrameView>", generated)
         self.assertIn(base64.b64encode(svg.encode()).decode(), generated)
 
+    def test_svg_embedding_reads_the_validated_normalized_path(self) -> None:
+        doc = self.out / "document"
+        doc.mkdir()
+        outside = self.out / "outside"
+        (outside / "child").mkdir(parents=True)
+        (doc / "link").symlink_to(outside / "child", target_is_directory=True)
+        local_svg = '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="red"/></svg>'
+        outside_svg = '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="blue"/></svg>'
+        (doc / "frame.svg").write_text(local_svg)
+        (outside / "frame.svg").write_text(outside_svg)
+        document = json.loads(IR_FIXTURE.read_text())
+        document["assetManifest"]["assets"] = [{
+            "asset_id": "frame", "original_uri": "frame.svg", "mime": "image/svg+xml",
+            "local_path": "link/../frame.svg", "content_hash": hashlib.sha256(local_svg.encode()).hexdigest(),
+        }]
+        document["root"].update(render_mode="faithful_svg", svg_asset_id="frame")
+        source = doc / "input.ir.json"
+        source.write_text(json.dumps(document))
+        preview = self.assert_preview_matches_write(source)
+        generated = next(f["content"] for f in preview["data"]["files"] if f["role"] == "cpp.source")
+        self.assertIn(base64.b64encode(local_svg.encode()).decode(), generated)
+        self.assertNotIn(base64.b64encode(outside_svg.encode()).decode(), generated)
+
     def test_cpp_refuses_conflicting_duplicate_hashes_in_preview_and_write(self) -> None:
         source = self.ir_with_absolute_asset()
         document = json.loads(source.read_text())

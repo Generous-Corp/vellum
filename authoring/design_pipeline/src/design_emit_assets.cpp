@@ -70,7 +70,8 @@ bool localize_ir_assets(
     };
 
     auto localize = [&](std::string& path_ref,
-                        std::string_view content_hash = {}) {
+                        std::string_view content_hash = {},
+                        fs::path* validated_source = nullptr) {
         if (path_ref.empty()) return;
         fs::path src(path_ref);
         if (src.is_relative()) src = input_directory / src;
@@ -96,6 +97,7 @@ bool localize_ir_assets(
             fail("source asset hash mismatch: " + src.string());
             return;
         }
+        if (validated_source) *validated_source = src;
         // Every manifest occurrence must validate its own hash, including cache hits.
         if (auto hit = rel_by_source.find(src.string()); hit != rel_by_source.end()) {
             path_ref = hit->second;
@@ -139,16 +141,17 @@ bool localize_ir_assets(
     for (auto& asset : ir.asset_manifest.assets) {
         if (!asset.local_path || asset.local_path->empty()) continue;
         auto localized = *asset.local_path;
-        localize(localized, asset.content_hash);
+        fs::path validated_source;
+        localize(localized, asset.content_hash, &validated_source);
         // Faithful SVG lowering reads bytes during code generation. Preserve
         // them in its supported inline URI before replacing the source path.
         if (succeeded && svg_ids.contains(asset.asset_id) &&
             !asset.original_uri.starts_with("data:")) {
-            fs::path source(*asset.local_path);
-            if (source.is_relative()) source = input_directory / source;
-            std::ifstream in(source, std::ios::binary);
+            std::ifstream in(validated_source, std::ios::binary);
             const std::string bytes((std::istreambuf_iterator<char>(in)), {});
-            if (!in || in.bad()) fail("cannot read SVG asset: " + source.string());
+            if (!in || in.bad() ||
+                vellum::runtime::sha256_hex(bytes) != hash_by_source.at(validated_source.string()))
+                fail("cannot read verified SVG asset: " + validated_source.string());
             else asset.original_uri = "data:image/svg+xml;base64," + vellum::runtime::base64_encode(bytes);
         }
         asset.local_path = std::move(localized);
