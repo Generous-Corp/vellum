@@ -1950,8 +1950,21 @@ def main(argv: Iterable[str] | None = None) -> int:
                     status="invalid_arguments", exit_code=EXIT_USAGE,
                 )
             if detecting:
+                detection_forbidden = {
+                    "--as", "--emit", "--file", "--frame", "--interaction-plan",
+                    "--manifest", "--mode", "--out", "--output", "--page",
+                    "--project", "--provenance", "--source-out", "--source-type",
+                    "--strict-fidelity", "--timeout", "--validate-only", "--dry-run",
+                }
+                explicit_forbidden = [
+                    token for token in raw
+                    if token in detection_forbidden or any(
+                        token.startswith(option + "=") for option in detection_forbidden
+                    )
+                ]
                 if (not isinstance(args.source, str) or args.file or args.frame
-                        or args.outline or args.page is not None):
+                        or args.outline or args.page is not None or explicit_forbidden
+                        or args.project is not None):
                     raise CliFailure(
                         "--detect-only takes one file or directory and no import options.",
                         status="invalid_arguments", exit_code=EXIT_USAGE,

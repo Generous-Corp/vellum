@@ -416,6 +416,7 @@ TEST_CASE("snapshot_input ignores script-like tags and prefixed attributes",
 <html>
   <description src="not-a-script.js"></description>
   <scriptish src="also-not-a-script.js"></scriptish>
+  <!-- <script src="commented.js" type="__bundler/template"></script> -->
   <script data-src="not-src.js" type="ignored-prefixed"></script>
   <script src=unquoted.js type=module></script>
   <SCRIPT SRC='quoted.js' TYPE='application/json'></SCRIPT>
@@ -442,10 +443,14 @@ TEST_CASE("snapshot_input ignores script-like tags and prefixed attributes",
                       "also-not-a-script.js") == snap.script_srcs.end());
     REQUIRE(std::find(snap.script_srcs.begin(), snap.script_srcs.end(),
                       "not-src.js") == snap.script_srcs.end());
+    REQUIRE(std::find(snap.script_srcs.begin(), snap.script_srcs.end(),
+                      "commented.js") == snap.script_srcs.end());
     REQUIRE(snap.script_types.size() == 3);
     REQUIRE(snap.script_types[0] == "ignored-prefixed");
     REQUIRE(snap.script_types[1] == "module");
     REQUIRE(snap.script_types[2] == "application/json");
+    REQUIRE(std::find(snap.script_types.begin(), snap.script_types.end(),
+                      "__bundler/template") == snap.script_types.end());
     REQUIRE(std::find(snap.tailwind_tokens.begin(), snap.tailwind_tokens.end(),
                       "surface-container") != snap.tailwind_tokens.end());
     REQUIRE(std::find(snap.tailwind_tokens.begin(), snap.tailwind_tokens.end(),

@@ -113,8 +113,18 @@ std::vector<std::string> scrape_script_attr(const std::string& html, const std::
 
     size_t i = 0;
     while (i < html.size()) {
+        // A commented example is not a script element. Skip the whole comment
+        // whenever it appears before the next candidate tag.
+        auto comment = html_lower.find("<!--", i);
         // Find next "<script" (case-insensitive) opening.
         auto open = html_lower.find("<script", i);
+        if (comment != std::string::npos &&
+            (open == std::string::npos || comment < open)) {
+            auto comment_end = html_lower.find("-->", comment + 4);
+            if (comment_end == std::string::npos) break;
+            i = comment_end + 3;
+            continue;
+        }
         if (open == std::string::npos) break;
         const auto tag_name_end = open + 7;
         if (tag_name_end < html_lower.size()) {

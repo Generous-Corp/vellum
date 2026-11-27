@@ -611,6 +611,17 @@ class CliTests(unittest.TestCase):
             with_frame = invoke("import", "--detect-only", str(root), "--frame", "A", "--json",
                                 cwd=root)
             self.assertEqual(with_frame.returncode, 2)
+            for option in (("--emit", "cpp"), ("--source-type", "figma"),
+                           ("--project", "project"), ("--output", "out"),
+                           ("--as", "alternate")):
+                with self.subTest(option=option[0]):
+                    with_import_option = invoke(
+                        "import", "--detect-only", str(root), *option, "--json", cwd=root,
+                    )
+                    self.assertEqual(with_import_option.returncode, 2)
+                    self.assertEqual(
+                        json.loads(with_import_option.stdout)["status"], "invalid_arguments",
+                    )
             env = {"VELLUM_SOURCE_ADAPTER": "", "VELLUM_SDK_ROOT": ""}
             missing = invoke("import", "--detect-only", str(root), "--json", cwd=root, env=env)
             self.assertEqual(missing.returncode, 4)
