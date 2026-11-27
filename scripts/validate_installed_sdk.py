@@ -193,6 +193,7 @@ def validate_installed_source_detection(prefix: Path, root: Path, env: dict[str,
     if report.get("candidate-source") != "stitch" or "sample-glow" not in added:
         raise ValidationError(f"New-format report did not name the new token: {report}")
 
+
 def validate_installed_stitch_import(prefix: Path, root: Path, env: dict[str, str]) -> None:
     """Import a recorded Stitch screen payload and a Stitch HTML export, then reimport both."""
 

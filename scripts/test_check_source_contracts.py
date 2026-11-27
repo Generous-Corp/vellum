@@ -23,7 +23,8 @@ sys.modules[SPEC.name] = checker
 SPEC.loader.exec_module(checker)
 
 ROOT = checker.REPO_ROOT
-REGISTRY_PATH = checker.DEFAULT_REGISTRY
+# The registry data ships in a follow-up PR; these tests run against a synthetic fixture.
+REGISTRY_PATH = Path(__file__).with_name("testdata") / "source-contracts" / "registry.fixture.json"
 TODAY = dt.date(2026, 8, 12)
 # Subprocess runs of the checker pin the clock so date literals in a test never expire.
 FIXED_TODAY = "2026-11-12"
@@ -69,7 +70,7 @@ class SourceContractsTest(unittest.TestCase):
             findings = _findings(registry, Path(td))
         self.assertIn(code, _codes(findings), [str(f) for f in findings])
 
-    def test_real_registry_has_no_warning_or_error_findings(self) -> None:
+    def test_fixture_registry_has_no_warning_or_error_findings(self) -> None:
         findings = checker.compute_findings(root=ROOT, registry_path=REGISTRY_PATH, today=TODAY)
         warning_pairs = {
             (finding.source, finding.code)
@@ -483,9 +484,9 @@ class SourceContractsTest(unittest.TestCase):
                 self.assert_has_code(registry, "invalid-surface-ref")
         self.assertIsNone(checker.contained_path(ROOT, "/etc"))
         self.assertIsNone(checker.contained_path(ROOT, "product/../../x"))
-        self.assertIsNotNone(checker.contained_path(ROOT, "product/source-contracts.json"))
+        self.assertIsNotNone(checker.contained_path(ROOT, "scripts/check_source_contracts.py"))
 
-    def test_strict_real_registry_has_clean_exit(self) -> None:
+    def test_strict_fixture_registry_has_clean_exit(self) -> None:
         cmd = [
             sys.executable,
             str(CHECKER_PATH),
