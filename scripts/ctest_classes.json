@@ -189,6 +189,7 @@
       "vellum.web.dist-imports-unit",
       "vellum.web.editor-gesture",
       "vellum.web.layout-contract",
+      "vellum.web.make-native-reference",
       "vellum.web.no-engine",
       "vellum.web.no-engine-negative-control",
       "vellum.web.perceptual-gate",
