@@ -107,6 +107,13 @@ class ProseLintTest(unittest.TestCase):
             "rmlui/cmake/patches/fix.patch": line,
         })
 
+    def test_verbatim_moved_files_are_exempt_only_when_listed(self) -> None:
+        manifest = '{"files": [{"path": "apps/design-tool/moved.js"}]}\n'
+        line = f"// Pulp's comment {EM_DASH} kept byte for byte.\n"
+        self.assertClean({"apps/design-tool/moves/base.json": manifest,
+                          "apps/design-tool/moved.js": line})
+        self.assertFlags({"apps/design-tool/other.js": line}, "apps/design-tool/other.js")
+
     def test_unreadable_base_fails_closed(self) -> None:
         result = subprocess.run(
             [sys.executable, "-I", str(PATH), "--base", "no-such-ref"],

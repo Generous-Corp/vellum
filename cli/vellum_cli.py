@@ -513,6 +513,29 @@ def write_localized_capture_assets(staging: Path, envelope: dict[str, Any]) -> N
         destination.write_bytes(payload)
 
 
+# Sources that `vellum import NAME FILE` accepts as a leading name. Illustrator
+# is a separate converter route and is matched on its own.
+IMPORT_SHORTHAND_SOURCES = frozenset({"pencil", "designmd", "v0", "stitch", "jsx", "preconverted-svg"})
+IMPORT_CONVERTER_SOURCES = frozenset({"illustrator"})
+
+
+# Adapters that parse an HTML file natively. A reimport of their source stays on the
+# adapter recorded in the import lock instead of the browser capture route.
+NATIVE_HTML_ADAPTERS = frozenset({"stitch"})
+
+
+def locked_import_adapter(root: Path, source_key: str) -> str | None:
+    """Return the adapter the import lock records for a source key, if readable."""
+    try:
+        lock = json.loads((root / "design/import.lock.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    sources = lock.get("sources") if isinstance(lock, dict) else None
+    source = sources.get(source_key) if isinstance(sources, dict) else None
+    adapter = source.get("adapter") if isinstance(source, dict) else None
+    return adapter if isinstance(adapter, str) else None
+
+
 def invoke_import_backend(
     root: Path,
     lock: dict[str, Any],
@@ -1269,7 +1292,8 @@ def backend_command(args: argparse.Namespace, forwarded: list[str]) -> dict[str,
                 "--file requires Figma plugin JSON inputs.",
                 status="invalid_arguments", exit_code=EXIT_USAGE,
             )
-        if source_path.suffix.casefold() in {".html", ".htm"}:
+        if (source_path.suffix.casefold() in {".html", ".htm"} and
+                locked_import_adapter(root, args.source_key) not in NATIVE_HTML_ADAPTERS):
             backend_payload, return_code = invoke_import_backend(
                 root, lock, "html", source_path, args.source_key,
                 args.interaction_plan, invoke_backend, command="reimport",
@@ -1632,7 +1656,7 @@ def parser() -> argparse.ArgumentParser:
             ("--detect-only", {"action": "store_true", "help": "report the detected source without importing"}),
             ("--report-new-format", {"action": "store_true", "help": "print a draft detection entry for an unrecognized export"}),
             ("--compat", {"help": "detection manifest for --detect-only"}),
-            ("--source-type", {"choices": ["fig", "figma", "figma-plugin", "design-ir", "html", "claude-design", "pencil", "designmd", "v0", "jsx", "preconverted-svg"], "default": "figma"}),
+            ("--source-type", {"choices": ["fig", "figma", "figma-plugin", "design-ir", "html", "claude-design", "pencil", "designmd", "v0", "stitch", "jsx", "preconverted-svg"], "default": "figma"}),
             ("--as", {"dest": "source_key", "default": "main"}),
             ("--interaction-plan", {}),
             ("--frame", {"help": "select a Figma frame by GUID or name"}),
@@ -1702,8 +1726,60 @@ def forwarded_arguments(args: argparse.Namespace) -> list[str]:
     return forwarded
 
 
+DESIGN_DEBUG_NAME = "vellum-design-debug.exe" if os.name == "nt" else "vellum-design-debug"
+
+
+def design_debug_path() -> Path | None:
+    """The native design-debug runner: $VELLUM_DESIGN_DEBUG, else the installed SDK's."""
+    explicit = os.environ.get("VELLUM_DESIGN_DEBUG")
+    if explicit:
+        path = Path(explicit).expanduser()
+    else:
+        sdk_root = os.environ.get("VELLUM_SDK_ROOT")
+        if not sdk_root:
+            return None
+        path = Path(sdk_root).expanduser() / "bin" / DESIGN_DEBUG_NAME
+    return path.resolve() if path.is_file() and os.access(path, os.X_OK) else None
+
+
+def design_debug_command(arguments: list[str], *, json_output: bool) -> int:
+    """Forward native arguments and wrap captured output when JSON is requested."""
+    tool = design_debug_path()
+    if tool is None:
+        emit(result(
+            "design-debug", ok=False, status="capability_unavailable",
+            message="This SDK does not provide 'design-debug'.",
+        ), json_output=json_output)
+        return EXIT_UNAVAILABLE
+    try:
+        completed = subprocess.run(
+            [str(tool), *arguments], check=False, capture_output=json_output,
+            text=True, encoding="utf-8", errors="replace",
+        )
+    except OSError as error:
+        emit(result(
+            "design-debug", ok=False, status="backend_execution_error",
+            message=f"Could not execute design-debug runner: {error}",
+        ), json_output=json_output)
+        return EXIT_BACKEND
+    if not json_output:
+        return completed.returncode
+    ok = completed.returncode == 0
+    emit(result(
+        "design-debug", ok=ok, status="ok" if ok else "backend_failed",
+        message="Design-debug completed." if ok else "Design-debug runner failed.",
+        data={"stdout": completed.stdout, "stderr": completed.stderr,
+              "exit_code": completed.returncode},
+    ), json_output=True)
+    return 0 if ok else EXIT_BACKEND
+
+
 def main(argv: Iterable[str] | None = None) -> int:
     raw = list(argv if argv is not None else sys.argv[1:])
+    if raw[:1] == ["design-debug"]:
+        return design_debug_command(raw[1:], json_output=False)
+    if raw[:2] == ["--json", "design-debug"]:
+        return design_debug_command(raw[2:], json_output=True)
     json_output = "--json" in raw
     if json_output:
         raw.remove("--json")
@@ -1714,7 +1790,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         if args.command == "import" and isinstance(args.source, list):
             if len(args.source) == 2 and args.source[0] == "illustrator":
                 args.source, args.illustrator_input = args.source
-            elif len(args.source) == 2 and args.source[0] in {"pencil", "designmd", "v0", "jsx", "preconverted-svg"}:
+            elif len(args.source) == 2 and args.source[0] in IMPORT_SHORTHAND_SOURCES:
                 args.source_type, args.source = args.source
             elif len(args.source) == 1:
                 args.source = args.source[0]
@@ -1775,7 +1851,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                     )
 
             is_illustrator = args.source == "illustrator" and (
-                hasattr(args, "illustrator_input") or args.source_type not in {"pencil", "designmd", "v0"}
+                hasattr(args, "illustrator_input") or args.source_type not in {"pencil", "designmd", "v0", "stitch"}
             )
             is_fig = args.source_type == "fig" or (
                 args.source_type == "figma" and Path(args.source).suffix.lower() == ".fig"

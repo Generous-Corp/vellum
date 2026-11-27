@@ -621,6 +621,66 @@ class CliTests(unittest.TestCase):
             self.assertEqual(failed.returncode, 3)
             self.assertEqual(json.loads(failed.stdout)["status"], "detect_failed")
 
+    def recording_backend(self, root: Path) -> Path:
+        backend = root / "vellum-backend"
+        backend.write_text(
+            f"#!{sys.executable}\n"
+            "import json, sys\n"
+            "print(json.dumps({'ok': True, 'status': 'recorded', 'message': 'recorded', "
+            "'data': {'argv': sys.argv[1:]}, 'diagnostics': []}))\n",
+            encoding="utf-8",
+        )
+        backend.chmod(0o755)
+        return backend
+
+    def test_stitch_import_is_an_explicit_native_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "app"
+            self.assertEqual(invoke("create", "Stitch", "-d", str(project)).returncode, 0)
+            source = root / "code.html"
+            source.write_text("<html><body><h1>Sample</h1></body></html>", encoding="utf-8")
+            env = {"VELLUM_BACKEND": str(self.recording_backend(root))}
+            for arguments in (("stitch", str(source)), (str(source), "--source-type", "stitch")):
+                completed = invoke("import", *arguments, "--json", cwd=project, env=env)
+                self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+                argv = json.loads(completed.stdout)["data"]["backend"]["data"]["argv"]
+                self.assertEqual(argv[0], "import")
+                self.assertEqual(argv[argv.index("--source-type") + 1], "stitch")
+                self.assertIn(str(source), argv)
+
+    def test_stitch_reimport_stays_on_the_locked_native_adapter(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "app"
+            self.assertEqual(invoke("create", "Stitch", "-d", str(project)).returncode, 0)
+            source = root / "code.html"
+            source.write_text("<html><body><h1>Sample</h1></body></html>", encoding="utf-8")
+            lock = project / "design/import.lock.json"
+            lock.parent.mkdir(parents=True, exist_ok=True)
+            # A pinned-provenance requirement with no pinned browser makes the
+            # browser capture route refuse before any browser could start.
+            env = {
+                "VELLUM_BACKEND": str(self.recording_backend(root)),
+                "VELLUM_REQUIRE_CHROME_PROVENANCE": "1",
+                "VELLUM_CHROME_PATH": "",
+            }
+            for adapter, routed_natively in (("stitch", True), ("html", False)):
+                lock.write_text(json.dumps({
+                    "schema": "vellum.design-import-lock.v1",
+                    "sources": {"main": {"adapter": adapter}},
+                }), encoding="utf-8")
+                completed = invoke("reimport", "--source", str(source), "--json",
+                                   cwd=project, env=env)
+                payload = json.loads(completed.stdout)
+                if routed_natively:
+                    self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+                    self.assertEqual(payload["data"]["backend"]["data"]["argv"][0], "reimport")
+                    self.assertIn(str(source), payload["data"]["backend"]["data"]["argv"])
+                else:
+                    self.assertNotEqual(completed.returncode, 0, completed.stdout)
+                    self.assertNotEqual(payload["status"], "recorded")
+
     def test_design_check_and_diff_use_stable_nested_cli_protocol(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
