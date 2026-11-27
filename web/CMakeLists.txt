@@ -61,6 +61,9 @@ if(VELLUM_BUILD_TESTS)
     add_test(NAME vellum.web.browser-proof-wait
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_browser_proof_wait.py")
+    add_test(NAME vellum.web.make-native-reference
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_make_native_reference.py")
     add_test(NAME vellum.web.superconvolver-negative-control-status
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_superconvolver_negative_control.py")
