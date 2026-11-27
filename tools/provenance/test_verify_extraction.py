@@ -3545,8 +3545,11 @@ class RendererPinTests(unittest.TestCase):
         lock = json.loads((MODULE_PATH.parents[2] / "provenance/third-party-lock.json").read_text())
         (self.root / "provenance/third-party-lock.json").write_text(json.dumps(lock))
         (self.root / "gpu-runtime").mkdir()
-        (self.root / "gpu-runtime/renderer-lock.json").write_bytes(
-            (MODULE_PATH.parents[2] / "gpu-runtime/renderer-lock.json").read_bytes())
+        # Start unbound whatever the checkout's lock carries; the tests that
+        # need a binding add one with bind().
+        renderer_lock = json.loads((MODULE_PATH.parents[2] / "gpu-runtime/renderer-lock.json").read_text())
+        renderer_lock.pop(verify_extraction.RENDERER_BINDING_KEY, None)
+        (self.root / "gpu-runtime/renderer-lock.json").write_text(json.dumps(renderer_lock, indent=2) + "\n")
         renderer = lock["runtime_toolchain_dependencies"]["renderer"]
         artifact, identities = renderer["artifact"], renderer["source_identities"]
         self.matching_pin = {
