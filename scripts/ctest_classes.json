@@ -208,6 +208,7 @@
       "vellum.framework.headless-surface-gpu",
       "vellum.framework.native-trace",
       "vellum.framework.skia-surface-frames",
+      "vellum.framework.text-raster-policy",
       "vellum.framework.threejs-render",
       "vellum.framework.threejs-scene",
       "vellum.framework.webgpu-error-scopes",

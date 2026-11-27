@@ -192,7 +192,19 @@ if(TARGET vellum-dawn-headers AND TARGET vellum-gpu)
     target_include_directories(vellum-framework-canvas-path-raster-test PRIVATE
         "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
     set_tests_properties(vellum.framework.canvas-path-raster PROPERTIES SKIP_RETURN_CODE 77)
+    # The glyph preblend every surface is created with, and that text agrees
+    # across the surface, its retained layers and its scene target.
+    vellum_add_framework_test(text-raster-policy
+        SOURCES text_raster_policy_test.cpp
+        UNITS Vellum::MirrorRender_2d Vellum::DawnHeaders Vellum::Gpu)
+    target_include_directories(vellum-framework-text-raster-policy-test PRIVATE
+        "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
+    target_compile_definitions(vellum-framework-text-raster-policy-test PRIVATE
+        VELLUM_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/framework/external/fonts/JetBrainsMono-Regular.ttf")
+    set_tests_properties(vellum.framework.text-raster-policy PROPERTIES SKIP_RETURN_CODE 77)
 else()
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+        "text_raster_policy_test.cpp")
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
         "canvas_path_raster_test.cpp")
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
