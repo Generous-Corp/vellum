@@ -76,6 +76,14 @@ bool localize_ir_assets(
         fs::path src(path_ref);
         if (src.is_relative()) src = input_directory / src;
         src = fs::absolute(src).lexically_normal();
+        // Relative names may be resources supplied by the consumer
+        // at runtime. Keep those deferred references without reading a file.
+        std::error_code missing_ec;
+        if (fs::path(path_ref).is_relative() &&
+            vellum::view::asset_path_lexically_within(path_ref, input_directory) &&
+            vellum::view::asset_path_within(src, input_directory) &&
+            !fs::exists(src, missing_ec) && !missing_ec)
+            return;
         vellum::view::IRAssetRef reference;
         reference.content_hash = std::string(content_hash);
         // Node and font references may reuse a manifest-verified cache asset.

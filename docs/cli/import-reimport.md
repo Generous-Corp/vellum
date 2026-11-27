@@ -97,8 +97,9 @@ vellum import --source-type design-ir ./panel.ir.json --mode baked --emit cpp --
 
 - **C++** writes `<name>.cpp`, `<name>.hpp` and `<name>.bindings.json`. A
   directory or extensionless `--out` gets `imported_ui.cpp`; a header path names
-  the header. Asset paths resolve beside the input design and are copied into
-  `assets/` beside the source.
+  the header. Available assets resolve beside the input design and are copied
+  into `assets/` beside the source. Relative names that have no local
+  file remain references to resources supplied by the consumer at runtime.
 - **SwiftUI** writes `<Name>.swift`, `<Name>Theme.swift` and
   `<Name>.bindings.json`. The default is `ImportedPulpView.swift`.
 - Sources are `design-ir`, `figma` (JSON, not a local `.fig`), `figma-plugin`,
