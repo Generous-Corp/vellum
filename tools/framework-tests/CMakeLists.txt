@@ -399,6 +399,30 @@ vellum_add_framework_test(host-param-surface-model
     UNITS Vellum::MirrorView_core Vellum::Value)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    # NSAccessibility roles, the element tree the editor view hands to AppKit and
+    # the painted-text backend, queried in process on views that are never put
+    # in a window.
+    vellum_add_framework_test(macos-accessibility-roles
+        SOURCES macos_accessibility_roles_test.mm
+        UNITS Vellum::MirrorView_core)
+    target_compile_options(vellum-framework-macos-accessibility-roles-test PRIVATE -fobjc-arc)
+    target_link_libraries(vellum-framework-macos-accessibility-roles-test PRIVATE
+        "-framework AppKit")
+    vellum_add_framework_test(macos-text-accessibility
+        SOURCES macos_text_accessibility_test.mm
+        UNITS Vellum::MirrorView_core)
+    target_link_libraries(vellum-framework-macos-text-accessibility-test PRIVATE
+        "-framework AppKit")
+
+    # The standalone window host's content view in the accessibility tree; the
+    # window is created and never shown.
+    vellum_add_framework_test(macos-window-host-accessibility
+        SOURCES macos_window_host_accessibility_test.mm
+        UNITS Vellum::MirrorView_core)
+    target_compile_options(vellum-framework-macos-window-host-accessibility-test PRIVATE -fobjc-arc)
+    target_link_libraries(vellum-framework-macos-window-host-accessibility-test PRIVATE
+        "-framework AppKit")
+
     vellum_add_framework_test(main-thread-timer
         SOURCES main_thread_timer_test.mm
         UNITS Vellum::MirrorFoundation)
@@ -438,6 +462,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
 else()
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
         main_thread_timer_test.mm native_dialog_delivery_test.cpp
+        macos_accessibility_roles_test.mm macos_text_accessibility_test.mm
+        macos_window_host_accessibility_test.mm
         web_view_test.mm plugin_view_host_cursor_test.mm
         plugin_view_host_native_child_test.mm)
 endif()
