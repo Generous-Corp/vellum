@@ -155,7 +155,16 @@ if(TARGET vellum-dawn-headers AND TARGET vellum-gpu)
     target_include_directories(vellum-framework-webgpu-error-scopes-test PRIVATE
         "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
     set_tests_properties(vellum.framework.webgpu-error-scopes PROPERTIES SKIP_RETURN_CODE 77)
+    # The device layer's offscreen surface on a real Dawn device.
+    vellum_add_framework_test(gpu-surface-device
+        SOURCES gpu_surface_device_test.cpp
+        UNITS Vellum::MirrorRender_2d Vellum::DawnHeaders Vellum::Gpu)
+    target_include_directories(vellum-framework-gpu-surface-device-test PRIVATE
+        "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
+    set_tests_properties(vellum.framework.gpu-surface-device PROPERTIES SKIP_RETURN_CODE 77)
 else()
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+        "gpu_surface_device_test.cpp")
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
         "webgpu_error_scopes_test.cpp")
 endif()
