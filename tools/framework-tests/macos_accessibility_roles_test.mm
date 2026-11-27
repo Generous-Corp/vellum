@@ -91,9 +91,9 @@ std::unique_ptr<View> add_named(View& parent, Role role, const char* label) {
     return nullptr;
 }
 
-// A tree with one named button, one nameless button, a checked checkbox, a
-// hidden label and a disabled named slider, read back through the elements the
-// provider hands to AppKit.
+// A tree with one named button, one nameless button, a checked checkbox, an
+// aria-hidden label and a disabled named slider, read back through the
+// elements the editor view hands to AppKit.
 FRAMEWORK_TEST(element_tree_exposes_roles_labels_and_state) {
     @autoreleasepool {
         View root;
@@ -111,8 +111,12 @@ FRAMEWORK_TEST(element_tree_exposes_roles_labels_and_state) {
         CHECK(host != nullptr);
         if (!host) return;
         NSArray* elements = [editor_view(*host) accessibilityChildren];
-        CHECK(elements.count == 4U);  // the nameless button is left out
-        if (elements.count != 4U) return;
+        // The nameless button is not an element, and the editor view leaves
+        // the aria-hidden label out of the tree a screen reader reads.
+        CHECK(elements.count == 3U);
+        for (NSAccessibilityElement* el in elements)
+            CHECK(![el.accessibilityLabel isEqualToString:@"Secret"]);
+        if (elements.count != 3U) return;
 
         NSAccessibilityElement* button = elements[0];
         CHECK([button.accessibilityRole isEqualToString:NSAccessibilityButtonRole]);
@@ -123,11 +127,7 @@ FRAMEWORK_TEST(element_tree_exposes_roles_labels_and_state) {
         CHECK([checkbox.accessibilityRole isEqualToString:NSAccessibilityCheckBoxRole]);
         CHECK([checkbox.accessibilityValue isEqual:@YES]);
 
-        NSAccessibilityElement* secret = elements[2];
-        CHECK([secret.accessibilityRole isEqualToString:NSAccessibilityStaticTextRole]);
-        CHECK(![secret isAccessibilityElement]);
-
-        NSAccessibilityElement* slider = elements[3];
+        NSAccessibilityElement* slider = elements[2];
         CHECK([slider.accessibilityRole isEqualToString:NSAccessibilitySliderRole]);
         CHECK([slider.accessibilityValue isEqual:@"0.5"]);
         CHECK(![slider isAccessibilityEnabled]);
