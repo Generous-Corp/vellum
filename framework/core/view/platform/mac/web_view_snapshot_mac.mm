@@ -61,10 +61,12 @@ std::vector<uint8_t> web_view_snapshot_png(void* ns_view_ptr) {
                                               static_cast<const uint8_t*>(png.bytes);
                                           result.assign(b, b + png.length);
                                       }
+                                      [rep release];
                                   }
                               }
                               done = true;
                             }];
+        [cfg release];
 
         // Pump the main run loop until the snapshot completes (bounded ~3s). The
         // caller must be on the main thread (WKWebView is main-thread-only).

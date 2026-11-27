@@ -8,6 +8,7 @@
 // create(), set_html() or navigate(), then bind() or set_message_handler().
 
 #include <string>
+#include <cstdint>
 #include <functional>
 #include <filesystem>
 #include <memory>

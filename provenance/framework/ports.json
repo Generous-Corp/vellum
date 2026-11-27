@@ -1156,6 +1156,17 @@
       "pulp_path": null,
       "pulp_commits": [],
       "framework_blob": null,
+      "platforms": [
+        "linux-x64",
+        "linux-arm64",
+        "windows-x64",
+        "windows-arm64",
+        "ios-device-arm64",
+        "ios-simulator-arm64",
+        "android-arm64-v8a",
+        "android-x86_64",
+        "wasm32"
+      ],
       "reason": "The WebView backend detector. Written for Vellum: the build's backend is a compile-time constant with a test override, replacing Pulp's link-time provider pair (web_view_backend.cpp and web_view_backend_provider.cpp), whose weak C symbol would be shared with Pulp's copy in one process."
     },
     {
