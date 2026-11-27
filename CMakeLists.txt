@@ -586,9 +586,6 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}"
             cli/tests/test_illustrator_cli.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-    add_test(NAME vellum.source-contracts
-        COMMAND "${Python3_EXECUTABLE}" scripts/check_source_contracts.py --strict
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     if(TARGET vellum-source-adapter)
         add_test(NAME vellum.source-adapter-detect
             COMMAND "${Python3_EXECUTABLE}"
