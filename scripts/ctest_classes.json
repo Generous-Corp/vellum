@@ -205,6 +205,7 @@
       "vellum.app-host-visual-fixtures",
       "vellum.framework.canvas-path-raster",
       "vellum.framework.gpu-surface-device",
+      "vellum.framework.gpu-surface-swapchain-macos",
       "vellum.framework.headless-surface-gpu",
       "vellum.framework.native-trace",
       "vellum.framework.runtime-effect-names-gpu",

@@ -209,7 +209,25 @@ if(TARGET vellum-dawn-headers AND TARGET vellum-gpu)
     target_include_directories(vellum-framework-runtime-effect-names-gpu-test PRIVATE
         "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
     set_tests_properties(vellum.framework.runtime-effect-names-gpu PROPERTIES SKIP_RETURN_CODE 77)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        # A presentable surface on a CAMetalLayer no window hosts: swapchain
+        # configuration, the acquired texture's size, and fractional-scale readback.
+        vellum_add_framework_test(gpu-surface-swapchain-macos
+            SOURCES gpu_surface_swapchain_macos_test.mm
+            UNITS Vellum::MirrorRender_2d Vellum::DawnHeaders Vellum::Gpu)
+        target_include_directories(vellum-framework-gpu-surface-swapchain-macos-test PRIVATE
+            "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
+        target_link_libraries(vellum-framework-gpu-surface-swapchain-macos-test PRIVATE
+            "-framework QuartzCore")
+        set_tests_properties(vellum.framework.gpu-surface-swapchain-macos PROPERTIES
+            SKIP_RETURN_CODE 77 TIMEOUT 120)
+    else()
+        set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+            "gpu_surface_swapchain_macos_test.mm")
+    endif()
 else()
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+        "gpu_surface_swapchain_macos_test.mm")
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
         "runtime_effect_names_gpu_test.cpp")
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
