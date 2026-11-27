@@ -202,6 +202,9 @@ if(VELLUM_BUILD_TESTS)
         add_test(NAME vellum.web.backdrop-backend
             COMMAND "${VELLUM_NODE_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/web/tests/backdrop_backend_test.mjs")
+        add_test(NAME vellum.web.perceptual-gate
+            COMMAND "${VELLUM_NODE_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/web/tests/perceptual_gate_test.mjs")
         add_test(NAME vellum.feature-versions-drift
             COMMAND "${VELLUM_NODE_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/versions/generate_feature_versions.mjs" --check)
@@ -583,6 +586,9 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}"
             cli/tests/test_illustrator_cli.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.fidelity-layout-parity
+        COMMAND "${Python3_EXECUTABLE}" tools/fidelity/test_layout_parity.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     if(TARGET vellum-design-ab)
         add_test(NAME vellum.design-ab
             COMMAND "${Python3_EXECUTABLE}"
@@ -590,6 +596,15 @@ if(VELLUM_BUILD_TESTS)
                 "$<TARGET_FILE:vellum-design-ab>"
             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     endif()
+    add_test(NAME vellum.fidelity-montage
+        COMMAND "${Python3_EXECUTABLE}" tools/fidelity/test_montage.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.fidelity-reference-diff
+        COMMAND "${Python3_EXECUTABLE}" tools/fidelity/test_reference_diff.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.fidelity-region-diff
+        COMMAND "${Python3_EXECUTABLE}" tools/fidelity/test_region_diff.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.source-support-manifest
         COMMAND "${Python3_EXECUTABLE}"
             scripts/test_source_support_manifest.py
