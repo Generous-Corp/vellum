@@ -65,6 +65,15 @@ vellum_add_framework_test(gpu-surface-lease
 target_include_directories(vellum-framework-gpu-surface-lease-test PRIVATE
     "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
 
+# SkpFrameCapture records a frame and serializes a .skp without a GPU.
+vellum_add_framework_test(skp-capture
+    SOURCES skp_capture_test.cpp
+    UNITS Vellum::MirrorRender_2d)
+# The PNG fixture comes from HeadlessSurface, whose header includes the device
+# layer's.
+target_include_directories(vellum-framework-skp-capture-test PRIVATE
+    "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     vellum_add_framework_test(canvas-raster-parity
         SOURCES canvas_raster_parity_test.cpp

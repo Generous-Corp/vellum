@@ -68,6 +68,7 @@
       "vellum.framework.render-pass",
       "vellum.framework.runtime-import-parsers",
       "vellum.framework.scripted-ui-param-model",
+      "vellum.framework.skp-capture",
       "vellum.framework.text-button-measure",
       "vellum.framework.web-compat-react-shims",
       "vellum.framework.widget-bridge",
