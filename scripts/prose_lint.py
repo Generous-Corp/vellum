@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -38,6 +39,11 @@ EXEMPT_FILES = {
     "scripts/test_prose_lint.py",
 }
 EXEMPT_SUFFIXES = (".json", ".patch")
+# Files moved from Pulp verbatim: each is listed in a manifest here, and
+# apps/design-tool/verify_verbatim_move.py holds it to Pulp's bytes, so its
+# prose is Pulp's and changes only as a later edit that also drops it from the
+# manifest.
+VERBATIM_MOVE_MANIFESTS = "apps/design-tool/moves"
 
 
 def load_checker():
@@ -50,9 +56,20 @@ def load_checker():
     return module
 
 
-def exempt(path: str) -> bool:
+def verbatim_moved_files(root: Path = Path(".")) -> set[str]:
+    moved: set[str] = set()
+    for manifest in sorted((root / VERBATIM_MOVE_MANIFESTS).glob("*.json")):
+        try:
+            files = json.loads(manifest.read_text(encoding="utf-8")).get("files", [])
+        except (OSError, json.JSONDecodeError, AttributeError):
+            continue
+        moved.update(item["path"] for item in files if isinstance(item, dict) and "path" in item)
+    return moved
+
+
+def exempt(path: str, moved: frozenset[str] | set[str] = frozenset()) -> bool:
     return (path.startswith(EXEMPT_PREFIXES) or path in EXEMPT_FILES
-            or path.endswith(EXEMPT_SUFFIXES))
+            or path.endswith(EXEMPT_SUFFIXES) or path in moved)
 
 
 def main(argv: list[str]) -> int:
@@ -66,7 +83,8 @@ def main(argv: list[str]) -> int:
     except subprocess.CalledProcessError as error:
         print(f"prose_lint: cannot diff against {args.base}: {error.stderr.strip()}", file=sys.stderr)
         return 2
-    findings = [line for line in findings if not exempt(line.split(":", 1)[0])]
+    moved = verbatim_moved_files()
+    findings = [line for line in findings if not exempt(line.split(":", 1)[0], moved)]
     if findings:
         print("\n".join(findings))
         print(f"prose_lint: {len(findings)} finding(s) in lines added since {args.base}. "
