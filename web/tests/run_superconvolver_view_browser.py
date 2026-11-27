@@ -113,7 +113,7 @@ NEGATIVE_CONTROLS = {
              "PARAMETERS = Object.freeze({mix: 2, size: 1,", "mapping", None),
     "missing-chip": (VIEW, "vector: box => chip(box, radius('source'), CHROME_FILL, CHROME_STROKE)},",
                      "vector: box => ({viewBox: [0, 0, box.width, box.height], ops: []})},", "gate",
-                     {"ink:source/chip"}),
+                     {"ink:source", "ink:source/chip"}),
     "missing-label": (VIEW, """        {id: 'source/name', kind: 'label', color: 'value',
             format: state => sourceLabel(state.impulseResponseName)},
 """, "", "gate", {"ink:source/name"}),
