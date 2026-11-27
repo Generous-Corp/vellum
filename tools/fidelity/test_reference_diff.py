@@ -207,6 +207,18 @@ class HelperScoringTests(unittest.TestCase):
 
 
 class MainFlowTests(unittest.TestCase):
+    def test_main_rejects_threshold_outside_unit_interval(self) -> None:
+        for invalid in ("-0.1", "1.1", "nan"):
+            with self.subTest(invalid=invalid):
+                result = subprocess.run(
+                    [sys.executable, str(SCRIPT), "missing-ref.png", "missing-cand.png", "--threshold", invalid],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("finite number in 0..1", result.stderr)
+
     def _run_main(
         self,
         argv: list[str],
@@ -308,6 +320,14 @@ class MainFlowTests(unittest.TestCase):
         rc, _stdout, stderr = self._run_main(["--size", "12-by-8"])
         self.assertEqual(rc, 2)
         self.assertIn("malformed --size", stderr)
+
+    def test_main_rejects_threshold_outside_normalized_range(self) -> None:
+        for threshold in ("-0.1", "1.1", "nan"):
+            with self.subTest(threshold=threshold):
+                rc, stdout, stderr = self._run_main(["--threshold", threshold])
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn("--threshold", stderr)
 
     def test_main_reports_load_errors_as_compare_errors(self) -> None:
         stdout = io.StringIO()
