@@ -6,7 +6,6 @@
 
 #include <vellum/view/design_sources.hpp>
 
-#include <algorithm>
 #include <string>
 
 using namespace vellum::view;
@@ -22,8 +21,10 @@ DesignMdParseResult parse_colors(const std::string& color_lines) {
 }
 
 bool has_color_shape_warning(const DesignMdParseResult& parsed) {
-    return std::any_of(parsed.diagnostics.begin(), parsed.diagnostics.end(),
-                       [](const DesignMdDiagnostic& d) { return d.code == "color-shape"; });
+    for (const auto& diagnostic : parsed.diagnostics) {
+        if (diagnostic.code == "color-shape") return true;
+    }
+    return false;
 }
 
 const char* kSystem = R"(---
