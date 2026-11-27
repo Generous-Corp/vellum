@@ -259,7 +259,8 @@ fs::path find_compat_json(const fs::path& start_dir) {
     fs::path cur = fs::absolute(start_dir);
     for (int i = 0; i < 32; ++i) {
         auto candidate = cur / "compat.json";
-        if (fs::exists(candidate)) return candidate;
+        std::error_code ec;
+        if (fs::exists(candidate, ec) && !ec) return candidate;
         if (!cur.has_parent_path() || cur.parent_path() == cur) break;
         cur = cur.parent_path();
     }
@@ -271,9 +272,12 @@ fs::path find_compat_json(const fs::path& start_dir) {
 InputSnapshot snapshot_input(const fs::path& input) {
     InputSnapshot snap;
     snap.root = input;
-    if (!fs::exists(input)) return snap;
+    std::error_code input_ec;
+    if (!fs::exists(input, input_ec) || input_ec) return snap;
 
-    if (fs::is_directory(input)) {
+    const bool input_is_directory = fs::is_directory(input, input_ec);
+    if (input_ec) return snap;
+    if (input_is_directory) {
         snap.is_directory = true;
         std::error_code ec;
         std::vector<fs::path> html_candidates;
@@ -297,7 +301,8 @@ InputSnapshot snapshot_input(const fs::path& input) {
         // Prefer code.html (Stitch-style), then index.html.
         for (auto candidate : {"code.html", "index.html"}) {
             auto p = input / candidate;
-            if (fs::exists(p)) {
+            std::error_code candidate_ec;
+            if (fs::exists(p, candidate_ec) && !candidate_ec) {
                 snap.html_text = read_text_file(p);
                 break;
             }
