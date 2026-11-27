@@ -235,6 +235,7 @@ def ink_coverage(ref: Image, cand: Image, ink_threshold: int = 8) -> dict:
                 uncovered.add(i)
 
     width = ref.size[0]
+    height = ref.size[1]
     largest = 0
     pending = set(uncovered)
     while pending:
@@ -247,8 +248,9 @@ def ink_coverage(ref: Image, cand: Image, ink_threshold: int = 8) -> dict:
             for dy in (-1, 0, 1):
                 for dx in (-1, 0, 1):
                     nx = x + dx
-                    if (dx or dy) and 0 <= nx < width:
-                        j = (y + dy) * width + nx
+                    ny = y + dy
+                    if (dx or dy) and 0 <= nx < width and 0 <= ny < height:
+                        j = ny * width + nx
                         if j in pending:
                             pending.remove(j)
                             stack.append(j)
@@ -382,7 +384,8 @@ def load_regions(path: Path | None) -> dict:
                 sys.exit(2)
         if region["x"] + region["w"] > 1.0 or region["y"] + region["h"] > 1.0:
             print(
-                f"error: region '{name}' extends beyond the unit frame",
+                f"error: region '{name}' extends beyond the unit frame "
+                "(rectangle must be contained in the normalized 0..1 frame)",
                 file=sys.stderr,
             )
             sys.exit(2)
