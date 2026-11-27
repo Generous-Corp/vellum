@@ -525,6 +525,27 @@ TEST_CASE("directory-files never matches a single file", "[import-detect]") {
     CHECK_FALSE(det::match_clause(c, file));
 }
 
+TEST_CASE("directory-files requires regular files, not subdirectories",
+          "[import-detect]") {
+    ScratchDir scratch("directory-files-subdirs");
+    fs::create_directories(scratch.path / "code.html");
+    fs::create_directories(scratch.path / "screen.png");
+    det::FingerprintClause c;
+    c.kind = det::FingerprintClause::Kind::directory_files;
+    c.files = {"code.html", "screen.png"};
+    auto dirs_only = det::snapshot_input(scratch.path);
+    REQUIRE(dirs_only.is_directory);
+    CHECK(dirs_only.directory_basenames.empty());
+    CHECK(dirs_only.html_text.empty());
+    CHECK_FALSE(det::match_clause(c, dirs_only));
+
+    // Real files with the same names do match.
+    ScratchDir files("directory-files-files");
+    write_text(files.path / "code.html", "<html></html>");
+    write_text(files.path / "screen.png", "png");
+    CHECK(det::match_clause(c, det::snapshot_input(files.path)));
+}
+
 TEST_CASE("frontmatter-fence honors its value", "[import-detect]") {
     det::InputSnapshot snap;
     snap.has_frontmatter_fence = true;

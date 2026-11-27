@@ -332,9 +332,11 @@ InputSnapshot snapshot_input(const fs::path& input) {
         for (auto& entry : fs::directory_iterator(input, ec)) {
             if (ec) break;
             auto path = entry.path();
-            snap.directory_basenames.push_back(path.filename().string());
+            // directory-files names files, so a subdirectory that happens to
+            // be called code.html does not count as one.
             std::error_code file_ec;
             if (entry.is_regular_file(file_ec)) {
+                snap.directory_basenames.push_back(path.filename().string());
                 auto ext = lower_trim(path.extension().string());
                 if (ext == ".html" || ext == ".htm")
                     html_candidates.push_back(path);
@@ -346,7 +348,8 @@ InputSnapshot snapshot_input(const fs::path& input) {
         // Prefer code.html (Stitch-style), then index.html.
         for (auto candidate : {"code.html", "index.html"}) {
             auto p = input / candidate;
-            if (fs::exists(p)) {
+            std::error_code candidate_ec;
+            if (fs::is_regular_file(p, candidate_ec)) {
                 snap.html_text = read_text_file(p);
                 break;
             }
