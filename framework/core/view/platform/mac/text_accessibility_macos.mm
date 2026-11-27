@@ -33,6 +33,7 @@
 #endif
 
 #include <mutex>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -199,6 +200,11 @@ Registry& registry() {
     return *r;
 }
 
+std::string registry_key(const void* owner, std::string_view id) {
+    const auto value = reinterpret_cast<std::uintptr_t>(owner);
+    return std::to_string(value) + ":" + std::string(id);
+}
+
 }  // namespace
 
 std::string_view accessibility_backend_name() noexcept {
@@ -217,16 +223,17 @@ void register_text_accessibility_node(const TextAccessibilityNode& node) {
     // Idempotent on id: operator[] + assignment so a second register
     // with the same id replaces the first. Same contract as the
     // default backend.
-    r.nodes[node.id] = node;
+    r.nodes[registry_key(node.owner, node.id)] = node;
 
 #if TARGET_OS_OSX
-    NSString* nsId = [[NSString alloc] initWithUTF8String:node.id.c_str()];
-    VellumMirrorTextAccessibilityElement* el = [r.elements objectForKey:nsId];
+    const std::string key = registry_key(node.owner, node.id);
+    NSString* nsKey = [[NSString alloc] initWithUTF8String:key.c_str()];
+    VellumMirrorTextAccessibilityElement* el = [r.elements objectForKey:nsKey];
     BOOL inserted = NO;
     if (!el) {
         el = [[VellumMirrorTextAccessibilityElement alloc] init];
-        el->_identifier = [nsId retain];
-        [r.elements setObject:el forKey:nsId];
+        el->_identifier = [[NSString alloc] initWithUTF8String:node.id.c_str()];
+        [r.elements setObject:el forKey:nsKey];
         // setObject: retained the element; release our local +1.
         [el release];
         inserted = YES;
@@ -258,20 +265,41 @@ void register_text_accessibility_node(const TextAccessibilityNode& node) {
                                          static_cast<NSUInteger>(len));
     }
 
-    [nsId release];
+    [nsKey release];
 #endif
 }
 
-void unregister_text_accessibility_node(std::string_view id) {
+namespace {
+
+void unregister_nodes(const void* owner, std::string_view id, bool owner_only) {
     auto& r = registry();
     std::lock_guard<std::mutex> lock(r.mu);
-    const std::string key(id);
-    r.nodes.erase(key);
+    std::vector<std::string> removed;
+    for (auto it = r.nodes.begin(); it != r.nodes.end();) {
+        if (it->second.id == id && (!owner_only || it->second.owner == owner)) {
+            removed.push_back(it->first);
+            it = r.nodes.erase(it);
+        }
+        else ++it;
+    }
 #if TARGET_OS_OSX
-    NSString* nsId = [[NSString alloc] initWithUTF8String:key.c_str()];
-    [r.elements removeObjectForKey:nsId];
-    [nsId release];
+    for (const auto& key : removed) {
+        NSString* nsKey = [[NSString alloc] initWithUTF8String:key.c_str()];
+        [r.elements removeObjectForKey:nsKey];
+        [nsKey release];
+    }
 #endif
+}
+
+}  // namespace
+
+void unregister_text_accessibility_node(std::string_view id) {
+    unregister_nodes(nullptr, id, false);
+}
+
+void unregister_text_accessibility_node_for_owner(
+    const void* owner, std::string_view id) {
+    unregister_nodes(owner, id, true);
 }
 
 std::vector<TextAccessibilityNode> snapshot_accessibility_nodes() {
@@ -285,21 +313,37 @@ std::vector<TextAccessibilityNode> snapshot_accessibility_nodes() {
     return out;
 }
 
-// Test-only lookup. Returns the retained NSAccessibilityElement for the
-// given id, or nil if no such node is registered. Defined in this TU
+// Test-only lookup. Returns a retained NSAccessibilityElement for the
+// given id, or nil if no such node is registered. The caller owns the +1
+// retain and must release it after adding the element to another owner.
+// Defined in this TU
 // so tests can verify the macOS bridge without exposing a public header
 // dependency on Foundation.
 //
-// Returns a non-owning pointer suitable for an `(__bridge
-// NSAccessibilityElement*)` cast on the test side; the registry
-// continues to own the +1 retain.
+// The extra retain closes the lifetime race between releasing the registry
+// mutex and the caller inserting the element into accessibilityChildren.
 #if TARGET_OS_OSX
 extern "C" void* vellum_text_accessibility_lookup_macos(const char* id_utf8) {
     if (!id_utf8) return nullptr;
     auto& r = registry();
     std::lock_guard<std::mutex> lock(r.mu);
-    NSString* nsId = [[NSString alloc] initWithUTF8String:id_utf8];
+    const std::string key = registry_key(nullptr, id_utf8);
+    NSString* nsId = [[NSString alloc] initWithUTF8String:key.c_str()];
     VellumMirrorTextAccessibilityElement* el = [r.elements objectForKey:nsId];
+    if (el) [el retain];
+    [nsId release];
+    return (__bridge void*)el;
+}
+
+extern "C" void* vellum_text_accessibility_lookup_macos_for_owner(
+    const void* owner, const char* id_utf8) {
+    if (!id_utf8) return nullptr;
+    auto& r = registry();
+    std::lock_guard<std::mutex> lock(r.mu);
+    const std::string key = registry_key(owner, id_utf8);
+    NSString* nsId = [[NSString alloc] initWithUTF8String:key.c_str()];
+    VellumMirrorTextAccessibilityElement* el = [r.elements objectForKey:nsId];
+    if (el) [el retain];
     [nsId release];
     return (__bridge void*)el;
 }

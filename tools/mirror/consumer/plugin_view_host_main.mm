@@ -11,6 +11,7 @@
 #include <vellum/graphics/dawn_native_bootstrap.hpp>
 #include <vellum/view/input_events.hpp>
 #include <vellum/view/plugin_view_host.hpp>
+#include <vellum/view/text_accessibility.hpp>
 #include <vellum/view/view.hpp>
 #import <Cocoa/Cocoa.h>
 
@@ -20,6 +21,9 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+extern "C" void* vellum_text_accessibility_lookup_macos_for_owner(
+    const void* owner, const char* id_utf8);
 
 namespace {
 
@@ -105,6 +109,30 @@ int main(int argc, char** argv) {
         vellum::view::Point last_press{};
     } probe;
     probe.set_bounds({0, 0, 64, 64});
+    Probe second_probe;
+    vellum::view::TextAccessibilityNode first_text;
+    first_text.id = "editor-text:label";
+    first_text.text = "First editor";
+    vellum::view::register_text_accessibility_node_for_owner(&probe, first_text);
+    vellum::view::TextAccessibilityNode lifetime_text;
+    lifetime_text.id = "editor-text:lifetime";
+    lifetime_text.text = "Lifetime probe";
+    vellum::view::register_text_accessibility_node_for_owner(&probe, lifetime_text);
+    auto* retained_lifetime = (__bridge NSAccessibilityElement*)
+        vellum_text_accessibility_lookup_macos_for_owner(&probe, lifetime_text.id.c_str());
+    if (!retained_lifetime) return fail("text accessibility lookup returned no lifetime probe");
+    vellum::view::unregister_text_accessibility_node_for_owner(&probe, lifetime_text.id);
+    if (![[retained_lifetime accessibilityLabel] isEqualToString:@"Lifetime probe"])
+        return fail("text accessibility lookup did not retain its result");
+    [retained_lifetime release];
+    vellum::view::TextAccessibilityNode second_text;
+    second_text.id = "editor-text:label";
+    second_text.text = "Second editor";
+    vellum::view::register_text_accessibility_node_for_owner(&second_probe, second_text);
+    vellum::view::TextAccessibilityNode global_text;
+    global_text.id = "global-editor-text";
+    global_text.text = "All editors";
+    vellum::view::register_text_accessibility_node(global_text);
     auto named_button = std::make_unique<vellum::view::View>();
     named_button->set_access_role(vellum::view::View::AccessRole::button);
     named_button->set_access_label("Bypass");
@@ -165,9 +193,39 @@ int main(int argc, char** argv) {
     if (!host_view.isAccessibilityElement ||
         ![host_view.accessibilityRole isEqualToString:NSAccessibilityGroupRole])
         return fail("the editor view is not an accessibility group");
-    if (accessible.count != 1U || ![[accessible[0] accessibilityLabel] isEqualToString:@"Bypass"] ||
-        ![[accessible[0] accessibilityRole] isEqualToString:NSAccessibilityButtonRole])
+    if (accessible.count != 3U)
+        return fail("the editor view exposed another instance's painted text");
+    BOOL has_button = NO;
+    BOOL has_first_text = NO;
+    BOOL has_global_text = NO;
+    for (NSAccessibilityElement* element in accessible) {
+        has_button = has_button ||
+            ([[element accessibilityLabel] isEqualToString:@"Bypass"] &&
+             [[element accessibilityRole] isEqualToString:NSAccessibilityButtonRole]);
+        has_first_text = has_first_text ||
+            [[element accessibilityLabel] isEqualToString:@"First editor"];
+        has_global_text = has_global_text ||
+            [[element accessibilityLabel] isEqualToString:@"All editors"];
+        if ([[element accessibilityLabel] isEqualToString:@"Second editor"])
+            return fail("the editor view exposed another instance's painted text");
+    }
+    if (!has_button || !has_first_text || !has_global_text)
         return fail("the editor view did not expose its named button");
+    // Hiding the root suppresses its registered text as well as its view tree.
+    // Process-wide announcements have no root and remain exposed.
+    for (bool aria_hidden : {false, true}) {
+        if (aria_hidden) probe.set_access_hidden("true");
+        else probe.set_visible(false);
+        NSArray* hidden = host_view.accessibilityChildren;
+        if (hidden.count != 1U ||
+            ![[hidden.firstObject accessibilityLabel] isEqualToString:@"All editors"])
+            return fail("hidden root still exposes editor-owned accessibility children");
+        probe.set_visible(true);
+        probe.set_access_hidden("false");
+    }
+    vellum::view::unregister_text_accessibility_node_for_owner(&probe, first_text.id);
+    vellum::view::unregister_text_accessibility_node_for_owner(&second_probe, second_text.id);
+    vellum::view::unregister_text_accessibility_node("global-editor-text");
 
     using vellum::view::Point;
     using vellum::view::Rect;
@@ -187,6 +245,36 @@ int main(int argc, char** argv) {
         return fail("root did not keep its design bounds");
     if (gpu->window_to_root_point({80, 140}) != Point{40, 20})
         return fail("viewport inverse did not account for the scale and letterbox");
+    // Exercise the actual AppKit screen conversion without showing a window.
+    NSWindow* accessibility_window = [[NSWindow alloc]
+        initWithContentRect:NSMakeRect(100, 150, 400, 400)
+        styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];
+    [accessibility_window setReleasedWhenClosed:NO];
+    [accessibility_window.contentView addSubview:parent];
+    probe.child_at(0)->set_bounds({10, 20, 30, 40});
+    auto verify_frame = [&](NSRect root_rect) {
+        NSRect expected = [host_view convertRect:root_rect toView:nil];
+        expected = [accessibility_window convertRectToScreen:expected];
+        return NSEqualRects([host_view.accessibilityChildren.firstObject accessibilityFrame], expected);
+    };
+    if (!verify_frame(NSMakeRect(20, 180, 60, 80)))
+        return fail("accessibility frame ignores viewport scale or vertical letterbox");
+    gpu->set_design_viewport_top_align(true);
+    if (!verify_frame(NSMakeRect(20, 280, 60, 80)))
+        return fail("accessibility frame did not follow top alignment");
+    gpu->set_size(600, 200);
+    if (!verify_frame(NSMakeRect(120, 80, 60, 80)))
+        return fail("accessibility frame did not follow resize and horizontal letterbox");
+    gpu->set_design_viewport(0, 0);
+    if (!verify_frame(NSMakeRect(10, 140, 30, 40)))
+        return fail("accessibility frame did not return to identity");
+    [parent removeFromSuperview];
+    [accessibility_window close];
+    [accessibility_window release];
+    gpu->set_size(400, 400);
+    gpu->set_design_viewport(200, 100);
+    gpu->set_design_viewport_top_align(false);
+
 
     // AppKit points count up from the bottom edge.
     for (auto type : {NSEventTypeLeftMouseDown, NSEventTypeLeftMouseUp}) {

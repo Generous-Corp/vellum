@@ -82,6 +82,26 @@ add_test(NAME vellum.framework.font-container-route
 set_tests_properties(vellum.framework.font-container-route PROPERTIES LABELS framework)
 set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES font_container_route_test.cpp)
 
+# Link the default text accessibility backend directly so this contract is
+# covered even when the mirrored package selects a native platform backend.
+add_executable(vellum-framework-text-accessibility-default-test
+    text_accessibility_default_test.cpp
+    "${PROJECT_SOURCE_DIR}/framework/core/view/src/text_accessibility.cpp")
+target_include_directories(vellum-framework-text-accessibility-default-test PRIVATE
+    "${PROJECT_SOURCE_DIR}/framework/core/view/include")
+set_target_properties(vellum-framework-text-accessibility-default-test PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON)
+add_test(NAME vellum.framework.text-accessibility-default
+    COMMAND vellum-framework-text-accessibility-default-test)
+set_tests_properties(vellum.framework.text-accessibility-default PROPERTIES LABELS framework)
+set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+    text_accessibility_default_test.cpp)
+
+vellum_add_framework_test(text-accessibility-owner-link
+    SOURCES text_accessibility_owner_link_test.cpp
+    UNITS Vellum::MirrorView_core)
+
 vellum_add_framework_test(widget-bridge
     SOURCES widget_bridge_test.cpp
     UNITS Vellum::MirrorView_script)
@@ -456,6 +476,22 @@ endif()
 # SDK, never by this macOS tree. Naming it here keeps the guard below honest.
 set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
     ios_au_editor_controller_test.mm)
+
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    add_executable(vellum-framework-accessibility-geometry-test accessibility_geometry_test.mm)
+    target_include_directories(vellum-framework-accessibility-geometry-test PRIVATE
+        "${PROJECT_SOURCE_DIR}/framework/core/view/include"
+        "${PROJECT_SOURCE_DIR}/framework/core/view/platform/mac"
+        "${PROJECT_SOURCE_DIR}/framework/core/canvas/include")
+    target_link_libraries(vellum-framework-accessibility-geometry-test PRIVATE "-framework AppKit")
+    set_target_properties(vellum-framework-accessibility-geometry-test PROPERTIES
+        OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED ON)
+    add_test(NAME vellum.framework.accessibility-geometry
+        COMMAND vellum-framework-accessibility-geometry-test)
+    set_tests_properties(vellum.framework.accessibility-geometry PROPERTIES LABELS framework)
+endif()
+set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES accessibility_geometry_test.mm)
 
 # Every test file here must be registered above. A test file that no
 # vellum_add_framework_test() names would build nothing and run nothing while

@@ -13,6 +13,7 @@
 #include <vellum/view/platform/ns_role_mapping.hpp>
 #include <vellum/runtime/log.hpp>
 #import <Cocoa/Cocoa.h>
+#include "accessibility_mac_geometry.hpp"
 
 // Per-binary-unique ObjC class names (renames VellumMirrorWindowAccessibilityElement
 // when a shipped binary defines PULP_VIEW_OBJC_SUFFIX). Must precede the first
@@ -175,11 +176,7 @@ static void collect_accessible(View& root, std::vector<View*>& out) {
     }
     auto b = view->bounds();
 
-    // Convert from top-down view coordinates to screen coordinates
-    NSRect viewRect = NSMakeRect(rx, NSHeight(host.bounds) - ry - b.height, b.width, b.height);
-    NSRect windowRect = [host convertRect:viewRect toView:nil];
-    NSRect screenRect = [host.window convertRectToScreen:windowRect];
-    return screenRect;
+    return vellum::view::accessibility_rect_to_screen(host, {rx, ry, b.width, b.height});
 }
 
 - (BOOL)isAccessibilityElement {
@@ -211,6 +208,7 @@ NSArray* build_accessibility_elements(View& root, NSView* host) {
         VellumMirrorWindowAccessibilityElement* el = [[VellumMirrorWindowAccessibilityElement alloc] init];
         [el captureView:v root:&root host:host];
         [elements addObject:el];
+        [el release];  // the array holds the only remaining retain
     }
     return elements;
 }

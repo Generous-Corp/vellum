@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace vellum::view {
@@ -60,6 +61,11 @@ struct TextAccessibilityNode {
     /// means "no selection" (i.e. the node has no caret).
     std::size_t selection_start_utf8 = 0;
     std::size_t selection_end_utf8 = 0;
+
+    /// Opaque owner key for a host or root view. A null owner is process-wide.
+    /// Platform hosts use this key to keep nodes from separate editor trees
+    /// out of one another's accessibility children.
+    const void* owner = nullptr;
 };
 
 /// Returns the active accessibility backend identifier. The default
@@ -75,13 +81,37 @@ std::string_view accessibility_backend_name() noexcept;
 /// is idempotent on the id.
 void register_text_accessibility_node(const TextAccessibilityNode& node);
 
+/// Register a node for one host or root view. The owner pointer is stored as
+/// an opaque identity and is never dereferenced.
+inline void register_text_accessibility_node_for_owner(
+    const void* owner, TextAccessibilityNode node) {
+    node.owner = owner;
+    register_text_accessibility_node(node);
+}
+
 /// Drop the node registered under `id`. Silently does nothing if no
 /// such node is registered.
 void unregister_text_accessibility_node(std::string_view id);
+
+/// Drop one node registered for one host or root view.
+void unregister_text_accessibility_node_for_owner(
+    const void* owner, std::string_view id);
 
 /// Read back the currently-registered nodes. Returns by value (a copy)
 /// so callers do not race with concurrent register/unregister activity.
 /// Order is unspecified.
 std::vector<TextAccessibilityNode> snapshot_accessibility_nodes();
+
+/// Read back only nodes registered for `owner`. Null selects process-wide
+/// nodes. This inline filter keeps the API available on backends that do not
+/// have a native host implementation.
+inline std::vector<TextAccessibilityNode>
+snapshot_accessibility_nodes_for_owner(const void* owner) {
+    std::vector<TextAccessibilityNode> out;
+    for (auto& node : snapshot_accessibility_nodes()) {
+        if (node.owner == owner) out.push_back(std::move(node));
+    }
+    return out;
+}
 
 }  // namespace vellum::view

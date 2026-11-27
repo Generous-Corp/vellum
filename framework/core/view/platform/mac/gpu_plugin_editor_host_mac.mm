@@ -22,7 +22,8 @@
 namespace vellum::view {
 NSArray* build_accessibility_elements(View& root, NSView* host);
 }
-extern "C" void* vellum_text_accessibility_lookup_macos(const char* id_utf8);
+extern "C" void* vellum_text_accessibility_lookup_macos_for_owner(
+    const void* owner, const char* id_utf8);
 
 namespace vellum::view::detail {
 namespace {
@@ -32,12 +33,13 @@ Class host_class();
 // Mirrors the order build_accessibility_elements() walks: every descendant of
 // the root, parents before children, keeping the views that pass the shared
 // exposure gate. Each entry records whether the view and all its ancestors are
-// visible, so a hidden panel's contents stay out of the tree a screen reader
+// visible and not aria-hidden, so a hidden panel's contents stay out of the tree a screen reader
 // reads.
 void collect_exposure_flags(const View& parent, bool parent_visible, std::vector<bool>& out) {
     for (std::size_t i = 0; i < parent.child_count(); ++i) {
         const View* child = parent.child_at(i);
-        const bool visible = parent_visible && child->visible();
+        const bool visible = parent_visible && child->visible() &&
+                             child->access_hidden() != "true";
         if (is_accessibility_element(*child)) out.push_back(visible);
         collect_exposure_flags(*child, visible, out);
     }
@@ -48,7 +50,7 @@ NSArray* editor_accessibility_children(VellumMirrorMetalView* host) {
     if (View* root = host.rootView) {
         NSArray* elements = build_accessibility_elements(*root, host);
         std::vector<bool> shown;
-        collect_exposure_flags(*root, root->visible(), shown);
+        collect_exposure_flags(*root, root->visible() && root->access_hidden() != "true", shown);
         const bool aligned = shown.size() == elements.count;
         for (NSUInteger i = 0; i < elements.count; ++i) {
             if (aligned && !shown[i]) continue;
@@ -58,12 +60,31 @@ NSArray* editor_accessibility_children(VellumMirrorMetalView* host) {
     }
     // Painted text is registered apart from the view tree; without this merge a
     // screen reader never reaches it.
-    for (const auto& node : snapshot_accessibility_nodes()) {
-        auto* element = (__bridge NSAccessibilityElement*)
-            vellum_text_accessibility_lookup_macos(node.id.c_str());
-        if (!element) continue;
-        [element setAccessibilityParent:host];
-        [children addObject:element];
+    // Text registrations are keyed by the root View so two editor instances
+    // in one process cannot expose one another's painted text. Process-wide
+    // registrations remain visible to every host by contract.
+    auto append_text_nodes = [&](const void* owner) {
+        for (const auto& node : snapshot_accessibility_nodes_for_owner(owner)) {
+            auto* element = (__bridge NSAccessibilityElement*)
+                vellum_text_accessibility_lookup_macos_for_owner(owner, node.id.c_str());
+            if (!element) continue;
+            // Owner-scoped elements belong to this editor's root. A
+            // process-wide registration can appear in more than one host's
+            // children array, so leave its parent unset rather than making
+            // one shared AppKit object claim multiple parents.
+            if (owner) [element setAccessibilityParent:host];
+            [children addObject:element];
+            [element release];
+        }
+    };
+    if (host.rootView && host.rootView->visible() && host.rootView->access_hidden() != "true")
+        append_text_nodes(host.rootView);
+    append_text_nodes(nullptr);
+    // Native controls attached through attach_native_child_view are plain
+    // subviews of the host. Overriding accessibilityChildren replaces AppKit's
+    // default discovery of them, so list them alongside the synthetic elements.
+    for (NSView* sub in host.subviews) {
+        if (!sub.isHidden) [children addObject:sub];
     }
     return children;
 }
