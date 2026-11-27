@@ -41,6 +41,37 @@ function(vellum_add_framework_test name)
     endforeach()
 endfunction()
 
+# Keep a public-header consumer independent from the mirrored implementation
+# targets so missing standard-library includes fail at the package boundary.
+add_executable(vellum-framework-web-view-header-consumer-test
+    web_view_header_consumer_test.cpp)
+target_include_directories(vellum-framework-web-view-header-consumer-test PRIVATE
+    "${PROJECT_SOURCE_DIR}/framework/core/view/include")
+set_target_properties(vellum-framework-web-view-header-consumer-test PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON)
+add_test(NAME vellum.framework.web-view-header-consumer
+    COMMAND vellum-framework-web-view-header-consumer-test)
+set_tests_properties(vellum.framework.web-view-header-consumer PROPERTIES LABELS framework)
+set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+    web_view_header_consumer_test.cpp)
+
+# Exercise the non-macOS stub on every test host without linking the native
+# view library, whose detector would otherwise mask a missing stub symbol.
+add_executable(vellum-framework-web-view-backend-stub-test
+    web_view_backend_stub_test.cpp
+    "${PROJECT_SOURCE_DIR}/framework/core/view/src/web_view_backend_stub.cpp")
+target_include_directories(vellum-framework-web-view-backend-stub-test PRIVATE
+    "${PROJECT_SOURCE_DIR}/framework/core/view/include")
+set_target_properties(vellum-framework-web-view-backend-stub-test PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON)
+add_test(NAME vellum.framework.web-view-backend-stub
+    COMMAND vellum-framework-web-view-backend-stub-test)
+set_tests_properties(vellum.framework.web-view-backend-stub PROPERTIES LABELS framework)
+set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+    web_view_backend_stub_test.cpp)
+
 # The routing policy test supplies parser operations without linking a canvas library.
 add_executable(vellum-framework-font-container-route-test font_container_route_test.cpp)
 target_include_directories(vellum-framework-font-container-route-test PRIVATE
@@ -111,6 +142,12 @@ vellum_add_framework_test(native-materializer-part2
 vellum_add_framework_test(design-import-jsx-runtime
     SOURCES design_import_jsx_runtime_test.cpp
     UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import)
+
+vellum_add_framework_test(design-import-react-runtime
+    SOURCES design_import_react_runtime_test.cpp
+    UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import)
+target_compile_definitions(vellum-framework-design-import-react-runtime-test PRIVATE
+    VELLUM_REACT_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/fixtures/react-runtime")
 
 vellum_add_framework_test(runtime-import-parsers
     SOURCES runtime_import_parsers_test.cpp
@@ -374,6 +411,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     target_link_libraries(vellum-framework-native-dialog-delivery-test PRIVATE "-framework CoreFoundation")
     set_tests_properties(vellum.framework.native-dialog-delivery PROPERTIES TIMEOUT 15)
 
+    # A live WKWebView driven by the main run loop, never placed in a window.
+    vellum_add_framework_test(web-view
+        SOURCES web_view_test.mm
+        UNITS Vellum::MirrorView_core)
+    target_link_libraries(vellum-framework-web-view-test PRIVATE
+        "-framework AppKit" "-framework CoreFoundation")
+    set_tests_properties(vellum.framework.web-view PROPERTIES TIMEOUT 120)
+
     # The plug-in view host parents a native child; never placed in a window.
     vellum_add_framework_test(plugin-view-host-native-child
         SOURCES plugin_view_host_native_child_test.mm
@@ -393,7 +438,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
 else()
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
         main_thread_timer_test.mm native_dialog_delivery_test.cpp
-        plugin_view_host_cursor_test.mm
+        web_view_test.mm plugin_view_host_cursor_test.mm
         plugin_view_host_native_child_test.mm)
 endif()
 
