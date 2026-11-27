@@ -3545,8 +3545,11 @@ class RendererPinTests(unittest.TestCase):
         lock = json.loads((MODULE_PATH.parents[2] / "provenance/third-party-lock.json").read_text())
         (self.root / "provenance/third-party-lock.json").write_text(json.dumps(lock))
         (self.root / "gpu-runtime").mkdir()
-        (self.root / "gpu-runtime/renderer-lock.json").write_bytes(
-            (MODULE_PATH.parents[2] / "gpu-runtime/renderer-lock.json").read_bytes())
+        # Start unbound whatever the checkout's lock carries; the tests that
+        # need a binding add one with bind().
+        renderer_lock = json.loads((MODULE_PATH.parents[2] / "gpu-runtime/renderer-lock.json").read_text())
+        renderer_lock.pop(verify_extraction.RENDERER_BINDING_KEY, None)
+        (self.root / "gpu-runtime/renderer-lock.json").write_text(json.dumps(renderer_lock, indent=2) + "\n")
         renderer = lock["runtime_toolchain_dependencies"]["renderer"]
         artifact, identities = renderer["artifact"], renderer["source_identities"]
         self.matching_pin = {
@@ -3611,7 +3614,8 @@ class RendererPinTests(unittest.TestCase):
     def bind(self, commit: object) -> None:
         path = self.root / "gpu-runtime/renderer-lock.json"
         renderer_lock = json.loads(path.read_text())
-        renderer_lock[verify_extraction.RENDERER_BINDING_KEY] = {"pulp_commit": commit}
+        renderer_lock[verify_extraction.RENDERER_BINDING_KEY] = {
+            verify_extraction.RENDERER_BINDING_COMMIT_KEY: commit}
         path.write_text(json.dumps(renderer_lock))
 
     def older_pin_receipt(self, **pin_overrides: object) -> str:
@@ -3735,7 +3739,45 @@ class RendererPinTests(unittest.TestCase):
                 self.bind(commit)
                 errors, rows = verify_extraction.renderer_pin_errors(self.root, self.pulp, [receipt])
                 self.assertEqual(rows, [])
-                self.assertTrue(errors and "pulp_binding" in errors[0], errors)
+                self.assertTrue(errors and "upstream_binding" in errors[0], errors)
+
+    def test_a_binding_under_the_old_key_is_refused_not_ignored(self) -> None:
+        receipt = self.older_pin_receipt()
+        commit = self.bound_pulp_commit()
+        path = self.root / "gpu-runtime/renderer-lock.json"
+        renderer_lock = json.loads(path.read_text())
+        renderer_lock[verify_extraction.LEGACY_RENDERER_BINDING_KEY] = renderer_lock.pop(
+            verify_extraction.RENDERER_BINDING_KEY)
+        path.write_text(json.dumps(renderer_lock))
+        errors, rows = verify_extraction.renderer_pin_errors(self.root, self.pulp, [receipt])
+        self.assertEqual(rows, [])
+        self.assertEqual(errors, [f"{verify_extraction.RENDERER_LOCK} pulp_binding is renamed "
+                                  "upstream_binding with upstream_commit"])
+        # Control: the same commit under the current key proves the receipt.
+        renderer_lock.pop(verify_extraction.LEGACY_RENDERER_BINDING_KEY)
+        path.write_text(json.dumps(renderer_lock))
+        self.bind(commit)
+        self.assertEqual(verify_extraction.renderer_pin_errors(self.root, self.pulp, [receipt])[0], [])
+
+    def test_the_binding_key_names_pass_the_native_name_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lock = root / "gpu-runtime/renderer-lock.json"
+            lock.parent.mkdir(parents=True)
+
+            def scan(record: dict) -> list:
+                lock.write_text(json.dumps(record, indent=2) + "\n")
+                return [(f["rule"], f["match"]) for f in
+                        verify_extraction.scan_active_surface(root, ("gpu-runtime",))]
+
+            binding = {verify_extraction.RENDERER_BINDING_KEY: {
+                verify_extraction.RENDERER_BINDING_COMMIT_KEY: "a" * 40}}
+            self.assertEqual(scan(binding), [])
+            # Controls: a pulp_-prefixed token in the same file is still
+            # flagged, and so is the binding's old name.
+            self.assertEqual(scan({**binding, "pulp_extra": 1}), [("pulp-package-or-target", "pulp_extra")])
+            self.assertEqual(scan({"pulp_binding": {"pulp_commit": "a" * 40}}),
+                             [("pulp-package-or-target", "pulp_binding"), ("pulp-package-or-target", "pulp_commit")])
 
     def test_a_malformed_binding_is_refused(self) -> None:
         receipt = self.older_pin_receipt()

@@ -84,6 +84,41 @@ The v0 route uses the static JSX parser for host elements, inline styles and
 supported Tailwind layout classes. It preserves class strings and reports
 partial capture for dynamic JSX. Pass a local TSX export.
 
+### Baked C++ and SwiftUI views
+
+`--mode baked --emit cpp` or `--emit swiftui` writes an ownable view artifact
+instead of importing into a project, so it needs no `--project`:
+
+```sh
+vellum import --source-type figma-plugin ./panel.json --mode baked --emit cpp --out src/panel_ui.cpp
+vellum import pencil ./panel.pen --mode baked --emit swiftui --out Sources/Panel.swift
+vellum import --source-type design-ir ./panel.ir.json --mode baked --emit cpp --out generated/
+```
+
+- **C++** writes `<name>.cpp`, `<name>.hpp` and `<name>.bindings.json`. A
+  directory or extensionless `--out` gets `imported_ui.cpp`; a header path names
+  the header. Available assets resolve beside the input design and are copied
+  into `assets/` beside the source. Relative names that have no local
+  file remain references to resources supplied by the consumer at runtime.
+- **SwiftUI** writes `<Name>.swift`, `<Name>Theme.swift` and
+  `<Name>.bindings.json`. The default is `ImportedPulpView.swift`.
+- Sources are `design-ir`, `figma` (JSON, not a local `.fig`), `figma-plugin`,
+  `pencil` and `v0`. A
+  DESIGN.md file is a token spec and is refused with exit 2. For JSX, import with
+  `--mode baked --emit ir-json` first and emit that file as `design-ir`.
+- `--emit cpp|swiftui` without `--mode baked` exits 2.
+- `--dry-run` validates assets and previews the same localized source without
+  creating output files or asset directories; with `--json` each
+  `data.files` entry carries its `content`.
+- Fidelity losses are reported as diagnostics and in `data.losses`.
+  `--strict-fidelity` fails a SwiftUI emit that has any (status
+  `fidelity_failed`, exit 5, nothing written). The baked C++ lane reports losses
+  without failing, so `--strict-fidelity` with `--emit cpp` exits 2.
+- Exit status follows the CLI contract: 2 for usage or a refused source, 4 only
+  when the emitter is not installed, 5 for any failed emit.
+
+The installed SDK runs `sdk/bin/vellum-design-emit`; `VELLUM_DESIGN_EMIT`
+overrides it. Without it the command exits 4 (`capability_unavailable`).
 The Stitch route accepts a recorded Stitch screen payload (DesignIR-shaped JSON)
 or a Stitch `code.html` export. A screen payload keeps its node tree. An HTML
 export goes through a text-only fallback that keeps visible element text, drops
