@@ -255,6 +255,7 @@ InputSnapshot snapshot_input(const fs::path& input) {
         snap.is_directory = true;
         std::error_code ec;
         std::vector<fs::path> html_candidates;
+        std::vector<fs::path> markdown_candidates;
         for (auto& entry : fs::directory_iterator(input, ec)) {
             if (ec) break;
             auto path = entry.path();
@@ -264,6 +265,8 @@ InputSnapshot snapshot_input(const fs::path& input) {
                 auto ext = lower_trim(path.extension().string());
                 if (ext == ".html" || ext == ".htm")
                     html_candidates.push_back(path);
+                else if (lower_trim(path.filename().string()) == "design.md")
+                    markdown_candidates.push_back(path);
             }
         }
         std::sort(snap.directory_basenames.begin(), snap.directory_basenames.end());
@@ -279,6 +282,14 @@ InputSnapshot snapshot_input(const fs::path& input) {
         }
         if (snap.html_text.empty() && !html_candidates.empty())
             snap.html_text = read_text_file(html_candidates.front());
+        // A DESIGN.md-only export has no HTML primary. Promote its Markdown
+        // member to the primary text so filename and frontmatter fingerprints
+        // can detect the directory just like a direct DESIGN.md input.
+        if (snap.html_text.empty() && !markdown_candidates.empty()) {
+            std::sort(markdown_candidates.begin(), markdown_candidates.end());
+            snap.filename = markdown_candidates.front().filename().string();
+            snap.html_text = read_text_file(markdown_candidates.front());
+        }
     } else {
         snap.filename = input.filename().string();
         snap.directory_basenames.push_back(snap.filename);

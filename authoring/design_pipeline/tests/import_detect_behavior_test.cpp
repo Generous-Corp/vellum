@@ -181,6 +181,42 @@ TEST_CASE("detect prefers higher confidence when match counts tie",
     CHECK(result.confidence_pct == 100);
 }
 
+TEST_CASE("detect prefers confidence over raw match count",
+          "[import-detect]") {
+    det::ImportsManifest manifest;
+    det::SourceEntry source;
+    source.source = "ratio";
+    source.parser_version = "1.0";
+
+    det::FingerprintClause match;
+    match.kind = det::FingerprintClause::Kind::html_script_type;
+    match.raw_kind = "html-script-type";
+    match.value = "module";
+    det::FingerprintClause miss = match;
+    miss.value = "missing";
+
+    det::FormatEntry broad;
+    broad.format_version = "broad";
+    broad.parser_version = source.parser_version;
+    broad.fingerprint = {match, match, miss, miss, miss, miss, miss, miss, miss, miss};
+
+    det::FormatEntry exact;
+    exact.format_version = "exact";
+    exact.parser_version = source.parser_version;
+    exact.fingerprint = {match};
+
+    source.formats = {broad, exact};
+    manifest.sources.push_back(source);
+
+    det::InputSnapshot snap;
+    snap.script_types = {"module"};
+    auto result = det::detect(manifest, snap);
+    CHECK(result.format_version == "exact");
+    CHECK(result.matched_clauses == 1);
+    CHECK(result.total_clauses == 1);
+    CHECK(result.confidence_pct == 100);
+}
+
 TEST_CASE("snapshot_input extracts Markdown frontmatter only from markdown files",
           "[import-detect]") {
     auto dir = fs::temp_directory_path() / "vellum-import-detect-phase3-frontmatter";
@@ -205,6 +241,32 @@ TEST_CASE("snapshot_input extracts Markdown frontmatter only from markdown files
     auto html_snap = det::snapshot_input(html);
     CHECK_FALSE(html_snap.has_frontmatter_fence);
     cleanup();
+}
+
+TEST_CASE("snapshot_input detects a DESIGN.md-only directory export",
+          "[import-detect]") {
+    ScratchDir scratch("designmd-directory-only");
+    write_text(scratch.path / "DESIGN.md",
+               "---\n"
+               "name: Directory export\n"
+               "colors:\n"
+               "  primary: '#fff'\n"
+               "---\n"
+               "# Design\n");
+
+    auto snap = det::snapshot_input(scratch.path);
+    REQUIRE(snap.is_directory);
+    CHECK(snap.filename == "DESIGN.md");
+    CHECK(snap.has_frontmatter_fence);
+    CHECK(std::find(snap.frontmatter_keys.begin(), snap.frontmatter_keys.end(), "name") !=
+          snap.frontmatter_keys.end());
+
+    auto manifest = det::parse_compat_json(slurp(locate_compat_json()));
+    REQUIRE(manifest.has_value());
+    auto result = det::detect(*manifest, snap);
+    CHECK(result.source == "designmd");
+    CHECK(result.format_version == "alpha");
+    CHECK(result.confidence_pct == 100);
 }
 
 TEST_CASE("snapshot_input accepts CRLF frontmatter and filters invalid top-level keys",

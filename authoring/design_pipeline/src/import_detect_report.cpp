@@ -130,12 +130,15 @@ DetectionResult detect(const ImportsManifest& manifest, const InputSnapshot& sna
             // with `---fence---` from masquerading as DESIGN.md.
             if (fmt.match == "all-of" && matched < total) continue;
             if (fmt.min_confidence_pct > 0 && confidence < fmt.min_confidence_pct) continue;
-            // Prefer (a) more matches, then (b) higher confidence ratio.
-            const bool better =
-                matched > best_matched ||
-                (matched == best_matched && matched > 0 &&
-                 total > 0 && best.total_clauses > 0 &&
-                 matched * best.total_clauses > best.matched_clauses * total);
+            // Prefer the highest confidence ratio first. A format with a
+            // smaller fingerprint can be a much stronger match than one with
+            // more raw matches in a larger fingerprint. Use matched count only
+            // as the deterministic tie-breaker, preserving manifest order for
+            // exact ties.
+            const auto lhs = static_cast<long long>(matched) * best.total_clauses;
+            const auto rhs = static_cast<long long>(best.matched_clauses) * total;
+            const bool better = best_matched < 0 || lhs > rhs ||
+                                (lhs == rhs && matched > best_matched);
             if (matched > 0 && better) {
                 best.source = src.source;
                 best.format_version = fmt.format_version;
