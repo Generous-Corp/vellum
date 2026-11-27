@@ -185,8 +185,10 @@ TEST_CASE("parse_compat_json ignores malformed optional fields without dropping 
 
 TEST_CASE("find_compat_json walks parents and reports absence",
           "[import-detect]") {
-    auto dir = fs::temp_directory_path() / "vellum-import-detect-compat-walk";
-    fs::remove_all(dir);
+    // A per-process scratch directory, so concurrent test runs never share
+    // (or delete) each other's fixture.
+    ScratchDir scratch("compat-walk");
+    const auto dir = scratch.path;
     fs::create_directories(dir / "repo" / "nested" / "child");
 
     const auto compat = dir / "repo" / "compat.json";
@@ -200,8 +202,6 @@ TEST_CASE("find_compat_json walks parents and reports absence",
 
     fs::remove(compat);
     CHECK(det::find_compat_json(dir / "repo" / "nested" / "child").empty());
-
-    fs::remove_all(dir);
 }
 
 TEST_CASE("snapshot_input scrapes script attributes and frontmatter edge cases",
@@ -212,9 +212,16 @@ TEST_CASE("snapshot_input scrapes script attributes and frontmatter edge cases",
 <!doctype html>
 <SCRIPT SRC='/assets/app.js' TYPE='module'></SCRIPT>
 <script data-src="/ignored.js" src=/assets/inline.js></script>
-<script src = "/spaced-equals-ignored.js"></script>
+<script src = "/assets/spaced.js" type = "text/x-template"></script>
+<script srcset="/not-src.js" src= "/assets/after-equals.js"></script>
 <scriptish src="/not-a-script.js"></scriptish>
 <script type=text/babel></script>
+<script data-condition="a > b" src="/assets/quoted-gt.js"></script>
+<script data-note='src=/fake.js type=fake' src="/assets/real.js"></script>
+<!-- <script src="/commented-out.js" type="commented"></script> -->
+<!--
+<script>tailwind.config = {theme:{colors:{commentedToken:'#fff'}}}</script>
+-->
 <script>
   window.tailwind = { theme: { extend: { colors: {
     "surface-container": "#fff",
@@ -226,12 +233,28 @@ TEST_CASE("snapshot_input scrapes script attributes and frontmatter edge cases",
     auto html = det::snapshot_input(scratch.path / "case.html");
     REQUIRE_FALSE(html.is_directory);
     REQUIRE(html.filename == "case.html");
-    REQUIRE(html.script_srcs.size() == 2);
+    REQUIRE(html.script_srcs.size() == 6);
     REQUIRE(html.script_srcs[0] == "/assets/app.js");
     REQUIRE(html.script_srcs[1] == "/assets/inline.js");
-    REQUIRE(html.script_types.size() == 2);
+    REQUIRE(html.script_srcs[2] == "/assets/spaced.js");
+    REQUIRE(html.script_srcs[3] == "/assets/after-equals.js");
+    // A quoted '>' does not end the tag, and text inside a quoted value is
+    // not read as another attribute.
+    REQUIRE(html.script_srcs[4] == "/assets/quoted-gt.js");
+    REQUIRE(html.script_srcs[5] == "/assets/real.js");
+    // Commented-out scripts contribute neither attributes nor tokens, and the
+    // active script after the comments is still read.
+    REQUIRE(html.script_types.size() == 3);
+    REQUIRE(std::find(html.tailwind_tokens.begin(), html.tailwind_tokens.end(),
+                      "commentedToken") == html.tailwind_tokens.end());
     REQUIRE(html.script_types[0] == "module");
-    REQUIRE(html.script_types[1] == "text/babel");
+    REQUIRE(html.script_types[1] == "text/x-template");
+    REQUIRE(html.script_types[2] == "text/babel");
+
+    det::FingerprintClause spaced_src_clause;
+    spaced_src_clause.kind = det::FingerprintClause::Kind::html_script_src;
+    spaced_src_clause.regex = R"(^/assets/spaced\.js$)";
+    REQUIRE(det::match_clause(spaced_src_clause, html));
     REQUIRE(std::find(html.tailwind_tokens.begin(),
                       html.tailwind_tokens.end(),
                       "surface-container") != html.tailwind_tokens.end());
@@ -261,6 +284,72 @@ TEST_CASE("snapshot_input scrapes script attributes and frontmatter edge cases",
     key_clause.kind = det::FingerprintClause::Kind::frontmatter_key;
     key_clause.required = "colors";
     REQUIRE(det::match_clause(key_clause, design));
+}
+
+TEST_CASE("snapshot_input reads every tailwind.config key spelling",
+          "[import-detect]") {
+    ScratchDir scratch("tailwind-keys");
+
+    write_text(scratch.path / "page.html", R"HTML(
+<!doctype html>
+<style>body{color:red}</style>
+<script>var settings = {unrelatedKey: 1};</script>
+<script type="application/ld+json">{"jsonLdOnly": "example"}</script>
+<script>
+  tailwind.config = {theme:{extend:{colors:{primary:'#fff','surface-container':'#000',"on-primary":'#111'}}}}
+</script>
+)HTML");
+
+    auto snap = det::snapshot_input(scratch.path / "page.html");
+    auto has_token = [&snap](const char* token) {
+        return std::find(snap.tailwind_tokens.begin(), snap.tailwind_tokens.end(), token) !=
+               snap.tailwind_tokens.end();
+    };
+    CHECK(has_token("primary"));            // bare identifier key
+    CHECK(has_token("surface-container"));  // single-quoted key
+    CHECK(has_token("on-primary"));         // double-quoted key
+    CHECK(has_token("colors"));
+    // Bare keys outside a tailwind script (CSS, unrelated scripts) are not tokens.
+    CHECK_FALSE(has_token("color"));
+    CHECK_FALSE(has_token("unrelatedKey"));
+    CHECK_FALSE(has_token("jsonLdOnly"));  // double-quoted, but not tailwind
+
+    for (const char* token : {"primary", "surface-container", "on-primary"}) {
+        det::FingerprintClause clause;
+        clause.kind = det::FingerprintClause::Kind::tailwind_config_token;
+        clause.any_of = {token};
+        CHECK(det::match_clause(clause, snap));
+    }
+}
+
+TEST_CASE("parse_compat_json ignores out-of-range min-confidence-pct values",
+          "[import-detect]") {
+    auto manifest = det::parse_compat_json(R"({
+  "imports": {
+    "demo": {
+      "detected-formats": [
+        {"format-version": "a", "min-confidence-pct": 1e300},
+        {"format-version": "b", "min-confidence-pct": -5},
+        {"format-version": "c", "min-confidence-pct": 250},
+        {"format-version": "d", "min-confidence-pct": 4294967376},
+        {"format-version": "e", "min-confidence-pct": -0.5},
+        {"format-version": "f", "min-confidence-pct": 75.5},
+        {"format-version": "g", "min-confidence-pct": 100}
+      ]
+    }
+  }
+})");
+
+    REQUIRE(manifest.has_value());
+    REQUIRE(manifest->sources.size() == 1);
+    const auto& formats = manifest->sources.front().formats;
+    REQUIRE(formats.size() == 7);
+    for (size_t i = 0; i < 5; ++i) {
+        INFO("format " << formats[i].format_version);
+        CHECK(formats[i].min_confidence_pct == 0);
+    }
+    CHECK(formats[5].min_confidence_pct == 75);
+    CHECK(formats[6].min_confidence_pct == 100);
 }
 
 TEST_CASE("clause matcher honors the fingerprint vocabulary", "[import-detect]") {
@@ -434,6 +523,27 @@ TEST_CASE("directory-files never matches a single file", "[import-detect]") {
     // A file snapshot that somehow carries member names still does not match.
     file.directory_basenames = {"code.html"};
     CHECK_FALSE(det::match_clause(c, file));
+}
+
+TEST_CASE("directory-files requires regular files, not subdirectories",
+          "[import-detect]") {
+    ScratchDir scratch("directory-files-subdirs");
+    fs::create_directories(scratch.path / "code.html");
+    fs::create_directories(scratch.path / "screen.png");
+    det::FingerprintClause c;
+    c.kind = det::FingerprintClause::Kind::directory_files;
+    c.files = {"code.html", "screen.png"};
+    auto dirs_only = det::snapshot_input(scratch.path);
+    REQUIRE(dirs_only.is_directory);
+    CHECK(dirs_only.directory_basenames.empty());
+    CHECK(dirs_only.html_text.empty());
+    CHECK_FALSE(det::match_clause(c, dirs_only));
+
+    // Real files with the same names do match.
+    ScratchDir files("directory-files-files");
+    write_text(files.path / "code.html", "<html></html>");
+    write_text(files.path / "screen.png", "png");
+    CHECK(det::match_clause(c, det::snapshot_input(files.path)));
 }
 
 TEST_CASE("frontmatter-fence honors its value", "[import-detect]") {

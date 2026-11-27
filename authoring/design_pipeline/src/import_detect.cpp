@@ -7,11 +7,14 @@
 #include "strict_json.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <cmath>
 #include <fstream>
 #include <regex>
 #include <set>
 #include <sstream>
 #include <string_view>
+#include <utility>
 
 namespace fs = std::filesystem;
 
@@ -99,85 +102,146 @@ std::string lower_trim(std::string s) {
     return s;
 }
 
-// Extract all <script ...> attribute values for `attr` from `html`.
-// Hand-rolled to avoid pulling a full HTML parser into the CLI build.
-std::vector<std::string> scrape_script_attr(const std::string& html, const std::string& attr) {
-    std::vector<std::string> out;
-    std::string html_lower = html;
-    for (auto& c : html_lower)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    std::string needle = attr;
-    for (auto& c : needle)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+// One <script> element: its attributes (lowercased names, first occurrence
+// wins as in HTML) and the byte range of its body.
+struct ScriptElement {
+    std::vector<std::pair<std::string, std::string>> attrs;
+    size_t body_begin = 0;
+    size_t body_end = 0;
+};
 
+bool is_html_space(char ch) {
+    return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' || ch == '\f';
+}
+
+std::string ascii_lower(std::string s) {
+    for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
+
+// Tokenizes every <script> start tag in `html`. Hand-rolled to avoid pulling
+// a full HTML parser into the CLI build, but it follows the attribute syntax:
+// optional whitespace around '=', quoted values may contain '>' or text that
+// looks like another attribute, and unquoted values end at whitespace or '>'.
+// Script bodies and HTML comments are skipped, so markup inside a script or a
+// commented-out <script> is not read as a tag.
+std::vector<ScriptElement> scan_script_elements(const std::string& html) {
+    std::vector<ScriptElement> out;
+    const std::string html_lower = ascii_lower(html);
+    const size_t n = html.size();
     size_t i = 0;
-    while (i < html.size()) {
-        // Find next "<script" (case-insensitive) opening.
+    while (i < n) {
         auto open = html_lower.find("<script", i);
         if (open == std::string::npos) break;
-        const auto tag_name_end = open + 7;
-        if (tag_name_end < html_lower.size()) {
-            const char next = html_lower[tag_name_end];
-            if (!(next == '>' || next == '/' || next == ' ' ||
-                  next == '\t' || next == '\r' || next == '\n')) {
-                i = tag_name_end;
+        // Markup inside an HTML comment is inert: skip a comment that starts
+        // before this candidate (an unterminated comment runs to the end).
+        auto comment = html_lower.find("<!--", i);
+        if (comment != std::string::npos && comment < open) {
+            auto comment_end = html_lower.find("-->", comment + 4);
+            if (comment_end == std::string::npos) break;
+            i = comment_end + 3;
+            continue;
+        }
+        size_t p = open + 7;
+        if (p < n && !(html[p] == '>' || html[p] == '/' || is_html_space(html[p]))) {
+            i = p;  // <scriptish>, not a script element
+            continue;
+        }
+        ScriptElement el;
+        bool closed = false;
+        while (p < n) {
+            while (p < n && (is_html_space(html[p]) || html[p] == '/')) ++p;
+            if (p >= n) break;
+            if (html[p] == '>') {
+                ++p;
+                closed = true;
+                break;
+            }
+            const size_t name_begin = p;
+            while (p < n && !is_html_space(html[p]) && html[p] != '=' && html[p] != '>' &&
+                   html[p] != '/')
+                ++p;
+            if (p == name_begin) {  // a stray '=': skip it
+                ++p;
                 continue;
             }
-        }
-        // Find the closing '>' of this open tag.
-        auto close = html.find('>', open);
-        if (close == std::string::npos) break;
-        std::string tag = html.substr(open, close - open);
-        // Lowercase a copy for attr lookup; preserve original for value.
-        std::string tag_lower = tag;
-        for (auto& c : tag_lower)
-            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        size_t a = 0;
-        while ((a = tag_lower.find(needle + "=", a)) != std::string::npos) {
-            if (a > 0) {
-                const char before = tag_lower[a - 1];
-                if (!(before == ' ' || before == '\t' ||
-                      before == '\r' || before == '\n')) {
-                    a += needle.size() + 1;
-                    continue;
-                }
+            std::string name = html_lower.substr(name_begin, p - name_begin);
+            size_t q = p;
+            while (q < n && is_html_space(html[q])) ++q;
+            if (q >= n || html[q] != '=') {
+                // A value-less attribute (`async`); it carries no value.
+                continue;
             }
-            // Skip past `attr=`.
-            auto v = a + needle.size() + 1;
-            if (v < tag.size() && (tag[v] == '"' || tag[v] == '\'')) {
-                char q = tag[v++];
-                auto end = tag.find(q, v);
-                if (end != std::string::npos)
-                    out.push_back(tag.substr(v, end - v));
+            p = q + 1;
+            while (p < n && is_html_space(html[p])) ++p;
+            std::string value;
+            if (p < n && (html[p] == '"' || html[p] == '\'')) {
+                const char quote = html[p++];
+                auto end = html.find(quote, p);
+                if (end == std::string::npos) end = n;
+                value = html.substr(p, end - p);
+                p = end == n ? n : end + 1;
             } else {
-                auto end = tag.find_first_of(" \t>", v);
-                if (end == std::string::npos) end = tag.size();
-                out.push_back(tag.substr(v, end - v));
+                const size_t value_begin = p;
+                while (p < n && !is_html_space(html[p]) && html[p] != '>') ++p;
+                value = html.substr(value_begin, p - value_begin);
+                if (value.empty()) continue;  // `src= >`: no value
             }
-            break;
+            bool seen = false;
+            for (const auto& kv : el.attrs) seen = seen || kv.first == name;
+            if (!seen) el.attrs.emplace_back(std::move(name), std::move(value));
         }
-        i = close + 1;
+        if (!closed) break;  // unterminated start tag
+        el.body_begin = p;
+        auto body_end = html_lower.find("</script", p);
+        el.body_end = body_end == std::string::npos ? n : body_end;
+        i = el.body_end;
+        out.push_back(std::move(el));
     }
     return out;
 }
 
-// Greedy scrape of identifiers from a tailwind.config inline script.
-// We grep for sequences inside theme.extend.colors / .spacing / similar
-// keys. The detector matches against any-of clauses, so this just needs
-// to surface representative tokens; we don't reconstruct a real tree.
-std::vector<std::string> scrape_tailwind_tokens(const std::string& html) {
+// Extract all <script ...> attribute values for `attr` from `html`.
+std::vector<std::string> scrape_script_attr(const std::vector<ScriptElement>& scripts,
+                                            const std::string& attr) {
+    std::vector<std::string> out;
+    const std::string needle = ascii_lower(attr);
+    for (const auto& el : scripts)
+        for (const auto& kv : el.attrs)
+            if (kv.first == needle) {
+                out.push_back(kv.second);
+                break;
+            }
+    return out;
+}
+
+// Greedy scrape of identifiers from a tailwind.config inline script. The
+// detector matches against any-of clauses, so this just needs to surface
+// representative tokens; we don't reconstruct a real tree.
+//
+// Only inline scripts that mention tailwind are read, so CSS (`{color:red}`),
+// JSON-LD and other scripts do not contribute tokens. A tailwind.config object
+// is JavaScript, so a key may be double-quoted, single-quoted (Material 3
+// hyphenated tokens like 'surface-container') or a bare identifier; a bare key
+// must follow '{' or ',' (object-literal position).
+std::vector<std::string> scrape_tailwind_tokens(const std::string& html,
+                                                const std::vector<ScriptElement>& scripts) {
     std::set<std::string> seen;
-    // Match identifier-like keys "<ident>": before a colon or comma in
-    // a JS/JSON-ish context. Strict enough to skip noise but loose
-    // enough to handle Material 3 hyphenated tokens like
-    // "surface-container".
-    static const std::regex token_re(
-        R"REX("([a-zA-Z][a-zA-Z0-9_-]{1,40})"\s*:)REX",
-        std::regex::ECMAScript);
-    auto begin = std::sregex_iterator(html.begin(), html.end(), token_re);
-    auto end = std::sregex_iterator{};
-    for (auto it = begin; it != end; ++it)
-        seen.insert((*it)[1].str());
+    static const std::regex double_quoted_re(
+        R"REX("([a-zA-Z][a-zA-Z0-9_-]{1,40})"\s*:)REX", std::regex::ECMAScript);
+    static const std::regex single_quoted_re(
+        R"REX('([a-zA-Z][a-zA-Z0-9_-]{1,40})'\s*:)REX", std::regex::ECMAScript);
+    static const std::regex bare_key_re(
+        R"REX([{,]\s*([a-zA-Z_$][a-zA-Z0-9_$]{1,40})\s*:)REX", std::regex::ECMAScript);
+    for (const auto& el : scripts) {
+        const std::string body = html.substr(el.body_begin, el.body_end - el.body_begin);
+        if (ascii_lower(body).find("tailwind") == std::string::npos) continue;
+        for (const auto* re : {&double_quoted_re, &single_quoted_re, &bare_key_re}) {
+            auto begin = std::sregex_iterator(body.begin(), body.end(), *re);
+            for (auto it = begin; it != std::sregex_iterator{}; ++it)
+                seen.insert((*it)[1].str());
+        }
+    }
     return {seen.begin(), seen.end()};
 }
 
@@ -217,8 +281,18 @@ std::optional<ImportsManifest> parse_compat_json(const std::string& text) {
                 if (auto nv = member_string(f, "notes")) e.notes = *nv;
                 if (auto mv = member_string(f, "match")) e.match = *mv;
                 if (auto cv = member(f, "min-confidence-pct")) {
-                    if (cv->isInt()) e.min_confidence_pct = static_cast<int>(cv->getInt64());
-                    else if (cv->isFloat()) e.min_confidence_pct = static_cast<int>(cv->getFloat64());
+                    // A percentage outside [0, 100] (or a non-finite float)
+                    // is malformed: ignore it like a non-numeric value rather
+                    // than narrowing it, which is undefined for out-of-range
+                    // floats and silently wraps large integers.
+                    if (cv->isInt()) {
+                        const auto v = cv->getInt64();
+                        if (v >= 0 && v <= 100) e.min_confidence_pct = static_cast<int>(v);
+                    } else if (cv->isFloat()) {
+                        const double v = cv->getFloat64();
+                        if (std::isfinite(v) && v >= 0.0 && v <= 100.0)
+                            e.min_confidence_pct = static_cast<int>(v);
+                    }
                 }
                 auto fp = member(f, "fingerprint");
                 if (fp && fp->isArray()) {
@@ -258,9 +332,11 @@ InputSnapshot snapshot_input(const fs::path& input) {
         for (auto& entry : fs::directory_iterator(input, ec)) {
             if (ec) break;
             auto path = entry.path();
-            snap.directory_basenames.push_back(path.filename().string());
+            // directory-files names files, so a subdirectory that happens to
+            // be called code.html does not count as one.
             std::error_code file_ec;
             if (entry.is_regular_file(file_ec)) {
+                snap.directory_basenames.push_back(path.filename().string());
                 auto ext = lower_trim(path.extension().string());
                 if (ext == ".html" || ext == ".htm")
                     html_candidates.push_back(path);
@@ -272,7 +348,8 @@ InputSnapshot snapshot_input(const fs::path& input) {
         // Prefer code.html (Stitch-style), then index.html.
         for (auto candidate : {"code.html", "index.html"}) {
             auto p = input / candidate;
-            if (fs::exists(p)) {
+            std::error_code candidate_ec;
+            if (fs::is_regular_file(p, candidate_ec)) {
                 snap.html_text = read_text_file(p);
                 break;
             }
@@ -286,9 +363,10 @@ InputSnapshot snapshot_input(const fs::path& input) {
     }
 
     if (!snap.html_text.empty()) {
-        snap.script_srcs = scrape_script_attr(snap.html_text, "src");
-        snap.script_types = scrape_script_attr(snap.html_text, "type");
-        snap.tailwind_tokens = scrape_tailwind_tokens(snap.html_text);
+        const auto scripts = scan_script_elements(snap.html_text);
+        snap.script_srcs = scrape_script_attr(scripts, "src");
+        snap.script_types = scrape_script_attr(scripts, "type");
+        snap.tailwind_tokens = scrape_tailwind_tokens(snap.html_text, scripts);
     }
 
     // ── DESIGN.md frontmatter probe ────────────────────────────────────
