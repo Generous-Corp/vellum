@@ -103,6 +103,16 @@ class TestPassControl(ParityTestCase):
         lay = layout(view("0:1", 0, 0, 100, 100), view("0:2", 11, 11))
         self.assertEqual(self.compare(geom, lay)["findings"], [])
 
+    def test_documented_w_h_geometry_fields_are_accepted(self):
+        geom = {"units": "design-px", "nodes": [{
+            "node_id": "0:1", "parent_id": None, "x": 0, "y": 0,
+            "w": 100, "h": 100,
+        }]}
+        lay = layout(view("0:1", 0, 0, 100, 100))
+        report = self.compare(geom, lay)
+        self.assertEqual(report["matched"], 1)
+        self.assertEqual(report["findings"], [])
+
 
 class TestClustering(ParityTestCase):
     def test_shared_offset_collapses_to_one_finding_naming_the_parent(self):
@@ -378,6 +388,63 @@ class TestCli(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertIn("--dump-layout", result.stderr)
 
+    def test_an_empty_geometry_document_is_a_usage_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = pathlib.Path(tmp)
+            dump = self.write_pair(td, {"nodes": [{"node_id": "empty"}]},
+                                   layout(view("empty", 0, 0)))
+            result = self.run_tool(str(dump))
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("no usable reference rectangles", result.stderr)
+
+    def test_malformed_layout_dump_is_a_usage_error_without_traceback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = pathlib.Path(tmp)
+            (td / "layout.geometry.json").write_text(json.dumps(
+                geometry(node("empty", None, 0, 0))))
+            dump = td / "layout.json"
+            dump.write_text("{")
+            result = self.run_tool(str(dump))
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("cannot read layout dump", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+
+    def test_malformed_capture_inputs_are_usage_errors_without_tracebacks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = pathlib.Path(tmp)
+            fx = CaptureFixture(td, dom=PANEL_DOM, lowered=PANEL_LOWERED,
+                                views=panel_views())
+            (fx.ir).write_text("{")
+            bad_ir = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
+            self.assertEqual(bad_ir.returncode, 2)
+            self.assertIn("cannot read DesignIR", bad_ir.stderr)
+            (td / "envelope").mkdir()
+            fx = CaptureFixture(td / "envelope", dom=PANEL_DOM, lowered=PANEL_LOWERED,
+                                views=panel_views())
+            (fx.capture / "capture.json").write_text("{")
+            bad_envelope = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
+            self.assertEqual(bad_envelope.returncode, 2)
+            self.assertIn("cannot read capture envelope", bad_envelope.stderr)
+            (td / "snapshot").mkdir()
+            fx = CaptureFixture(td / "snapshot", dom=PANEL_DOM, lowered=PANEL_LOWERED,
+                                views=panel_views())
+            envelope = json.loads((fx.capture / "capture.json").read_text())
+            envelope["documents"][0].pop("snapshot_sha256")
+            (fx.capture / "capture.json").write_text(json.dumps(envelope))
+            (fx.capture / "dom-snapshot.json").write_text("{")
+            bad_snapshot = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
+            self.assertEqual(bad_snapshot.returncode, 2)
+            self.assertIn("cannot read DOM snapshot", bad_snapshot.stderr)
+            self.assertNotIn("Traceback", bad_snapshot.stderr)
+            (td / "observer").mkdir()
+            fx = CaptureFixture(td / "observer", dom=PANEL_DOM, lowered=PANEL_LOWERED,
+                                views=panel_views())
+            (fx.layout).write_text("{")
+            bad_observer = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
+            self.assertEqual(bad_observer.returncode, 2)
+            self.assertIn("cannot read observer layout", bad_observer.stderr)
+            self.assertNotIn("Traceback", bad_observer.stderr)
+
     def test_json_report_is_written_and_is_not_capped_by_max_findings(self):
         with tempfile.TemporaryDirectory() as tmp:
             td = pathlib.Path(tmp)
@@ -647,7 +714,52 @@ class TestCaptureCli(CaptureTestCase):
         (fx.capture / "browser-static.png").unlink()
         result = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
         self.assertEqual(result.returncode, 2)
-        self.assertIn("cannot prove", result.stderr)
+        self.assertIn("not found", result.stderr)
+
+    def test_a_missing_listed_capture_asset_is_refused_even_if_another_verifies(self):
+        fx = self.fixture()
+        ir = json.loads(fx.ir.read_text())
+        ir["assetManifest"]["assets"].append({
+            "original_uri": "pulp-capture:///missing.png",
+            "content_hash": hashlib.sha256(b"missing").hexdigest(),
+        })
+        fx.ir.write_text(json.dumps(ir))
+        result = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("capture asset", result.stderr)
+        self.assertIn("not found", result.stderr)
+
+    def test_a_capture_asset_path_escape_is_refused(self):
+        fx = self.fixture()
+        outside = fx.capture.parent / "outside.png"
+        outside.write_bytes(REFERENCE_PNG)
+        ir = json.loads(fx.ir.read_text())
+        ir["assetManifest"]["assets"][0]["original_uri"] = "pulp-capture:///../outside.png"
+        fx.ir.write_text(json.dumps(ir))
+        result = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("escapes capture directory", result.stderr)
+
+    def test_a_symlinked_capture_asset_outside_the_capture_is_refused(self):
+        fx = self.fixture()
+        outside = fx.capture.parent / "outside.png"
+        outside.write_bytes(REFERENCE_PNG)
+        (fx.capture / "browser-static.png").unlink()
+        (fx.capture / "browser-static.png").symlink_to(outside)
+        result = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("escapes capture directory", result.stderr)
+
+    def test_a_snapshot_asset_path_escape_is_refused(self):
+        fx = self.fixture()
+        outside = fx.capture.parent / "outside.json"
+        outside.write_bytes((fx.capture / "dom-snapshot.json").read_bytes())
+        envelope = json.loads((fx.capture / "capture.json").read_text())
+        envelope["documents"][0]["snapshot_asset"] = "../outside.json"
+        (fx.capture / "capture.json").write_text(json.dumps(envelope))
+        result = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("escapes capture directory", result.stderr)
 
     def test_an_absolute_capture_asset_path_is_refused(self):
         fx = self.fixture()
@@ -656,7 +768,7 @@ class TestCaptureCli(CaptureTestCase):
         fx.ir.write_text(json.dumps(ir))
         result = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
         self.assertEqual(result.returncode, 2)
-        self.assertIn("capture asset path", result.stderr)
+        self.assertIn("capture asset", result.stderr)
         self.assertIn("escapes capture directory", result.stderr)
 
     def test_a_traversing_capture_asset_path_is_refused(self):
@@ -666,7 +778,7 @@ class TestCaptureCli(CaptureTestCase):
         fx.ir.write_text(json.dumps(ir))
         result = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
         self.assertEqual(result.returncode, 2)
-        self.assertIn("capture asset path", result.stderr)
+        self.assertIn("capture asset", result.stderr)
         self.assertIn("escapes capture directory", result.stderr)
 
     def test_an_absolute_snapshot_asset_path_is_refused(self):
@@ -676,7 +788,7 @@ class TestCaptureCli(CaptureTestCase):
         (fx.capture / "capture.json").write_text(json.dumps(envelope))
         result = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
         self.assertEqual(result.returncode, 2)
-        self.assertIn("snapshot asset path", result.stderr)
+        self.assertIn("snapshot asset", result.stderr)
         self.assertIn("escapes capture directory", result.stderr)
 
     def test_a_traversing_snapshot_asset_path_is_refused(self):
@@ -686,7 +798,7 @@ class TestCaptureCli(CaptureTestCase):
         (fx.capture / "capture.json").write_text(json.dumps(envelope))
         result = self.run_tool("--capture", fx.capture, "--observer-layout", fx.layout)
         self.assertEqual(result.returncode, 2)
-        self.assertIn("snapshot asset path", result.stderr)
+        self.assertIn("snapshot asset", result.stderr)
         self.assertIn("escapes capture directory", result.stderr)
 
     def test_a_non_numeric_backend_id_is_a_usage_error(self):

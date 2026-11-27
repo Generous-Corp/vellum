@@ -41,6 +41,7 @@ Exit codes:
 from __future__ import annotations
 import argparse
 import json
+import math
 import sys
 from collections import Counter
 from pathlib import Path
@@ -229,6 +230,7 @@ def ink_coverage(ref: Image, cand: Image, ink_threshold: int = 8) -> dict:
                 uncovered.add(i)
 
     width = ref.size[0]
+    height = ref.size[1]
     largest = 0
     pending = set(uncovered)
     while pending:
@@ -241,8 +243,9 @@ def ink_coverage(ref: Image, cand: Image, ink_threshold: int = 8) -> dict:
             for dy in (-1, 0, 1):
                 for dx in (-1, 0, 1):
                     nx = x + dx
-                    if (dx or dy) and 0 <= nx < width:
-                        j = (y + dy) * width + nx
+                    ny = y + dy
+                    if (dx or dy) and 0 <= nx < width and 0 <= ny < height:
+                        j = ny * width + nx
                         if j in pending:
                             pending.remove(j)
                             stack.append(j)
@@ -356,6 +359,16 @@ def load_regions(path: Path | None) -> dict:
                     file=sys.stderr,
                 )
                 sys.exit(2)
+        x, y, w, h = (float(region[key]) for key in ("x", "y", "w", "h"))
+        if (not all(math.isfinite(value) for value in (x, y, w, h))
+                or w <= 0.0 or h <= 0.0
+                or x < 0.0 or y < 0.0 or x + w > 1.0 or y + h > 1.0):
+            print(
+                f"error: region '{name}' rectangle must be finite, positive, "
+                "and contained in the normalized 0..1 frame",
+                file=sys.stderr,
+            )
+            sys.exit(2)
         for threshold_name in ("threshold", "edge_threshold", "coverage_floor", "max_uncovered_fraction"):
             if threshold_name not in region:
                 continue

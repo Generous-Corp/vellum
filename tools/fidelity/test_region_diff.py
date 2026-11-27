@@ -142,6 +142,20 @@ class TestSchemaValidation(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertIn("threshold", result.stderr)
 
+    def test_out_of_frame_or_empty_rectangles_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tdir:
+            tmp = Path(tdir)
+            self._assert_load_regions_error(
+                tmp,
+                {"r1": {"x": 0.75, "y": 0.0, "w": 0.5, "h": 0.5}},
+                "contained in the normalized 0..1 frame",
+            )
+            self._assert_load_regions_error(
+                tmp,
+                {"r1": {"x": 0.0, "y": 0.0, "w": 0.0, "h": 0.5}},
+                "positive",
+            )
+
     def test_load_regions_direct_errors_cover_schema_branches(self) -> None:
         with tempfile.TemporaryDirectory() as tdir:
             tmp = Path(tdir)
@@ -643,6 +657,17 @@ class TestInkCoverage(unittest.TestCase):
     def test_band_with_under_half_its_contrast_is_uncovered(self) -> None:
         cov = regions_mod.ink_coverage(_toolbar(True, band_level=9), _toolbar(True, band_level=4))
         self.assertEqual(cov["largest_uncovered_px"], 400 * 4)
+
+    def test_uncovered_components_do_not_wrap_between_image_edges(self) -> None:
+        # The top and bottom pixels are separate components in a 2x2 image.
+        # A flood fill that omits the y bound connects them through Python's
+        # negative indexing and reports one component of four pixels.
+        ref = FakeImage([(0, 0, 0), (255, 255, 255),
+                         (0, 0, 0), (0, 0, 0),
+                         (0, 0, 0), (255, 255, 255)], size=(2, 3))
+        cand = FakeImage([(0, 0, 0)] * 6, size=(2, 3))
+        cov = regions_mod.ink_coverage(ref, cand)
+        self.assertEqual(cov["largest_uncovered_px"], 1)
 
     def test_blank_candidate_fails_the_coverage_floor(self) -> None:
         blank = Image(400, 60, [(0, 0, 0)] * (400 * 60), "RGB")

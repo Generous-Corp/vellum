@@ -153,7 +153,9 @@ class Rect:
 
 
 def _rect(entry: dict[str, Any]) -> Rect | None:
-    vals = [entry.get(k) for k in ("x", "y", "width", "height")]
+    vals = [entry.get("x"), entry.get("y"),
+            entry.get("w", entry.get("width")),
+            entry.get("h", entry.get("height"))]
     if any(v is None for v in vals):
         return None
     return Rect(*(float(v) for v in vals))
@@ -161,7 +163,12 @@ def _rect(entry: dict[str, Any]) -> Rect | None:
 
 def load_geometry(path: pathlib.Path) -> tuple[dict[str, Rect], dict[str, dict]]:
     """The design's solved rects, keyed by node id, plus each node's metadata."""
-    doc = json.loads(path.read_text())
+    try:
+        doc = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise CaptureInputError(f"cannot read geometry {path}: {error}") from None
+    if not isinstance(doc, dict) or not isinstance(doc.get("nodes"), list):
+        raise CaptureInputError(f"geometry {path} has no nodes list")
     rects: dict[str, Rect] = {}
     meta: dict[str, dict] = {}
     for node in doc.get("nodes", []):
@@ -177,12 +184,16 @@ def load_geometry(path: pathlib.Path) -> tuple[dict[str, Rect], dict[str, dict]]
             "type": node.get("type") or "",
             "parent_id": node.get("parent_id"),
         }
+    if not rects:
+        raise CaptureInputError(f"geometry {path} has no usable reference rectangles")
     return rects, meta
 
 
 def load_layout(path: pathlib.Path) -> dict[str, Rect]:
     """The render's laid-out rects, keyed by the source node id each view came from."""
-    doc = json.loads(path.read_text())
+    doc = _read_json(path, "layout dump")
+    if not isinstance(doc, dict) or not isinstance(doc.get("views"), list):
+        raise CaptureInputError(f"layout dump has no views list: {path}")
     rects: dict[str, Rect] = {}
     for view in doc.get("views", []):
         node_id = view.get("node_id")
@@ -215,26 +226,36 @@ def default_ir_path(capture_dir: pathlib.Path) -> pathlib.Path:
     return capture_dir.with_name(name + ".json")
 
 
-def _capture_path(capture_dir: pathlib.Path, relative: str, what: str) -> pathlib.Path:
-    """Resolve a capture-owned path without allowing it to escape the capture."""
+def _capture_child(capture_dir: pathlib.Path, asset_name: str, what: str) -> pathlib.Path:
+    """Resolve a capture-controlled path and keep it inside the capture tree."""
+    if not isinstance(asset_name, str) or not asset_name:
+        raise CaptureInputError(f"{what} must name a file inside {capture_dir}")
     root = capture_dir.resolve()
-    relative_path = pathlib.Path(relative)
-    if relative_path.is_absolute():
-        raise CaptureInputError(
-            f"{what} {relative!r} escapes capture directory {capture_dir}")
-    path = (root / relative_path).resolve()
+    path = (capture_dir / asset_name).resolve()
     try:
         path.relative_to(root)
     except ValueError:
         raise CaptureInputError(
-            f"{what} {relative!r} escapes capture directory {capture_dir}") from None
+            f"{what} {asset_name!r} escapes capture directory {capture_dir}") from None
     return path
 
 
 def _walk_ir(node: dict, out: list[dict]) -> None:
+    if not isinstance(node, dict):
+        raise CaptureInputError("DesignIR contains a non-object node")
     out.append(node)
-    for child in node.get("children") or []:
+    children = node.get("children") or []
+    if not isinstance(children, list):
+        raise CaptureInputError("DesignIR node children must be a list")
+    for child in children:
         _walk_ir(child, out)
+
+
+def _read_json(path: pathlib.Path, what: str) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise CaptureInputError(f"cannot read {what} {path}: {error}") from None
 
 
 def _verify_pairing(ir: dict, capture_dir: pathlib.Path) -> int:
@@ -249,14 +270,18 @@ def _verify_pairing(ir: dict, capture_dir: pathlib.Path) -> int:
     checked = 0
     for asset in (ir.get("assetManifest") or {}).get("assets") or []:
         uri = asset.get("original_uri") or ""
+        if not uri.startswith(CAPTURE_URI):
+            continue
         expected = asset.get("content_hash") or ""
-        if not uri.startswith(CAPTURE_URI) or not expected:
-            continue
-        path = _capture_path(capture_dir, uri[len(CAPTURE_URI):],
-                             "capture asset path")
+        if not expected:
+            raise CaptureInputError(f"capture asset {uri!r} has no content_hash")
+        path = _capture_child(capture_dir, uri[len(CAPTURE_URI):], "capture asset")
         if not path.is_file():
-            continue
-        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+            raise CaptureInputError(f"capture asset {path} not found")
+        try:
+            actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError as error:
+            raise CaptureInputError(f"capture asset {path} cannot be read: {error}") from None
         if actual != expected:
             raise CaptureInputError(
                 f"{path.name} in {capture_dir} does not match the IR's recorded hash; "
@@ -273,13 +298,17 @@ def _load_snapshot(capture_dir: pathlib.Path) -> dict:
     envelope_path = capture_dir / "capture.json"
     if not envelope_path.is_file():
         raise CaptureInputError(f"not a browser capture (no capture.json): {capture_dir}")
-    envelope = json.loads(envelope_path.read_text(encoding="utf-8"))
+    envelope = _read_json(envelope_path, "capture envelope")
+    if not isinstance(envelope, dict):
+        raise CaptureInputError(f"capture envelope is not an object: {envelope_path}")
     if envelope.get("schema") != CAPTURE_SCHEMA:
         raise CaptureInputError(
             f"unsupported capture schema {envelope.get('schema')!r} (expected {CAPTURE_SCHEMA})")
     documents = envelope.get("documents") or [{}]
+    if not isinstance(documents, list) or not documents or not isinstance(documents[0], dict):
+        raise CaptureInputError(f"capture envelope has no document metadata: {envelope_path}")
     snapshot_asset = documents[0].get("snapshot_asset") or "dom-snapshot.json"
-    snapshot_path = _capture_path(capture_dir, snapshot_asset, "snapshot asset path")
+    snapshot_path = _capture_child(capture_dir, snapshot_asset, "snapshot asset")
     if not snapshot_path.is_file():
         raise CaptureInputError(f"capture has no DOM snapshot: {snapshot_path}")
     raw = snapshot_path.read_bytes()
@@ -287,10 +316,43 @@ def _load_snapshot(capture_dir: pathlib.Path) -> dict:
     if expected and hashlib.sha256(raw).hexdigest() != expected:
         raise CaptureInputError(
             f"{snapshot_path.name} does not match capture.json's snapshot_sha256")
-    snapshot = json.loads(raw)
+    try:
+        snapshot = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise CaptureInputError(f"cannot read DOM snapshot {snapshot_path}: {error}") from None
     # The importer lowers the top document only; nested documents' boxes are
     # relative to their own frame and cannot share this coordinate space.
-    return snapshot["documents"][0]
+    snapshot_documents = snapshot.get("documents") if isinstance(snapshot, dict) else None
+    if not isinstance(snapshot_documents, list) or not snapshot_documents \
+            or not isinstance(snapshot_documents[0], dict):
+        raise CaptureInputError(f"DOM snapshot has no document: {snapshot_path}")
+    return snapshot_documents[0]
+
+
+def _capture_document_parts(document: dict) -> tuple[dict, list[int], list[int], dict, list[int], list[list[float]]]:
+    if not isinstance(document, dict):
+        raise CaptureInputError("DOM snapshot document is not an object")
+    dom = document.get("nodes")
+    if not isinstance(dom, dict):
+        raise CaptureInputError("DOM snapshot has no nodes object")
+    backend_ids = dom.get("backendNodeId")
+    parents = dom.get("parentIndex")
+    layout = document.get("layout")
+    if (not isinstance(backend_ids, list) or not isinstance(parents, list)
+            or len(backend_ids) != len(parents) or not isinstance(layout, dict)):
+        raise CaptureInputError("DOM snapshot has malformed nodes or layout")
+    node_indices = layout.get("nodeIndex")
+    bounds = layout.get("bounds")
+    if not isinstance(node_indices, list) or not isinstance(bounds, list) \
+            or len(node_indices) != len(bounds):
+        raise CaptureInputError("DOM snapshot has malformed layout arrays")
+    if any(not isinstance(parent, int) or parent < -1 or parent >= len(backend_ids)
+           for parent in parents):
+        raise CaptureInputError("DOM snapshot has an invalid parent index")
+    if any(not isinstance(node_index, int) or node_index < 0 or node_index >= len(backend_ids)
+           for node_index in node_indices):
+        raise CaptureInputError("DOM snapshot has an invalid layout node index")
+    return dom, backend_ids, parents, layout, node_indices, bounds
 
 
 def load_capture_geometry(
@@ -302,23 +364,23 @@ def load_capture_geometry(
     ``source`` summary: how many IR nodes joined, which are import scaffolding
     (no backend id), and which carry a backend id Chromium laid out no box for.
     """
-    ir = json.loads(ir_path.read_text(encoding="utf-8"))
+    ir = _read_json(ir_path, "DesignIR")
+    if not isinstance(ir, dict):
+        raise CaptureInputError(f"DesignIR is not an object: {ir_path}")
     root = ir.get("root")
     if not isinstance(root, dict):
         raise CaptureInputError(f"not a DesignIR document (no root): {ir_path}")
     pairing_checked = _verify_pairing(ir, capture_dir)
     document = _load_snapshot(capture_dir)
 
-    dom = document["nodes"]
-    backend_ids = dom["backendNodeId"]
-    parents = dom["parentIndex"]
+    dom, backend_ids, parents, layout, layout_indices, layout_bounds = \
+        _capture_document_parts(document)
     dom_index = {backend: i for i, backend in enumerate(backend_ids)}
-    layout = document["layout"]
     box_of: dict[int, list[float]] = {}
-    for k, dom_i in enumerate(layout["nodeIndex"]):
+    for k, dom_i in enumerate(layout_indices):
         # A node can own several layout objects (continuation boxes); the
         # first is the element's own box.
-        box_of.setdefault(dom_i, layout["bounds"][k])
+        box_of.setdefault(dom_i, layout_bounds[k])
 
     # The import frames the panel at the authored surface, so a DOM box at the
     # surface origin is a view at (0, 0).
@@ -380,8 +442,8 @@ def load_capture_geometry(
 def load_observer_layout(path: pathlib.Path) -> dict[str, Rect]:
     """A ``visual-layout-snapshot-v1`` observer layout,
     keyed by view id, which the observer sets to the node's anchor id."""
-    doc = json.loads(path.read_text(encoding="utf-8"))
-    if "nodes" not in doc:
+    doc = _read_json(path, "observer layout")
+    if not isinstance(doc, dict) or not isinstance(doc.get("nodes"), list):
         raise CaptureInputError(
             f"not an observer layout (expected a visual-layout-snapshot 'nodes' list): {path}")
     rects: dict[str, Rect] = {}
@@ -729,7 +791,11 @@ def _run_dump(args: argparse.Namespace) -> dict | None:
                 print("hint: pass --geometry, or re-run the import with --dump-layout "
                       "(which writes this sidecar next to the dump).", file=sys.stderr)
             return None
-    return compare(geometry, args.layout, args.tolerance, args.gate_px)
+    try:
+        return compare(geometry, args.layout, args.tolerance, args.gate_px)
+    except CaptureInputError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return None
 
 
 def main(argv: list[str] | None = None) -> int:
