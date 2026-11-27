@@ -66,6 +66,7 @@
       "vellum.framework.plugin-view-host-native-child",
       "vellum.framework.react-materialization",
       "vellum.framework.render-pass",
+      "vellum.framework.render-surface-logic",
       "vellum.framework.runtime-import-parsers",
       "vellum.framework.scripted-ui-param-model",
       "vellum.framework.text-button-measure",
