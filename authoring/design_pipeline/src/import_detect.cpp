@@ -119,84 +119,136 @@ std::string ascii_lower(std::string s) {
     return s;
 }
 
-// Tokenizes every <script> start tag in `html`. Hand-rolled to avoid pulling
-// a full HTML parser into the CLI build, but it follows the attribute syntax:
-// optional whitespace around '=', quoted values may contain '>' or text that
-// looks like another attribute, and unquoted values end at whitespace or '>'.
-// Script bodies and HTML comments are skipped, so markup inside a script or a
-// commented-out <script> is not read as a tag.
+// Finds the end tag `</name` that closes a raw-text element body starting at
+// `from`. Only a complete end-tag name counts: it must be followed by
+// whitespace, '/', '>' or the end of input, so HTML keeps `</scriptish>`
+// inside a script. Returns npos when the body runs to the end of input.
+size_t find_end_tag(const std::string& html, const std::string& html_lower,
+                    const std::string& name, size_t from) {
+    const std::string needle = "</" + name;
+    const size_t n = html.size();
+    while (true) {
+        auto at = html_lower.find(needle, from);
+        if (at == std::string::npos) return std::string::npos;
+        const size_t after = at + needle.size();
+        if (after >= n || html[after] == '>' || html[after] == '/' ||
+            is_html_space(html[after]))
+            return at;
+        from = after;
+    }
+}
+
+// Parses the attributes of a start tag whose name ends at `p`, up to and
+// including its closing '>'. Follows the attribute syntax: optional whitespace
+// around '=', quoted values may contain '>' or text that looks like another
+// attribute, and unquoted values end at whitespace or '>'. Names are
+// lowercased and the first occurrence wins, as in HTML. Returns the index
+// after '>', or npos for an unterminated tag.
+size_t parse_start_tag_attrs(const std::string& html, const std::string& html_lower, size_t p,
+                             std::vector<std::pair<std::string, std::string>>& attrs) {
+    const size_t n = html.size();
+    while (p < n) {
+        while (p < n && (is_html_space(html[p]) || html[p] == '/')) ++p;
+        if (p >= n) break;
+        if (html[p] == '>') return p + 1;
+        const size_t name_begin = p;
+        while (p < n && !is_html_space(html[p]) && html[p] != '=' && html[p] != '>' &&
+               html[p] != '/')
+            ++p;
+        if (p == name_begin) {  // a stray '=': skip it
+            ++p;
+            continue;
+        }
+        std::string name = html_lower.substr(name_begin, p - name_begin);
+        size_t q = p;
+        while (q < n && is_html_space(html[q])) ++q;
+        if (q >= n || html[q] != '=') {
+            // A value-less attribute (`async`); it carries no value.
+            continue;
+        }
+        p = q + 1;
+        while (p < n && is_html_space(html[p])) ++p;
+        std::string value;
+        if (p < n && (html[p] == '"' || html[p] == '\'')) {
+            const char quote = html[p++];
+            auto end = html.find(quote, p);
+            if (end == std::string::npos) end = n;
+            value = html.substr(p, end - p);
+            p = end == n ? n : end + 1;
+        } else {
+            const size_t value_begin = p;
+            while (p < n && !is_html_space(html[p]) && html[p] != '>') ++p;
+            value = html.substr(value_begin, p - value_begin);
+            if (value.empty()) continue;  // `src= >`: no value
+        }
+        bool seen = false;
+        for (const auto& kv : attrs) seen = seen || kv.first == name;
+        if (!seen) attrs.emplace_back(std::move(name), std::move(value));
+    }
+    return std::string::npos;
+}
+
+// Tokenizes every <script> element in `html`. Hand-rolled to avoid pulling a
+// full HTML parser into the CLI build, but it walks the document tag by tag
+// rather than searching for "<script", so markup-like text is read as markup
+// only where HTML would read it:
+//  - HTML comments are skipped (an unterminated comment runs to the end);
+//  - every other tag's attributes are parsed, so `<script` inside a quoted
+//    attribute value of another tag is not a start tag;
+//  - script bodies and the other raw-text or escapable-raw-text elements
+//    (style, textarea, title, xmp, iframe, noembed, noframes, plaintext) run
+//    to their complete end tag, so markup inside them is text.
 std::vector<ScriptElement> scan_script_elements(const std::string& html) {
+    static const std::set<std::string> raw_text_elements = {
+        "style", "textarea", "title", "xmp", "iframe", "noembed", "noframes", "plaintext"};
     std::vector<ScriptElement> out;
     const std::string html_lower = ascii_lower(html);
     const size_t n = html.size();
     size_t i = 0;
     while (i < n) {
-        auto open = html_lower.find("<script", i);
-        if (open == std::string::npos) break;
-        // Markup inside an HTML comment is inert: skip a comment that starts
-        // before this candidate (an unterminated comment runs to the end).
-        auto comment = html_lower.find("<!--", i);
-        if (comment != std::string::npos && comment < open) {
-            auto comment_end = html_lower.find("-->", comment + 4);
+        auto lt = html.find('<', i);
+        if (lt == std::string::npos) break;
+        if (html_lower.compare(lt, 4, "<!--") == 0) {
+            auto comment_end = html_lower.find("-->", lt + 4);
             if (comment_end == std::string::npos) break;
             i = comment_end + 3;
             continue;
         }
-        size_t p = open + 7;
-        if (p < n && !(html[p] == '>' || html[p] == '/' || is_html_space(html[p]))) {
-            i = p;  // <scriptish>, not a script element
+        size_t p = lt + 1;
+        const bool end_tag = p < n && html[p] == '/';
+        if (end_tag) ++p;
+        if (p >= n || !std::isalpha(static_cast<unsigned char>(html[p]))) {
+            // `<!doctype>`, `<?...>` or a bare '<' in text: skip to '>'.
+            if (p < n && (html[p] == '!' || html[p] == '?')) {
+                auto gt = html.find('>', p);
+                if (gt == std::string::npos) break;
+                i = gt + 1;
+            } else {
+                i = lt + 1;
+            }
             continue;
         }
-        ScriptElement el;
-        bool closed = false;
-        while (p < n) {
-            while (p < n && (is_html_space(html[p]) || html[p] == '/')) ++p;
-            if (p >= n) break;
-            if (html[p] == '>') {
-                ++p;
-                closed = true;
-                break;
-            }
-            const size_t name_begin = p;
-            while (p < n && !is_html_space(html[p]) && html[p] != '=' && html[p] != '>' &&
-                   html[p] != '/')
-                ++p;
-            if (p == name_begin) {  // a stray '=': skip it
-                ++p;
-                continue;
-            }
-            std::string name = html_lower.substr(name_begin, p - name_begin);
-            size_t q = p;
-            while (q < n && is_html_space(html[q])) ++q;
-            if (q >= n || html[q] != '=') {
-                // A value-less attribute (`async`); it carries no value.
-                continue;
-            }
-            p = q + 1;
-            while (p < n && is_html_space(html[p])) ++p;
-            std::string value;
-            if (p < n && (html[p] == '"' || html[p] == '\'')) {
-                const char quote = html[p++];
-                auto end = html.find(quote, p);
-                if (end == std::string::npos) end = n;
-                value = html.substr(p, end - p);
-                p = end == n ? n : end + 1;
-            } else {
-                const size_t value_begin = p;
-                while (p < n && !is_html_space(html[p]) && html[p] != '>') ++p;
-                value = html.substr(value_begin, p - value_begin);
-                if (value.empty()) continue;  // `src= >`: no value
-            }
-            bool seen = false;
-            for (const auto& kv : el.attrs) seen = seen || kv.first == name;
-            if (!seen) el.attrs.emplace_back(std::move(name), std::move(value));
+        const size_t name_begin = p;
+        while (p < n && !is_html_space(html[p]) && html[p] != '/' && html[p] != '>') ++p;
+        const std::string name = html_lower.substr(name_begin, p - name_begin);
+        std::vector<std::pair<std::string, std::string>> attrs;
+        const size_t after = parse_start_tag_attrs(html, html_lower, p, attrs);
+        if (after == std::string::npos) break;  // unterminated tag
+        i = after;
+        if (end_tag) continue;
+        if (name == "script") {
+            ScriptElement el;
+            el.attrs = std::move(attrs);
+            el.body_begin = after;
+            auto body_end = find_end_tag(html, html_lower, "script", after);
+            el.body_end = body_end == std::string::npos ? n : body_end;
+            i = el.body_end;
+            out.push_back(std::move(el));
+        } else if (raw_text_elements.count(name)) {
+            auto body_end = find_end_tag(html, html_lower, name, after);
+            if (body_end == std::string::npos) break;
+            i = body_end;
         }
-        if (!closed) break;  // unterminated start tag
-        el.body_begin = p;
-        auto body_end = html_lower.find("</script", p);
-        el.body_end = body_end == std::string::npos ? n : body_end;
-        i = el.body_end;
-        out.push_back(std::move(el));
     }
     return out;
 }

@@ -50,9 +50,16 @@ bool contains(const std::vector<std::string>& list, const std::string& value) {
     return std::find(list.begin(), list.end(), value) != list.end();
 }
 
-std::string lower(std::string text) {
-    for (auto& c : text) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return text;
+// The html-script-type clause's normalization (match_clause in
+// import_detect.cpp): surrounding whitespace trimmed, then lowercased, so a
+// type the detector matched is never reported as a change.
+std::string script_type_key(const std::string& text) {
+    auto first = text.find_first_not_of(" \t\r\n\f");
+    if (first == std::string::npos) return {};
+    auto last = text.find_last_not_of(" \t\r\n\f");
+    std::string key = text.substr(first, last - first + 1);
+    for (auto& c : key) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return key;
 }
 
 // ECMAScript search, the html-script-src clause's semantics; an invalid
@@ -177,8 +184,10 @@ NewFormatReport build_new_format_report(const ImportsManifest& manifest,
                     for (const auto& tok : cl.any_of) add_distinct(known_tokens, tok);
                 if (cl.kind == FingerprintClause::Kind::html_script_src && !cl.regex.empty())
                     add_distinct(src_regexes, cl.regex);
-                if (cl.kind == FingerprintClause::Kind::html_script_type && !cl.value.empty())
-                    add_distinct(known_types, lower(cl.value));
+                if (cl.kind == FingerprintClause::Kind::html_script_type) {
+                    auto key = script_type_key(cl.value);
+                    if (!key.empty()) add_distinct(known_types, key);
+                }
             }
         }
     }
@@ -210,7 +219,10 @@ NewFormatReport build_new_format_report(const ImportsManifest& manifest,
 
     // Script types against the html-script-type values, both ways.
     std::vector<std::string> types;
-    for (const auto& type : snap.script_types) add_distinct(types, lower(type));
+    for (const auto& type : snap.script_types) {
+        auto key = script_type_key(type);
+        if (!key.empty()) add_distinct(types, key);
+    }
     for (const auto& type : known_types) {
         if (!contains(types, type)) add_distinct(r.type_removals, type);
     }

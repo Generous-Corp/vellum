@@ -286,6 +286,55 @@ TEST_CASE("snapshot_input scrapes script attributes and frontmatter edge cases",
     REQUIRE(det::match_clause(key_clause, design));
 }
 
+TEST_CASE("snapshot_input ends a script body only at a complete end tag",
+          "[import-detect]") {
+    ScratchDir scratch("script-end-tag");
+
+    // `</scriptish>` inside a JavaScript string does not close the script, so
+    // the fake start tag after it is script text, not an element. A real end
+    // tag may carry whitespace or a '/' after its name.
+    write_text(scratch.path / "page.html", R"HTML(
+<script>const example = "</scriptish><script src='/fake.js' type='fake'>";</script>
+<script src="/assets/after-real-end.js"></SCRIPT >
+<script src="/assets/slash-end.js"></script/>
+<script src="/assets/last.js"></script>
+)HTML");
+
+    auto snap = det::snapshot_input(scratch.path / "page.html");
+    REQUIRE(snap.script_srcs.size() == 3);
+    REQUIRE(snap.script_srcs[0] == "/assets/after-real-end.js");
+    REQUIRE(snap.script_srcs[1] == "/assets/slash-end.js");
+    REQUIRE(snap.script_srcs[2] == "/assets/last.js");
+    REQUIRE(snap.script_types.empty());
+}
+
+TEST_CASE("snapshot_input reads script markup only where HTML would",
+          "[import-detect]") {
+    ScratchDir scratch("script-contexts");
+
+    // Script-like text in another tag's quoted attribute, or inside a
+    // raw-text element, is not a script element.
+    write_text(scratch.path / "page.html", R"HTML(
+<!doctype html>
+<div data-example="<script src='https://cdn.tailwindcss.com'></script>"></div>
+<img alt='<script src="/in-alt.js">'>
+<textarea><script src="/in-textarea.js"></script></textarea>
+<style>/* <script src="/in-style.js"></script> */</style>
+<title><script src="/in-title.js"></title>
+<p>1 < 2 and <b>bold</b></p>
+<script src="/assets/real.js" type="module"></script>
+<TEXTAREA rows=2></textareaish><script src="/still-text.js"></script></TEXTAREA >
+<script src="/assets/after.js"></script>
+)HTML");
+
+    auto snap = det::snapshot_input(scratch.path / "page.html");
+    REQUIRE(snap.script_srcs.size() == 2);
+    REQUIRE(snap.script_srcs[0] == "/assets/real.js");
+    REQUIRE(snap.script_srcs[1] == "/assets/after.js");
+    REQUIRE(snap.script_types.size() == 1);
+    REQUIRE(snap.script_types[0] == "module");
+}
+
 TEST_CASE("snapshot_input reads every tailwind.config key spelling",
           "[import-detect]") {
     ScratchDir scratch("tailwind-keys");

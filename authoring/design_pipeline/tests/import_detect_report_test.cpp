@@ -158,6 +158,20 @@ TEST_CASE("the report diffs script srcs and script types both ways", "[import-de
     CHECK(json.find("\"fingerprint-removals\": [\n") != std::string::npos);
 }
 
+TEST_CASE("the report compares script types the way the matcher does", "[import-detect]") {
+    // match_clause trims and lowercases html-script-type values, so a padded
+    // type it matched is not a change, on either the manifest or input side.
+    auto m = manifest({source("tool", {format("1", {
+        type_clause(" Text/Babel "), type_clause("module")})})});
+    det::InputSnapshot snap;
+    snap.script_types = {" module ", "text/babel", "  "};
+    auto closest = det::detect(m, snap);
+    REQUIRE(closest.source == "tool");
+    auto report = det::build_new_format_report(m, snap, closest);
+    CHECK(report.type_additions.empty());
+    CHECK(report.type_removals.empty());
+}
+
 TEST_CASE("a category the closest format does not use is still reported", "[import-detect]") {
     // The closest format fingerprints only script types; the input's Tailwind
     // tokens and script srcs are all new and must all be listed.
