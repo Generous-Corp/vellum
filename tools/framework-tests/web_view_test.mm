@@ -252,6 +252,25 @@ FRAMEWORK_TEST(live_panel_becomes_ready_and_evaluates) {
     CHECK(!thrown.second.empty() && thrown.second != "timeout");
 }
 
+FRAMEWORK_TEST(replacing_the_page_fails_pending_evaluations) {
+    auto panel = ready_panel();
+    CHECK(panel != nullptr);
+    if (!panel)
+        return;
+    bool settled = false;
+    std::string error;
+    // A promise that never resolves stays pending until the page is replaced.
+    panel->evaluate_js("new Promise(function(){})",
+                       [&](const std::string&, const std::string& err) {
+                           settled = true;
+                           error = err;
+                       });
+    CHECK(!settled);
+    panel->set_html("<!doctype html><html><body data-page=\"replaced\"></body></html>");
+    CHECK(settled);
+    CHECK(!error.empty());
+}
+
 FRAMEWORK_TEST(initial_html_shows_before_later_content) {
     WebViewOptions options;
     options.initial_html = "<!doctype html><html><body data-phase=\"initial\">loading</body></html>";

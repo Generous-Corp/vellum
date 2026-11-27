@@ -550,11 +550,14 @@ public:
     }
 
     void navigate(const std::string& url) override {
-        if (webview_) webview_->navigate(url);
+        if (!webview_) return;
+        fail_pending_evals("page replaced before the evaluation completed");
+        webview_->navigate(url);
     }
 
     void set_html(const std::string& html) override {
         if (!webview_) return;
+        fail_pending_evals("page replaced before the evaluation completed");
         webview_->setHTML(html);
     }
 
@@ -610,6 +613,20 @@ public:
     }
 
 private:
+    // Replacing the document destroys the JS context that would have called
+    // __pulpEvalResult, so settle every outstanding evaluation with an error
+    // instead of retaining its callback forever.
+    void fail_pending_evals(const std::string& error) {
+        std::unordered_map<std::string, EvalCallback> pending;
+        {
+            std::lock_guard lock(mutex_);
+            pending.swap(pending_eval_);
+        }
+        for (auto& entry : pending) {
+            if (entry.second) entry.second("null", error);
+        }
+    }
+
     std::string next_eval_request_id() {
         auto value = eval_counter_.fetch_add(1, std::memory_order_relaxed);
         return "eval-" + std::to_string(value);
