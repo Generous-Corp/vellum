@@ -217,11 +217,14 @@ void register_text_accessibility_node(const TextAccessibilityNode& node) {
     // Idempotent on id: operator[] + assignment so a second register
     // with the same id replaces the first. Same contract as the
     // default backend.
-    r.nodes[node.id] = node;
-
 #if TARGET_OS_OSX
     NSString* nsId = [[NSString alloc] initWithUTF8String:node.id.c_str()];
     VellumMirrorTextAccessibilityElement* el = [r.elements objectForKey:nsId];
+    auto previous = r.nodes.find(node.id);
+    if (el && previous != r.nodes.end() && previous->second.host_handle != node.host_handle) {
+        [r.elements removeObjectForKey:nsId];
+        el = nil;
+    }
     BOOL inserted = NO;
     if (!el) {
         el = [[VellumMirrorTextAccessibilityElement alloc] init];
@@ -260,6 +263,7 @@ void register_text_accessibility_node(const TextAccessibilityNode& node) {
 
     [nsId release];
 #endif
+    r.nodes[node.id] = node;
 }
 
 void unregister_text_accessibility_node(std::string_view id) {
@@ -294,6 +298,22 @@ std::vector<TextAccessibilityNode> snapshot_accessibility_nodes() {
 // NSAccessibilityElement*)` cast on the test side; the registry
 // continues to own the +1 retain.
 #if TARGET_OS_OSX
+// The array retains its elements while ownership is checked under the same
+// lock as registration and removal. A host may safely use it after unlocking.
+extern "C" NSArray* vellum_text_accessibility_elements_for_host_macos(const void* host) {
+    auto& r = registry();
+    std::lock_guard<std::mutex> lock(r.mu);
+    NSMutableArray* elements = [NSMutableArray array];
+    for (const auto& [key, node] : r.nodes) {
+        if (!host || node.host_handle != host) continue;
+        NSString* nsId = [[NSString alloc] initWithUTF8String:key.c_str()];
+        id element = [r.elements objectForKey:nsId];
+        if (element) [elements addObject:element];
+        [nsId release];
+    }
+    return elements;
+}
+
 extern "C" void* vellum_text_accessibility_lookup_macos(const char* id_utf8) {
     if (!id_utf8) return nullptr;
     auto& r = registry();
