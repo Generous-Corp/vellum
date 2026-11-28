@@ -212,7 +212,11 @@ TEST_CASE("snapshot_input scrapes script attributes and frontmatter edge cases",
 <!doctype html>
 <SCRIPT SRC='/assets/app.js' TYPE='module'></SCRIPT>
 <script data-src="/ignored.js" src=/assets/inline.js></script>
-<script src = "/spaced-equals-ignored.js"></script>
+<script src = "/spaced-equals.js"></script>
+<script type
+=
+"text/spaced"></script>
+<!-- <script src="/commented.js" type="commented"></script> -->
 <scriptish src="/not-a-script.js"></scriptish>
 <script type=text/babel></script>
 <script>
@@ -226,12 +230,14 @@ TEST_CASE("snapshot_input scrapes script attributes and frontmatter edge cases",
     auto html = det::snapshot_input(scratch.path / "case.html");
     REQUIRE_FALSE(html.is_directory);
     REQUIRE(html.filename == "case.html");
-    REQUIRE(html.script_srcs.size() == 2);
+    REQUIRE(html.script_srcs.size() == 3);
     REQUIRE(html.script_srcs[0] == "/assets/app.js");
     REQUIRE(html.script_srcs[1] == "/assets/inline.js");
-    REQUIRE(html.script_types.size() == 2);
+    REQUIRE(html.script_srcs[2] == "/spaced-equals.js");
+    REQUIRE(html.script_types.size() == 3);
     REQUIRE(html.script_types[0] == "module");
-    REQUIRE(html.script_types[1] == "text/babel");
+    REQUIRE(html.script_types[1] == "text/spaced");
+    REQUIRE(html.script_types[2] == "text/babel");
     REQUIRE(std::find(html.tailwind_tokens.begin(),
                       html.tailwind_tokens.end(),
                       "surface-container") != html.tailwind_tokens.end());
@@ -484,3 +490,24 @@ TEST_CASE("json-key-equals follows dotted paths like the figma-plugin clauses",
 }
 
 int main() { return import_detect_test::run_all(); }
+
+TEST_CASE("snapshot_input reads spaced attributes and ignores commented script tags",
+          "[import-detect]") {
+    ScratchDir scratch("snapshot-comments");
+
+    write_text(scratch.path / "active.html",
+               "<script type = \"__bundler/template\"></script>\n"
+               "<script type= '__bundler/manifest'></script>\n");
+    auto active = det::snapshot_input(scratch.path / "active.html");
+    REQUIRE(active.script_types.size() == 2);
+    REQUIRE(active.script_types[0] == "__bundler/template");
+    REQUIRE(active.script_types[1] == "__bundler/manifest");
+
+    write_text(scratch.path / "commented.html",
+               "<!-- <script type=\"__bundler/template\"></script> -->\n"
+               "<p>text</p>\n"
+               "<!-- unterminated <script type=\"__bundler/manifest\"></script>\n");
+    auto commented = det::snapshot_input(scratch.path / "commented.html");
+    REQUIRE(commented.script_types.empty());
+    REQUIRE(commented.script_srcs.empty());
+}
