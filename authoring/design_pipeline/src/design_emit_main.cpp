@@ -15,6 +15,9 @@
 #include <vellum/authoring/design_pipeline.hpp>
 #include <vellum/view/design_ir_io.hpp>
 
+#include <cstdio>
+#include <exception>
+#include <utility>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -121,6 +124,7 @@ bool write_file(const fs::path& path, const std::string& content) {
     if (path.has_parent_path()) fs::create_directories(path.parent_path(), ec);
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     out << content;
+    out.close();
     return static_cast<bool>(out);
 }
 
@@ -263,8 +267,8 @@ int run(const Options& options) {
         // Baked C++ embeds asset paths, so absolute ones are copied beside the
         // generated source first.
         std::string localization_error;
-        if (!options.dry_run &&
-            !da::localize_ir_assets(ir, paths.source.string(), &localization_error))
+        if (!da::localize_ir_assets(ir, paths.source.string(), &localization_error,
+                                    fs::absolute(options.input).parent_path(), options.dry_run))
             return report(options, 1, "asset_localization_failed", localization_error, {}, {});
         emit_options.cpp.header_filename = paths.include_name;
         emit_options.cpp.include_comments = options.include_comments;
