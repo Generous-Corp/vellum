@@ -37,6 +37,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def _is_partial_clone(root: Path) -> bool:
+    configured = False
     for key in ("extensions.partialclone", "remote.origin.promisor"):
         done = subprocess.run(
             ["git", "-C", str(root), "config", "--get", key],
@@ -45,8 +46,20 @@ def _is_partial_clone(root: Path) -> bool:
             text=True,
         )
         if done.returncode == 0 and done.stdout.strip() not in ("", "false"):
-            return True
-    return False
+            configured = True
+            break
+    if not configured:
+        return False
+
+    objects = subprocess.run(
+        ["git", "-C", str(root), "rev-list", "--objects", "--all", "--missing=print"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return objects.returncode != 0 or any(
+        line.startswith("?") for line in objects.stdout.splitlines()
+    )
 
 
 class Tests(unittest.TestCase):
@@ -60,8 +73,75 @@ class Tests(unittest.TestCase):
             raise AssertionError(
                 f"{ROOT} is a partial (filtered) clone; these tests need every "
                 "tree and blob. Use a full clone, or run "
-                "'git fetch --refetch --no-filter origin' first."
+                "'git fetch --refetch --no-filter origin' first so missing "
+                "objects are restored."
             )
+
+    def _partial_clone_fixture(self) -> Path:
+        temporary_directory = tempfile.TemporaryDirectory(
+            prefix="authority-partial-clone-", dir=ROOT.parent
+        )
+        self.addCleanup(temporary_directory.cleanup)
+        temporary = Path(temporary_directory.name)
+        origin = temporary / "origin.git"
+        root = temporary / "checkout"
+        subprocess.run(["git", "init", "--bare", str(origin)], check=True, capture_output=True)
+        subprocess.run(["git", "init", str(root)], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(root), "config", "user.email", "tests@example.com"], check=True)
+        subprocess.run(["git", "-C", str(root), "config", "user.name", "authority tests"], check=True)
+        subprocess.run(["git", "-C", str(root), "remote", "add", "origin", str(origin)], check=True)
+        payload = root / "payload.txt"
+        payload.write_text("payload\n")
+        subprocess.run(["git", "-C", str(root), "add", "payload.txt"], check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "-m", "fixture"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(root), "push", "origin", "HEAD:main"], check=True, capture_output=True)
+        blob = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD:payload.txt"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        object_path = root / ".git" / "objects" / blob[:2] / blob[2:]
+        object_path.unlink()
+        subprocess.run(
+            ["git", "-C", str(root), "config", "extensions.partialclone", "origin"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(root), "config", "remote.origin.promisor", "true"],
+            check=True,
+        )
+        return root
+
+    def test_full_clone_is_not_partial(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="authority-full-clone-", dir=ROOT.parent
+        ) as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", str(root)], check=True, capture_output=True)
+            self.assertFalse(_is_partial_clone(root))
+
+    def test_partial_clone_with_missing_object_is_partial(self) -> None:
+        root = self._partial_clone_fixture()
+        self.assertTrue(_is_partial_clone(root))
+
+    def test_refetch_remedy_clears_partial_clone_predicate(self) -> None:
+        root = self._partial_clone_fixture()
+        subprocess.run(
+            ["git", "-C", str(root), "fetch", "--refetch", "--no-filter", "origin"],
+            check=True,
+            capture_output=True,
+        )
+        self.assertFalse(_is_partial_clone(root))
+
+    def test_set_up_class_reports_partial_clone_diagnostic(self) -> None:
+        root = self._partial_clone_fixture()
+        with mock.patch(__name__ + ".ROOT", root):
+            with self.assertRaisesRegex(
+                AssertionError,
+                r"partial \(filtered\) clone.*git fetch --refetch --no-filter origin",
+            ):
+                type(self).setUpClass()
 
     def exact_boundary_acknowledgement(
         self,
