@@ -15,6 +15,7 @@
 #import <Cocoa/Cocoa.h>
 
 #include <cstdio>
+#include <memory>
 #include <cstdlib>
 #include <string>
 #include <string_view>
@@ -104,6 +105,10 @@ int main(int argc, char** argv) {
         vellum::view::Point last_press{};
     } probe;
     probe.set_bounds({0, 0, 64, 64});
+    auto named_button = std::make_unique<vellum::view::View>();
+    named_button->set_access_role(vellum::view::View::AccessRole::button);
+    named_button->set_access_label("Bypass");
+    probe.add_child(std::move(named_button));
     // The plug-in owns a bundle registration. This records the gpu-runtime
     // version alongside the process-wide Dawn identity before creating a GPU
     // host, so another bundle built against a different runtime is refused.
@@ -153,6 +158,16 @@ int main(int argc, char** argv) {
                 charactersIgnoringModifiers:@"\r" isARepeat:NO keyCode:36];
     [host_view keyDown:ev];
     if (probe.keys + global_keys < 1) return fail("an AppKit key event did not reach the View");
+
+    // The editor view is one accessibility group whose children are the View
+    // tree's accessible elements, so a screen reader reaches a hosted plug-in UI.
+    NSArray* accessible = host_view.accessibilityChildren;
+    if (!host_view.isAccessibilityElement ||
+        ![host_view.accessibilityRole isEqualToString:NSAccessibilityGroupRole])
+        return fail("the editor view is not an accessibility group");
+    if (accessible.count != 1U || ![[accessible[0] accessibilityLabel] isEqualToString:@"Bypass"] ||
+        ![[accessible[0] accessibilityRole] isEqualToString:NSAccessibilityButtonRole])
+        return fail("the editor view did not expose its named button");
 
     using vellum::view::Point;
     using vellum::view::Rect;

@@ -25,6 +25,12 @@ def touch(root: Path, relative: str) -> Path:
 
 
 class NativeConfigureOptions(unittest.TestCase):
+    def test_installed_baked_emitter_enters_executable_normalization(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            bin_dir = Path(temporary) / "bin"
+            emitter = touch(bin_dir, "vellum-design-emit")
+            self.assertIn(emitter, builder.executables_to_normalize(bin_dir))
+
     def test_native_build_enables_the_rmlui_package_and_its_vellum_renderer(self):
         options = builder.native_configure_options(Path("/locked/skia.tar.gz"))
         self.assertIn("-DVELLUM_ENABLE_RMLUI=ON", options)

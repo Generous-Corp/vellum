@@ -806,6 +806,64 @@ if(VELLUM_BUILD_TESTS)
                 "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
                 "-DTEST_CONFIG=$<CONFIG>"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunInstallConsumer.cmake")
+        # Build-time script bytecode through the installed helper, generator
+        # and encoder, registered with the installed view-script unit.
+        add_test(NAME vellum.mirror-js-bytecode-consumer
+            COMMAND "${CMAKE_COMMAND}"
+                "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                "-DVELLUM_INSTALL_CONSUMER_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tools/mirror/js-bytecode-consumer"
+                "-DVELLUM_INSTALL_CONSUMER_WORK=mirror-js-bytecode-consumer-test"
+                "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
+                "-DTEST_CONFIG=$<CONFIG>"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunInstallConsumer.cmake")
+        add_test(NAME vellum.mirror-js-bytecode-collision
+            COMMAND "${CMAKE_COMMAND}"
+                "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunJsBytecodeCollision.cmake")
+        add_test(NAME vellum.mirror-js-bytecode-cross-configure
+            COMMAND "${CMAKE_COMMAND}"
+                "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                "-DVELLUM_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunJsBytecodeCrossConfigure.cmake")
+        # vellum_add_js_bytecode() end to end for the framework test that checks
+        # its blobs: the generator is built from the build tree's unit include
+        # roots, like the framework tests, and runs from the build tree.
+        set(VELLUM_JS_BYTECODE_GENERATOR_SOURCE
+            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/vellum_js_bytecode_main.cpp")
+        set(VELLUM_JS_BYTECODE_ENCODER
+            "${CMAKE_CURRENT_SOURCE_DIR}/framework/tools/cmake/scripts/encode_binary_data.py")
+        set(VELLUM_JS_BYTECODE_EXTRA_INCLUDES
+            ${_vellum_mirror_public_includes}
+            "${VELLUM_MIRROR_BUILD_INFO_DIR}"
+            "${VELLUM_MIRROR_CHOC_ROOT}")
+        if(TARGET vellum-tracing)
+            set(VELLUM_JS_BYTECODE_EXTRA_LINK_LIBRARIES vellum-tracing)
+        endif()
+        include(cmake/VellumJsBytecode.cmake)
+        set(_vellum_js_bytecode_fixture
+            "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/js-bytecode/bytecode_fixture.js")
+        configure_file("${_vellum_js_bytecode_fixture}"
+            "${CMAKE_CURRENT_BINARY_DIR}/js-bytecode/bytecode_bridge_fixture.js" COPYONLY)
+        vellum_add_js_bytecode(js_bytecode_embed_fixture
+            SOURCES "${_vellum_js_bytecode_fixture}")
+        vellum_add_js_bytecode(js_bytecode_embed_bridge_fixture
+            SOURCES "${CMAKE_CURRENT_BINARY_DIR}/js-bytecode/bytecode_bridge_fixture.js"
+            NAMESPACE js_bytecode_embed_fixture
+            WIDGET_BRIDGE_SCRIPT)
+        get_property(_vellum_js_bytecode_generator GLOBAL PROPERTY VELLUM_JS_BYTECODE_GENERATOR_TARGET)
+        if(_vellum_js_bytecode_generator AND TARGET "${_vellum_js_bytecode_generator}")
+            set_target_properties("${_vellum_js_bytecode_generator}" PROPERTIES
+                CXX_STANDARD 20
+                OSX_ARCHITECTURES arm64
+                MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
+            if(TARGET vellum-skia-dawn-provider)
+                set_target_properties("${_vellum_js_bytecode_generator}" PROPERTIES
+                    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-skia-dawn-provider>")
+            endif()
+        endif()
         # Behavior tests of the framework units (ctest label `framework`).
         add_subdirectory(tools/framework-tests)
         if(TARGET yogacore)
@@ -912,6 +970,19 @@ install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/VellumConfigVersion.cmake"
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/Vellum")
 include(cmake/VellumWebCompat.cmake)
+# Consumer helper that embeds build-time QuickJS bytecode. The generator source
+# includes mirrored headers, so it installs under the mirror scope with the
+# encoder; the helper finds both from the package prefix. A build tree names
+# them through VELLUM_JS_BYTECODE_GENERATOR_SOURCE and VELLUM_JS_BYTECODE_ENCODER.
+install(FILES cmake/VellumJsBytecode.cmake
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/Vellum/js-bytecode")
+install(FILES
+    cmake/vellum_js_bytecode_main.cpp
+    framework/tools/cmake/scripts/encode_binary_data.py
+    DESTINATION "mirror/share/js-bytecode")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    cmake/VellumJsBytecode.cmake
+    cmake/vellum_js_bytecode_main.cpp)
 install(FILES LICENSE.md NOTICE.md DEPENDENCIES.md
     DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/Vellum")
 if(VELLUM_INSTALL_THREEJS)
