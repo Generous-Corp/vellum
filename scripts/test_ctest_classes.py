@@ -278,5 +278,118 @@ class ClassifierConfigureTest(unittest.TestCase):
         self.assertIn("UNLISTED TEST vellum.own", result.stderr)
 
 
+WORKFLOW = ROOT / ".github/workflows/gpu-macos.yml"
+FULL_STEP = "      - name: Run native, capture, and sterile-consumer tests\n"
+CHEAP_STEP = "      - name: Run the pr-fast tests\n"
+
+
+def workflow_step(name: str) -> str:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    return text.split(name, 1)[1].split("\n      - name: ", 1)[0]
+
+
+def split_labels() -> tuple[str, str]:
+    """The two ctest -L expressions the parallel full proof splits the tests by."""
+    step = workflow_step(FULL_STEP)
+    gpu = re.search(r"gpu_label='([^']+)'", step)
+    other = re.search(r"other_label='([^']+)'", step)
+    assert gpu and other, "the workflow no longer declares gpu_label and other_label"
+    return gpu.group(1), other.group(1)
+
+
+class ParallelSplitTest(unittest.TestCase):
+    """The parallel ctest split drops no test and runs none twice."""
+
+    @HAS_MANIFEST
+    def test_the_two_label_sets_are_disjoint_and_cover_every_class(self) -> None:
+        gpu, other = split_labels()
+        classes = load_manifest()
+        by_gpu = [name for name in CLASSES if re.search(gpu, name)]
+        by_other = [name for name in CLASSES if re.search(other, name)]
+        self.assertEqual(by_gpu, ["gpu"])
+        self.assertEqual(sorted(by_other), ["pr-fast", "slow"])
+        self.assertEqual(set(by_gpu) & set(by_other), set())
+        self.assertEqual(set(by_gpu) | set(by_other), set(CLASSES))
+        # So the union of the two runs is exactly the manifest's test set.
+        union = {test for name in by_gpu + by_other for test in classes[name]}
+        self.assertEqual(union, set(classes_by_test(classes)))
+        self.assertEqual(sum(len(classes[name]) for name in CLASSES), len(union))
+
+    def test_a_label_expression_that_misses_or_doubles_a_class_is_caught(self) -> None:
+        # Negative control: the same property check, on a split that leaves
+        # slow out, and on one that counts pr-fast twice.
+        for gpu, other, problem in (("^gpu$", "^pr-fast$", "dropped"), ("^gpu$|^pr-fast$", "^(pr-fast|slow)$", "doubled")):
+            with self.subTest(problem=problem):
+                a = {name for name in CLASSES if re.search(gpu, name)}
+                b = {name for name in CLASSES if re.search(other, name)}
+                self.assertTrue(a & b or (a | b) != set(CLASSES))
+
+    @unittest.skipUnless(CMAKE, "cmake is required")
+    def test_workflow_runs_every_test_once_and_falls_back_when_labels_gap(self) -> None:
+        gpu, other = split_labels()
+        step = workflow_step(FULL_STEP)
+        body = step.split("        run: |\n", 1)[1]
+        script = "\n".join(line[10:] for line in body.splitlines())
+        script = script.split("./build-gpu/apps/gpu-native", 1)[0]
+        tmp = Path(tempfile.mkdtemp(prefix="vellum-split-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+
+        counter = iter(range(1000))
+
+        def run(setting: str, classes: dict[str, list[str]], tests: list[str],
+                failing: str = "") -> tuple[int, str, str]:
+            source = tmp / f"src-{next(counter)}"
+            (source / "scripts").mkdir(parents=True)
+            (source / "cmake").mkdir()
+            shutil.copy(MODULE, source / "cmake" / "VellumTestClasses.cmake")
+            (source / "scripts" / "ctest_classes.json").write_text(json.dumps(
+                {"schema": "vellum.ctest-classes.v1", "classes": classes}))
+            (source / "CMakeLists.txt").write_text(
+                "cmake_minimum_required(VERSION 3.24)\nproject(vellum NONE)\nenable_testing()\n"
+                + "".join(
+                    f"add_test(NAME {t} COMMAND ${{CMAKE_COMMAND}} -E "
+                    + ("false" if t == failing else f"echo ran-{t}") + ")\n"
+                    for t in tests)
+                + "include(cmake/VellumTestClasses.cmake)\n"
+                'vellum_apply_test_classes("${CMAKE_CURRENT_SOURCE_DIR}/scripts/ctest_classes.json")\n')
+            work = tmp / f"work-{source.name}"
+            work.mkdir()
+            subprocess.run([CMAKE, "-S", str(source), "-B", str(work / "build-gpu")], check=True,
+                           capture_output=True, env={**os.environ, "VELLUM_UNLISTED_TEST_POLICY": "fail"})
+            result = subprocess.run(
+                ["bash", "-e", "-c", script], cwd=work, capture_output=True, text=True,
+                env={**os.environ, "CTEST_PARALLEL_SETTING": setting, "RUNNER_TEMP": str(work)})
+            return result.returncode, result.stdout, result.stderr
+
+        classes = {"pr-fast": ["t.a", "t.b"], "gpu": ["t.c", "t.d"], "slow": ["t.e"]}
+        tests = ["t.a", "t.b", "t.c", "t.d", "t.e"]
+        self.assertEqual((gpu, other), ("^gpu$", "^(pr-fast|slow)$"))
+        passed = lambda out: re.search(r"100% tests passed.* out of 5", out)  # noqa: E731
+        for setting in ("split", "on"):
+            code, out, err = run(setting, classes, tests)
+            self.assertEqual(code, 0, out + err)
+            self.assertNotIn("running them serially", out + err)
+            self.assertIn("ctest gpu tests", out)  # control: the split path ran
+            # Every test ran exactly once, across the two processes.
+            for name in tests:
+                self.assertEqual(len(re.findall(rf"\b{re.escape(name)}\b \.+\s+Passed", out)), 1, name)
+        for setting in ("off", "", "bogus"):
+            code, out, err = run(setting, classes, tests)
+            self.assertEqual(code, 0, out + err)
+            self.assertTrue(passed(out), out)
+            self.assertNotIn("ctest gpu tests", out)
+        # A test the labels do not reach (no `gpu` class left) falls back to the serial run.
+        gap = {"pr-fast": tests, "gpu": [], "slow": []}
+        code, out, err = run("split", gap, tests)
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("running them serially", out + err)
+        self.assertTrue(passed(out), out)
+        # A failing test in either process fails the step.
+        for victim in ("t.c", "t.e"):
+            code, out, err = run("split", classes, tests, failing=victim)
+            self.assertNotEqual(code, 0, out + err)
+            self.assertIn("ctest exited", out + err)
+
+
 if __name__ == "__main__":
     unittest.main()

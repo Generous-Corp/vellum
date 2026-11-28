@@ -7,6 +7,16 @@ on:
         description: Extra installed HTML imports to time (measurement runs only)
         required: false
         default: '0'
+      ctest_parallel:
+        description: >-
+          Run ctest in parallel: `split` runs the gpu-labelled tests beside the
+          pr-fast and slow ones in the full proof; `on` also runs the cheap
+          lane's pr-fast tests with -j4. Default `off` (the repository variable
+          VELLUM_CTEST_PARALLEL sets the same levels for every other event).
+        required: false
+        type: choice
+        options: ['off', 'split', 'on']
+        default: 'off'
   pull_request:
   # Merge-queue builds: the queue merges main's tip with the PR head on a
   # gh-readonly-queue/* ref and needs every required check on that commit.
@@ -554,7 +564,14 @@ jobs:
 
       - name: Run the pr-fast tests
         if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap == 'true'
-        run: ctest --test-dir build-cheap -L pr-fast --no-tests=error --output-on-failure
+        env:
+          CTEST_PARALLEL_SETTING: ${{ (github.event_name == 'workflow_dispatch' && inputs.ctest_parallel) || vars.VELLUM_CTEST_PARALLEL || 'off' }}
+        run: |
+          # Only the level `on` runs the pr-fast tests in parallel; any other
+          # value, including an unknown one, keeps the serial run.
+          parallel=""
+          if [ "$CTEST_PARALLEL_SETTING" = on ]; then parallel=yes; fi
+          ctest --test-dir build-cheap -L pr-fast --no-tests=error --output-on-failure ${parallel:+-j4}
 
       # Re-derive the verdict from scratch: the cheap lane may stand in for the
       # full proof only on a pull request, for a change the base's classifier
@@ -742,9 +759,57 @@ jobs:
 
       - name: Run native, capture, and sterile-consumer tests
         if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
+        env:
+          CTEST_PARALLEL_SETTING: ${{ (github.event_name == 'workflow_dispatch' && inputs.ctest_parallel) || vars.VELLUM_CTEST_PARALLEL || 'off' }}
         run: |
-          VELLUM_MIRROR_LIVE_GPU=1 \
+          set -uo pipefail
+          export VELLUM_MIRROR_LIVE_GPU=1
+          # The levels `split` and `on` run two ctest processes at once: the
+          # gpu-labelled tests (one at a time, as before) beside the pr-fast
+          # and slow ones (also one at a time). The labels are the classes of
+          # scripts/ctest_classes.json, disjoint and complete by construction,
+          # and the counts are checked here too: any gap runs the serial pass.
+          gpu_label='^gpu$'
+          other_label='^(pr-fast|slow)$'
+          serial=true
+          if [ "$CTEST_PARALLEL_SETTING" = split ] || [ "$CTEST_PARALLEL_SETTING" = on ]; then
+            count() { ctest --test-dir build-gpu -N "$@" | sed -n 's/^Total Tests: //p'; }
+            all="$(count || true)"; gpu="$(count -L "$gpu_label" || true)"
+            other="$(count -L "$other_label" || true)"
+            both="$(count -L "$gpu_label" -L "$other_label" || true)"
+            if [[ "$all" =~ ^[0-9]+$ && "$gpu" =~ ^[0-9]+$ && "$other" =~ ^[0-9]+$ && "$both" =~ ^[0-9]+$ ]] &&
+               [ "$all" -gt 0 ] && [ "$gpu" -gt 0 ] && [ "$other" -gt 0 ] &&
+               [ "$both" -eq 0 ] && [ $(( gpu + other )) -eq "$all" ]; then
+              serial=false
+            else
+              echo "::warning::ctest labels do not partition the tests (all=$all gpu=$gpu other=$other both=$both); running them serially"
+            fi
+          fi
+          if [ "$serial" = true ]; then
             ctest --test-dir build-gpu --output-on-failure
+          else
+            # Each process keeps its own log: both would otherwise write
+            # build-gpu/Testing/Temporary/LastTest.log.
+            ctest --test-dir build-gpu -L "$gpu_label" --no-tests=error --output-on-failure \
+              --output-log "$RUNNER_TEMP/ctest-gpu.log" > "$RUNNER_TEMP/ctest-gpu.out" 2>&1 &
+            gpu_pid=$!
+            ctest --test-dir build-gpu -L "$other_label" --no-tests=error --output-on-failure \
+              --output-log "$RUNNER_TEMP/ctest-other.log" > "$RUNNER_TEMP/ctest-other.out" 2>&1 &
+            other_pid=$!
+            gpu_status=0
+            other_status=0
+            wait "$gpu_pid" || gpu_status=$?
+            wait "$other_pid" || other_status=$?
+            for part in gpu other; do
+              echo "::group::ctest $part tests"
+              cat "$RUNNER_TEMP/ctest-$part.out"
+              echo "::endgroup::"
+            done
+            if [ "$gpu_status" -ne 0 ] || [ "$other_status" -ne 0 ]; then
+              echo "::error::ctest exited $gpu_status (gpu tests) and $other_status (pr-fast and slow tests)"
+              exit 1
+            fi
+          fi
           ./build-gpu/apps/gpu-native/vellum-gpu-native.app/Contents/MacOS/vellum-gpu-native \
             --self-test --capture "$RUNNER_TEMP/vellum-gpu-proof.png" \
             | tee "$RUNNER_TEMP/vellum-gpu-proof.txt"
