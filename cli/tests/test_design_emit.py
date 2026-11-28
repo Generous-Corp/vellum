@@ -10,6 +10,7 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 import signal
 from pathlib import Path
 import subprocess
@@ -21,6 +22,7 @@ REPO = Path(__file__).resolve().parents[2]
 CLI = REPO / "cli" / "vellum_cli.py"
 IR_FIXTURE = REPO / "fixtures/emitter-conformance/keyed-list-18.ir.json"
 LOSSY_FIXTURE = REPO / "fixtures/emitter-conformance/form-controls-08.ir.json"
+FIG_FIXTURE = REPO / "packages/vellum-design-ir/test/fixtures/synthetic.fig"
 PLUGIN_FIXTURE = REPO / "fixtures/emitter-conformance/fidelity-scene-no-display.pulp.json"
 TOOL = os.environ.get("VELLUM_DESIGN_EMIT", "")
 
@@ -323,14 +325,48 @@ class BakedEmitTests(unittest.TestCase):
         self.assertEqual(code, 2, payload)
         self.assertIn("--source-type design-ir", payload["message"])
 
-    def test_local_fig_is_refused_before_the_emitter_runs(self) -> None:
-        fig = self.out / "panel.fig"
-        fig.write_bytes(b"synthetic")
-        code, payload = vellum("--source-type", "figma", str(fig), "--mode", "baked", "--emit", "cpp",
+    @unittest.skipUnless(shutil.which("node"), "decoding a .fig file needs Node")
+    def test_local_fig_emits_the_named_frame(self) -> None:
+        code, payload = vellum("--source-type", "fig", str(FIG_FIXTURE), "--frame", "0:2", "--mode", "baked",
+                               "--emit", "cpp", "--out", str(self.out / "gen" / "ui.cpp"))
+        self.assertEqual(code, 0, payload)
+        source = (self.out / "gen" / "ui.cpp").read_text(encoding="utf-8")
+        self.assertIn("Plugin UI", source)
+
+    @unittest.skipUnless(shutil.which("node"), "decoding a .fig file needs Node")
+    def test_local_fig_emits_swiftui_through_the_figma_source_type(self) -> None:
+        code, payload = vellum("--source-type", "figma", str(FIG_FIXTURE), "--frame", "0:2", "--mode", "baked",
+                               "--emit", "swiftui", "--out", str(self.out / "Plugin.swift"))
+        self.assertEqual(code, 0, payload)
+        self.assertTrue((self.out / "Plugin.swift").is_file())
+
+    def test_local_fig_needs_a_frame(self) -> None:
+        code, payload = vellum("--source-type", "fig", str(FIG_FIXTURE), "--mode", "baked", "--emit", "cpp",
                                "--out", str(self.out / "ui.cpp"))
         self.assertEqual(code, 2, payload)
-        self.assertIn(".fig", payload["message"])
+        self.assertEqual(payload["status"], "invalid_fig_frame")
         self.assertFalse((self.out / "ui.cpp").exists())
+
+    @unittest.skipUnless(shutil.which("node"), "decoding a .fig file needs Node")
+    def test_local_fig_with_an_unknown_frame_writes_nothing(self) -> None:
+        code, payload = vellum("--source-type", "fig", str(FIG_FIXTURE), "--frame", "no such frame",
+                               "--mode", "baked", "--emit", "cpp", "--out", str(self.out / "ui.cpp"))
+        self.assertEqual(code, 2, payload)
+        self.assertEqual(payload["status"], "fig_decode_failed")
+        self.assertIn("frame not found", payload["message"])
+        self.assertFalse((self.out / "ui.cpp").exists())
+
+    def test_page_is_refused_without_a_local_fig(self) -> None:
+        code, payload = vellum("--source-type", "figma-plugin", str(PLUGIN_FIXTURE), "--page", "Page 1",
+                               "--mode", "baked", "--emit", "cpp", "--out", str(self.out / "ui.cpp"))
+        self.assertEqual(code, 2, payload)
+        self.assertIn("--page applies only to a local .fig", payload["message"])
+
+    def test_frame_is_refused_for_a_plugin_envelope(self) -> None:
+        code, payload = vellum("--source-type", "figma-plugin", str(PLUGIN_FIXTURE), "--frame", "0:2",
+                               "--mode", "baked", "--emit", "cpp", "--out", str(self.out / "ui.cpp"))
+        self.assertEqual(code, 2, payload)
+        self.assertIn("--frame", payload["message"])
 
     def test_dry_run_returns_content_and_writes_nothing(self) -> None:
         code, payload = vellum("--source-type", "design-ir", str(IR_FIXTURE), "--mode", "baked",
