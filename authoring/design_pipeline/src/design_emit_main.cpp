@@ -104,7 +104,7 @@ SwiftOutputPaths resolve_swift_output_paths(const std::string& output_file) {
 }
 
 void usage(std::ostream& out) {
-    out << "usage: vellum-design-emit --source-type <design-ir|figma|figma-plugin|pencil|v0|designmd|claude-design>\n"
+    out << "usage: vellum-design-emit --source-type <design-ir|figma|figma-plugin|pencil|v0|designmd|claude-design|html>\n"
            "                          --input <file> --emit <cpp|swiftui> [--output <path>]\n"
            "                          [--dry-run] [--strict-fidelity] [--no-comments]\n"
            "                          [--no-tokens] [--json]\n";
@@ -189,6 +189,7 @@ std::optional<da::DesignSource> pipeline_source(std::string_view name) {
     if (name == "v0") return da::DesignSource::v0_tsx;
     if (name == "designmd") return da::DesignSource::designmd;
     if (name == "claude-design") return da::DesignSource::claude_html;
+    if (name == "html") return da::DesignSource::stitch_html;
     return std::nullopt;
 }
 

@@ -1414,10 +1414,10 @@ def illustrator_command(args: argparse.Namespace) -> dict[str, Any]:
 
 
 BAKED_EMITS = ("cpp", "swiftui")
-BAKED_EMIT_SOURCES = ("design-ir", "figma", "figma-plugin", "pencil", "v0", "designmd", "claude-design")
+BAKED_EMIT_SOURCES = ("design-ir", "figma", "figma-plugin", "pencil", "v0", "designmd", "claude-design", "html")
 # These exports are normally solved in a browser. The baked emitter only has
 # the bounded static parser, so it runs them only when --offline asks for it.
-BAKED_EMIT_OFFLINE_SOURCES = ("claude-design",)
+BAKED_EMIT_OFFLINE_SOURCES = ("claude-design", "html")
 DESIGN_EMIT_NAME = "vellum-design-emit.exe" if os.name == "nt" else "vellum-design-emit"
 
 

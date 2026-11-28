@@ -101,8 +101,8 @@ vellum import --source-type design-ir ./panel.ir.json --mode baked --emit cpp --
 - **SwiftUI** writes `<Name>.swift`, `<Name>Theme.swift` and
   `<Name>.bindings.json`. The default is `ImportedPulpView.swift`.
 - Sources are `design-ir`, `figma` (JSON, not a local `.fig`), `figma-plugin`,
-  `pencil`, `v0` and, with `--offline`, `claude-design`. A Claude Design export
-  is solved in a browser by default, which the baked emit does not run;
+  `pencil`, `v0` and, with `--offline`, `claude-design` and `html`. These
+  exports are solved in a browser by default, which the baked emit does not run;
   `--offline` runs the bounded static parser instead (visible element text only,
   no CSS layout or runtime DOM), and the plain form exits 2. A
   DESIGN.md file is a token spec and is refused with exit 2. For JSX, import with
