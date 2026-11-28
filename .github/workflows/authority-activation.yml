@@ -22,6 +22,7 @@ concurrency:
 jobs:
   authority-active:
     name: authority-active
+    environment: app-key
     runs-on: ubuntu-latest
     steps:
       - name: Check out trusted Vellum controls

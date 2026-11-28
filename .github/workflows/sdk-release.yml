@@ -337,6 +337,7 @@ jobs:
       (startsWith(github.event.workflow_run.head_branch, 'v') ||
         startsWith(github.event.workflow_run.head_branch, 'dry-run/v')) &&
       github.event.workflow_run.conclusion == 'success'
+    environment: app-key
     runs-on: ${{ fromJSON(vars.VELLUM_AUTHORITY_RUNS_ON_JSON || '["ubuntu-latest"]') }}
     steps:
       - name: Check out trusted finalizer controls
@@ -988,6 +989,7 @@ jobs:
       always() &&
       github.event.workflow_run.event == 'push' &&
       startsWith(github.event.workflow_run.head_branch, 'dry-run/v')
+    environment: app-key
     runs-on: ${{ fromJSON(vars.VELLUM_AUTHORITY_RUNS_ON_JSON || '["ubuntu-latest"]') }}
     steps:
       - name: Mint one-repository cleanup token
