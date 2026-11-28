@@ -55,6 +55,7 @@ class _FakeCdpHandler(socketserver.BaseRequestHandler):
     screenshot_delay = 0.0
     loading_polls = 0
     evaluations = 0
+    empty_listings = 0
 
     def handle(self) -> None:
         headers = _read_headers(self.request)
@@ -75,13 +76,18 @@ class _FakeCdpHandler(socketserver.BaseRequestHandler):
             )
             return
         if target == "/json/list":
-            body = json.dumps([{
+            if _FakeCdpHandler.empty_listings > 0:
+                _FakeCdpHandler.empty_listings -= 1
+                listed = []
+            else:
+                listed = [{
                 "type": "page",
                 "url": "http://127.0.0.1:8000/index.html",
                 "webSocketDebuggerUrl": (
                     "ws://127.0.0.1:0/devtools/page/test"
                 ),
-            }], separators=(",", ":")).encode()
+                }]
+            body = json.dumps(listed, separators=(",", ":")).encode()
             self.request.sendall(
                 b"HTTP/1.1 200 OK\r\nContent-Length: "
                 + str(len(body)).encode()
@@ -162,6 +168,39 @@ class CdpClientTests(unittest.TestCase):
                 self.assertIn("documents", snapshot)
             finally:
                 client.close()
+
+    def test_connect_waits_for_a_page_target_the_browser_has_not_listed_yet(self) -> None:
+        # A browser launched with a URL opens its DevTools port before the
+        # first page target is listed; the one-shot listing came back empty.
+        _FakeCdpHandler.empty_listings = 3
+        self.addCleanup(setattr, _FakeCdpHandler, "empty_listings", 0)
+        with CdpAdmission(str(self.socket_path)) as admission:
+            client = CdpClient(admission.endpoint)
+            client.connect(page_wait=5.0)
+            client.close()
+            self.assertEqual(_FakeCdpHandler.empty_listings, 0)
+
+    def test_connect_without_a_wait_still_fails_on_the_first_empty_listing(self) -> None:
+        _FakeCdpHandler.empty_listings = 1
+        self.addCleanup(setattr, _FakeCdpHandler, "empty_listings", 0)
+        with CdpAdmission(str(self.socket_path)) as admission:
+            client = CdpClient(admission.endpoint)
+            with self.assertRaisesRegex(CdpClientError, "omitted a page target$"):
+                client.connect()
+
+    def test_connect_names_the_wait_when_no_page_target_ever_appears(self) -> None:
+        _FakeCdpHandler.empty_listings = 10_000
+        self.addCleanup(setattr, _FakeCdpHandler, "empty_listings", 0)
+        with CdpAdmission(str(self.socket_path)) as admission:
+            client = CdpClient(admission.endpoint)
+            with self.assertRaisesRegex(CdpClientError, "omitted a page target after waiting 0.3s"):
+                client.connect(page_wait=0.3)
+
+    def test_connect_rejects_an_unbounded_page_wait(self) -> None:
+        with CdpAdmission(str(self.socket_path)) as admission:
+            client = CdpClient(admission.endpoint)
+            with self.assertRaises(CdpClientError):
+                client.connect(page_wait=61)
 
     def test_a_slow_command_names_itself_and_a_longer_bound_waits_for_it(self) -> None:
         # The HTML import failures said only "timed out": the 2 s readiness

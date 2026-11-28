@@ -157,22 +157,40 @@ class CdpClient:
         except OSError as error:
             raise CdpClientError(f"CDP discovery failed: {error}") from error
 
-    def connect(self) -> None:
+    def _page_target(self, page_wait: float) -> dict[str, Any] | None:
+        """Return the page target to drive, waiting up to page_wait seconds for one.
+
+        A browser launched with a URL publishes its DevTools port before the
+        first page target is listed, so one listing can legitimately be empty.
+        """
+        deadline = time.monotonic() + page_wait
+        while True:
+            raw_targets = self._discover_path("/json/list")
+            if not isinstance(raw_targets, list):
+                raise CdpClientError("CDP target discovery did not return a target list")
+            candidates = [target for target in raw_targets if isinstance(target, dict)]
+            page_targets = [target for target in candidates if target.get("type") == "page"]
+            loopback_pages = [target for target in page_targets if isinstance(target.get("url"), str)
+                              and target["url"].startswith(("http://127.0.0.1:", "http://localhost:"))]
+            chosen = loopback_pages or page_targets
+            if chosen:
+                return chosen[-1]
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.05)
+
+    def connect(self, *, page_wait: float = 0.0) -> None:
         if self._socket is not None:
             raise CdpClientError("CDP client is already connected")
+        if page_wait < 0 or page_wait > 60:
+            raise CdpClientError("CDP page wait is outside the bounded range")
         # /json/version identifies the browser, but its WebSocket is the
         # browser-level target and does not accept page DOM/Input commands.
         # Select the contained loopback page target from /json/list instead.
-        raw_targets = self._discover_path("/json/list")
-        if not isinstance(raw_targets, list):
-            raise CdpClientError("CDP target discovery did not return a target list")
-        candidates = [target for target in raw_targets if isinstance(target, dict)]
-        page_targets = [target for target in candidates if target.get("type") == "page"]
-        loopback_pages = [target for target in page_targets if isinstance(target.get("url"), str)
-                          and target["url"].startswith(("http://127.0.0.1:", "http://localhost:"))]
-        target = (loopback_pages or page_targets)[-1] if (loopback_pages or page_targets) else None
+        target = self._page_target(page_wait)
         if target is None:
-            raise CdpClientError("CDP target discovery omitted a page target")
+            waited = f" after waiting {page_wait:g}s" if page_wait else ""
+            raise CdpClientError(f"CDP target discovery omitted a page target{waited}")
         raw_ws_url = target.get("webSocketDebuggerUrl")
         if not isinstance(raw_ws_url, str):
             raise CdpClientError("CDP discovery omitted webSocketDebuggerUrl")
