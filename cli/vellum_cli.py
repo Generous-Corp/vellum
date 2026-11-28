@@ -1473,10 +1473,14 @@ def detect_command(args: argparse.Namespace) -> dict[str, Any]:
     message = text.rstrip()
     if args.json:
         try:
-            data = json.loads(text)
+            payload = json.loads(text)
         except json.JSONDecodeError as error:
             raise CliFailure("The source adapter wrote a malformed detection result.",
                              status="detect_failed", exit_code=EXIT_PROJECT) from error
+        if not isinstance(payload, dict) or not isinstance(payload.get("source"), str):
+            raise CliFailure("The source adapter wrote a malformed detection result.",
+                             status="detect_failed", exit_code=EXIT_PROJECT)
+        data = payload
         message = (f"detected source: {data['source']}" if detected
                    else f"no detected source for {source}")
     return result("import", ok=detected,

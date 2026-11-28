@@ -212,7 +212,7 @@ TEST_CASE("snapshot_input scrapes script attributes and frontmatter edge cases",
 <!doctype html>
 <SCRIPT SRC='/assets/app.js' TYPE='module'></SCRIPT>
 <script data-src="/ignored.js" src=/assets/inline.js></script>
-<script src = "/spaced-equals-ignored.js"></script>
+<script src = "/spaced-equals.js"></script>
 <scriptish src="/not-a-script.js"></scriptish>
 <script type=text/babel></script>
 <script>
@@ -226,9 +226,10 @@ TEST_CASE("snapshot_input scrapes script attributes and frontmatter edge cases",
     auto html = det::snapshot_input(scratch.path / "case.html");
     REQUIRE_FALSE(html.is_directory);
     REQUIRE(html.filename == "case.html");
-    REQUIRE(html.script_srcs.size() == 2);
+    REQUIRE(html.script_srcs.size() == 3);
     REQUIRE(html.script_srcs[0] == "/assets/app.js");
     REQUIRE(html.script_srcs[1] == "/assets/inline.js");
+    REQUIRE(html.script_srcs[2] == "/spaced-equals.js");
     REQUIRE(html.script_types.size() == 2);
     REQUIRE(html.script_types[0] == "module");
     REQUIRE(html.script_types[1] == "text/babel");

@@ -589,6 +589,17 @@ class CliTests(unittest.TestCase):
             self.assertEqual(text.returncode, 3)
             self.assertNotIn("--json", json.loads((root / "argv.json").read_text()))
 
+    def test_detect_only_rejects_malformed_json_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "export"
+            source.mkdir()
+            adapter = self.stub_adapter(root, 0, "{}")
+            completed = invoke("import", "--detect-only", str(source), "--json", cwd=root,
+                               env={"VELLUM_SOURCE_ADAPTER": str(adapter)})
+            self.assertEqual(completed.returncode, 3, completed.stdout)
+            self.assertEqual(json.loads(completed.stdout)["status"], "detect_failed")
+
     def test_report_new_format_implies_detection(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
