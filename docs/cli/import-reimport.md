@@ -80,6 +80,15 @@ vellum import designmd ./DESIGN.md
 vellum reimport --source ./DESIGN.md
 ```
 
+For DESIGN.md, the SDK also exposes token exporters next to the importer
+(`export_tailwind_v3_json`, `export_tailwind_v4_css` and `export_css_vars`).
+`export_css_vars(parsed, prefix)` writes a `:root { ... }` block of custom
+properties named `--<prefix>-<group>-<name>`, for example `--ds-color-primary`,
+`--ds-spacing-base` and `--ds-typography-body-fontFamily`. Output is sorted by
+name, and characters outside `[A-Za-z0-9_-]` in a token name become `-`. No CLI
+command calls the exporters yet. The color lint flags a `color-mix()` whose
+weight is not an explicit percentage, as DESIGN.md 0.4.0 does.
+
 The v0 route uses the static JSX parser for host elements, inline styles and
 supported Tailwind layout classes. It preserves class strings and reports
 partial capture for dynamic JSX. Pass a local TSX export.
@@ -97,7 +106,9 @@ vellum import --source-type design-ir ./panel.ir.json --mode baked --emit cpp --
 
 - **C++** writes `<name>.cpp`, `<name>.hpp` and `<name>.bindings.json`. A
   directory or extensionless `--out` gets `imported_ui.cpp`; a header path names
-  the header. Absolute asset paths are copied into `assets/` beside the source.
+  the header. Available assets resolve beside the input design and are copied
+  into `assets/` beside the source. Relative names that have no local
+  file remain references to resources supplied by the consumer at runtime.
 - **SwiftUI** writes `<Name>.swift`, `<Name>Theme.swift` and
   `<Name>.bindings.json`. The default is `ImportedPulpView.swift`.
 - Sources are `design-ir`, `figma` (JSON, not a local `.fig`), `figma-plugin`,
@@ -108,7 +119,8 @@ vellum import --source-type design-ir ./panel.ir.json --mode baked --emit cpp --
   DESIGN.md file is a token spec and is refused with exit 2. For JSX, import with
   `--mode baked --emit ir-json` first and emit that file as `design-ir`.
 - `--emit cpp|swiftui` without `--mode baked` exits 2.
-- `--dry-run` prints the files instead of writing them; with `--json` each
+- `--dry-run` validates assets and previews the same localized source without
+  creating output files or asset directories; with `--json` each
   `data.files` entry carries its `content`.
 - Fidelity losses are reported as diagnostics and in `data.losses`.
   `--strict-fidelity` fails a SwiftUI emit that has any (status

@@ -211,6 +211,9 @@ NSArray* build_accessibility_elements(View& root, NSView* host) {
         VellumMirrorWindowAccessibilityElement* el = [[VellumMirrorWindowAccessibilityElement alloc] init];
         [el captureView:v root:&root host:host];
         [elements addObject:el];
+#if !__has_feature(objc_arc)
+        [el release];
+#endif
     }
     return elements;
 }

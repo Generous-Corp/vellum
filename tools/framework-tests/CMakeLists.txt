@@ -41,6 +41,37 @@ function(vellum_add_framework_test name)
     endforeach()
 endfunction()
 
+# Keep a public-header consumer independent from the mirrored implementation
+# targets so missing standard-library includes fail at the package boundary.
+add_executable(vellum-framework-web-view-header-consumer-test
+    web_view_header_consumer_test.cpp)
+target_include_directories(vellum-framework-web-view-header-consumer-test PRIVATE
+    "${PROJECT_SOURCE_DIR}/framework/core/view/include")
+set_target_properties(vellum-framework-web-view-header-consumer-test PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON)
+add_test(NAME vellum.framework.web-view-header-consumer
+    COMMAND vellum-framework-web-view-header-consumer-test)
+set_tests_properties(vellum.framework.web-view-header-consumer PROPERTIES LABELS framework)
+set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+    web_view_header_consumer_test.cpp)
+
+# Exercise the non-macOS stub on every test host without linking the native
+# view library, whose detector would otherwise mask a missing stub symbol.
+add_executable(vellum-framework-web-view-backend-stub-test
+    web_view_backend_stub_test.cpp
+    "${PROJECT_SOURCE_DIR}/framework/core/view/src/web_view_backend_stub.cpp")
+target_include_directories(vellum-framework-web-view-backend-stub-test PRIVATE
+    "${PROJECT_SOURCE_DIR}/framework/core/view/include")
+set_target_properties(vellum-framework-web-view-backend-stub-test PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON)
+add_test(NAME vellum.framework.web-view-backend-stub
+    COMMAND vellum-framework-web-view-backend-stub-test)
+set_tests_properties(vellum.framework.web-view-backend-stub PROPERTIES LABELS framework)
+set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+    web_view_backend_stub_test.cpp)
+
 # The routing policy test supplies parser operations without linking a canvas library.
 add_executable(vellum-framework-font-container-route-test font_container_route_test.cpp)
 target_include_directories(vellum-framework-font-container-route-test PRIVATE
@@ -63,6 +94,13 @@ vellum_add_framework_test(gpu-surface-lease
     UNITS Vellum::MirrorView_core Vellum::MirrorRender_2d)
 # The test fakes a surface through the gpu_runtime header the render unit wraps.
 target_include_directories(vellum-framework-gpu-surface-lease-test PRIVATE
+    "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
+
+vellum_add_framework_test(render-surface-logic
+    SOURCES render_surface_logic_test.cpp
+    UNITS Vellum::MirrorRender_2d)
+# gpu_surface.hpp wraps the gpu_runtime header.
+target_include_directories(vellum-framework-render-surface-logic-test PRIVATE
     "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
@@ -105,11 +143,21 @@ vellum_add_framework_test(design-import-jsx-runtime
     SOURCES design_import_jsx_runtime_test.cpp
     UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import)
 
+vellum_add_framework_test(design-import-react-runtime
+    SOURCES design_import_react_runtime_test.cpp
+    UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import)
+target_compile_definitions(vellum-framework-design-import-react-runtime-test PRIVATE
+    VELLUM_REACT_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/fixtures/react-runtime")
+
 vellum_add_framework_test(runtime-import-parsers
     SOURCES runtime_import_parsers_test.cpp
     UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import)
 target_compile_definitions(vellum-framework-runtime-import-parsers-test PRIVATE
     VELLUM_REPO_ROOT="${PROJECT_SOURCE_DIR}")
+
+vellum_add_framework_test(design-import-designmd
+    SOURCES design_import_designmd_test.cpp
+    UNITS Vellum::MirrorDesign_import)
 
 vellum_add_framework_test(native-materializer-part3
     SOURCES native_materializer_part3_test.cpp
@@ -155,7 +203,53 @@ if(TARGET vellum-dawn-headers AND TARGET vellum-gpu)
     target_include_directories(vellum-framework-webgpu-error-scopes-test PRIVATE
         "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
     set_tests_properties(vellum.framework.webgpu-error-scopes PROPERTIES SKIP_RETURN_CODE 77)
+    # The device layer's offscreen surface on a real Dawn device.
+    vellum_add_framework_test(gpu-surface-device
+        SOURCES gpu_surface_device_test.cpp
+        UNITS Vellum::MirrorRender_2d Vellum::DawnHeaders Vellum::Gpu)
+    target_include_directories(vellum-framework-gpu-surface-device-test PRIVATE
+        "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
+    # In the GPU lane (VELLUM_REQUIRE_GPU=ON) a missing or broken device is a
+    # failure, not a skip: the probe exits 1 instead of 77.
+    if(VELLUM_REQUIRE_GPU)
+        target_compile_definitions(vellum-framework-gpu-surface-device-test PRIVATE VELLUM_REQUIRE_GPU_DEVICE=1)
+        add_test(NAME vellum.framework.gpu-surface-device-required-failure
+            COMMAND "${CMAKE_COMMAND}"
+                -DTEST_EXECUTABLE=$<TARGET_FILE:vellum-framework-gpu-surface-device-test>
+                -DTEST_ENVIRONMENT=VELLUM_TEST_FORCE_DAWN_BOOTSTRAP_FAILURE=1
+                -DEXPECTED_OUTPUT=FAIL
+                -P "${PROJECT_SOURCE_DIR}/cmake/CheckRequiredGpuFailure.cmake")
+        set_tests_properties(vellum.framework.gpu-surface-device-required-failure
+            PROPERTIES LABELS framework)
+    else()
+        set_tests_properties(vellum.framework.gpu-surface-device PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
+    # HeadlessSurface renders on a real device and reads the pixels back.
+    vellum_add_framework_test(headless-surface-gpu
+        SOURCES headless_surface_gpu_test.cpp
+        UNITS Vellum::MirrorRender_2d Vellum::DawnHeaders Vellum::Gpu)
+    target_include_directories(vellum-framework-headless-surface-gpu-test PRIVATE
+        "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
+    # In the GPU lane (VELLUM_REQUIRE_GPU=ON) a missing or broken device is a
+    # failure, not a skip: the probe exits 1 instead of 77.
+    if(VELLUM_REQUIRE_GPU)
+        target_compile_definitions(vellum-framework-headless-surface-gpu-test PRIVATE VELLUM_REQUIRE_GPU_DEVICE=1)
+        add_test(NAME vellum.framework.headless-surface-gpu-required-failure
+            COMMAND "${CMAKE_COMMAND}"
+                -DTEST_EXECUTABLE=$<TARGET_FILE:vellum-framework-headless-surface-gpu-test>
+                -DTEST_ENVIRONMENT=VELLUM_TEST_FORCE_HEADLESS_SURFACE_FAILURE=1
+                -DEXPECTED_OUTPUT=FAIL
+                -P "${PROJECT_SOURCE_DIR}/cmake/CheckRequiredGpuFailure.cmake")
+        set_tests_properties(vellum.framework.headless-surface-gpu-required-failure
+            PROPERTIES LABELS framework)
+    else()
+        set_tests_properties(vellum.framework.headless-surface-gpu PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
 else()
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+        "gpu_surface_device_test.cpp")
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+        "headless_surface_gpu_test.cpp")
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
         "webgpu_error_scopes_test.cpp")
 endif()
@@ -350,11 +444,52 @@ vellum_add_framework_test(design-codegen-web-grid
     SOURCES design_codegen_web_grid_test.cpp
     UNITS Vellum::MirrorView_script)
 
+vellum_add_framework_test(design-frame-host-param
+    SOURCES design_frame_host_param_test.cpp
+    UNITS Vellum::MirrorView_core Vellum::Value)
+
 vellum_add_framework_test(host-param-surface-model
     SOURCES host_param_surface_model_test.cpp
     UNITS Vellum::MirrorView_core Vellum::Value)
 
+vellum_add_framework_test(js-bytecode-embed
+    SOURCES js_bytecode_embed_test.cpp
+    UNITS Vellum::MirrorView_script
+           js_bytecode_embed_fixture js_bytecode_embed_bridge_fixture)
+target_include_directories(vellum-framework-js-bytecode-embed-test PRIVATE
+    "${CMAKE_BINARY_DIR}")
+target_compile_definitions(vellum-framework-js-bytecode-embed-test PRIVATE
+    VELLUM_TEST_JS_BYTECODE_FIXTURE="${PROJECT_SOURCE_DIR}/fixtures/js-bytecode/bytecode_fixture.js")
+
+vellum_add_framework_test(jsx-lock
+    SOURCES jsx_lock_test.cpp
+    UNITS Vellum::MirrorView_script)
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    # NSAccessibility roles, the element tree the editor view hands to AppKit and
+    # the painted-text backend, queried in process on views that are never put
+    # in a window.
+    vellum_add_framework_test(macos-accessibility-roles
+        SOURCES macos_accessibility_roles_test.mm
+        UNITS Vellum::MirrorView_core)
+    target_compile_options(vellum-framework-macos-accessibility-roles-test PRIVATE -fobjc-arc)
+    target_link_libraries(vellum-framework-macos-accessibility-roles-test PRIVATE
+        "-framework AppKit")
+    vellum_add_framework_test(macos-text-accessibility
+        SOURCES macos_text_accessibility_test.mm
+        UNITS Vellum::MirrorView_core)
+    target_link_libraries(vellum-framework-macos-text-accessibility-test PRIVATE
+        "-framework AppKit")
+
+    # The standalone window host's content view in the accessibility tree; the
+    # window is created and never shown.
+    vellum_add_framework_test(macos-window-host-accessibility
+        SOURCES macos_window_host_accessibility_test.mm
+        UNITS Vellum::MirrorView_core)
+    target_compile_options(vellum-framework-macos-window-host-accessibility-test PRIVATE -fobjc-arc)
+    target_link_libraries(vellum-framework-macos-window-host-accessibility-test PRIVATE
+        "-framework AppKit")
+
     vellum_add_framework_test(main-thread-timer
         SOURCES main_thread_timer_test.mm
         UNITS Vellum::MirrorFoundation)
@@ -366,6 +501,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
         UNITS Vellum::MirrorFoundation)
     target_link_libraries(vellum-framework-native-dialog-delivery-test PRIVATE "-framework CoreFoundation")
     set_tests_properties(vellum.framework.native-dialog-delivery PROPERTIES TIMEOUT 15)
+
+    # A live WKWebView driven by the main run loop, never placed in a window.
+    vellum_add_framework_test(web-view
+        SOURCES web_view_test.mm
+        UNITS Vellum::MirrorView_core)
+    target_link_libraries(vellum-framework-web-view-test PRIVATE
+        "-framework AppKit" "-framework CoreFoundation")
+    set_tests_properties(vellum.framework.web-view PROPERTIES TIMEOUT 120)
 
     # The plug-in view host parents a native child; never placed in a window.
     vellum_add_framework_test(plugin-view-host-native-child
@@ -386,7 +529,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
 else()
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
         main_thread_timer_test.mm native_dialog_delivery_test.cpp
-        plugin_view_host_cursor_test.mm
+        macos_accessibility_roles_test.mm macos_text_accessibility_test.mm
+        macos_window_host_accessibility_test.mm
+        web_view_test.mm plugin_view_host_cursor_test.mm
         plugin_view_host_native_child_test.mm)
 endif()
 

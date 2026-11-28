@@ -115,6 +115,18 @@ std::string export_tailwind_v3_json(const DesignMdParseResult& parsed);
 /// `--tracking-*`, `--font-weight-*`, `--radius-*`, `--spacing-*`).
 std::string export_tailwind_v4_css(const DesignMdParseResult& parsed);
 
+/// Emit a plain `:root { ... }` block of CSS custom properties from the parsed
+/// token tree. Each variable is `--<prefix>-<group>-<name>` (the prefix and its
+/// hyphen are dropped when `prefix` is empty): `color-<name>` for colors,
+/// `rounded-<name>` and `spacing-<name>` for dimensions (in px), and
+/// `typography-<level>-<field>` for typography. Every name is reduced to
+/// `[A-Za-z0-9_-]`, any other character becoming `-`, so nested token paths
+/// such as `background.light` become `background-light`. Output is sorted by
+/// variable name, so it is deterministic, and a name that collides after
+/// sanitizing keeps its first (sorted) value.
+std::string export_css_vars(const DesignMdParseResult& parsed,
+                            const std::string& prefix = {});
+
 // ── Claude Design bundle envelope (pulp #468) ───────────────────────────
 //
 // Claude Design's "standalone HTML" export is a small loader shell
