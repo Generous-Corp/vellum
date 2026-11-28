@@ -7,6 +7,7 @@
 import createVellumCore from './vellum_web_core.js';
 import {createEditorSession} from './session/editor_session.js';
 import {createSuperconvolverView} from './views/superconvolver.js';
+import {reduceLuma, regionInk, ssim, verdict} from './perceptual_gate.js';
 
 // The plug-in's web declarations (Pulp examples/super-convolver/super_convolver.hpp).
 const params = [
@@ -110,6 +111,60 @@ async function mount(width, height, {field = {}, values: preset = {}, time = nul
     return report();
 }
 
+async function decode(url) {
+    const bitmap = await createImageBitmap(await (await fetch(url)).blob(),
+        {colorSpaceConversion: 'none', premultiplyAlpha: 'none'});
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const context = canvas.getContext('2d');
+    context.drawImage(bitmap, 0, 0);
+    return context.getImageData(0, 0, bitmap.width, bitmap.height);
+}
+
+function plane(image) {
+    const data = new Float64Array(image.width * image.height);
+    for (let index = 0; index < data.length; ++index) data[index] = image.data[4 * index];
+    return {width: image.width, height: image.height, data};
+}
+
+// Runs the shared gate on the mounted, frozen editor. Each region is
+// {name, box, omit}: the frame's pixels in the box are measured against the
+// same frame drawn without the `omit` draw ids. `state` regions are measured
+// against the frame with Bypass in its other state. `reference` is the URL
+// of a greyscale native reference at CSS size; `fieldReference` one of the
+// native field drawn alone, compared with this field drawn alone.
+async function gate({regions, reference = null, fieldReference = null, bypassState = null}) {
+    const ink = {};
+    for (const {name, box, omit} of regions) {
+        ink[name] = regionInk(session.snapshot({region: box}), session.snapshot({omit, region: box}));
+    }
+    if (bypassState) {
+        const box = session.bounds[bypassState];
+        const before = session.snapshot({region: box});
+        const original = values.get(4);
+        adapter.setParameterValue(4, original >= 0.5 ? 0 : 1);
+        ink[`${bypassState}/state`] = regionInk(session.snapshot({region: box}), before);
+        adapter.setParameterValue(4, original);
+        // Draw the restored state now, so the last frame is the measured one.
+        session.snapshot({region: box});
+    }
+    let similarity = null;
+    let fieldSimilarity = null;
+    let withoutField = null;
+    if (reference) {
+        const native = plane(await decode(reference));
+        similarity = ssim(reduceLuma(session.snapshot()), native);
+        withoutField = ssim(reduceLuma(session.snapshot({backdrop: false})), native);
+    }
+    if (fieldReference) {
+        fieldSimilarity = ssim(reduceLuma(session.snapshot({nodes: false})),
+            plane(await decode(fieldReference)));
+    }
+    const result = verdict({ink, similarity});
+    const frame = session.stats.lastFrame;
+    return {...result, fieldSimilarity, withoutField, time: frame.time, digest: frame.digest,
+        commandCount: frame.commandCount, size: session.size};
+}
+
 async function chooseFile(name) {
     const input = container.querySelector('input[type=file]');
     if (!input) return null;
@@ -139,6 +194,7 @@ Object.assign(globalThis.__editorFixture, {
     settle: async () => { await frames(); return report(); },
     chooseFile,
     capture: async () => session.capture(),
+    gate,
     // Headless Chrome's emulated device scale reaches devicePixelRatio but not
     // a new element's device-pixel-content-box, so a canvas mounted under it
     // is measured once more through the session's window resize path.

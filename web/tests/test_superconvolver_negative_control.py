@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import subprocess
 import unittest
 from pathlib import Path
@@ -85,19 +86,29 @@ def run_main(control: str | None, verify: object) -> tuple[int, str, str]:
     return status, out.getvalue(), err.getvalue()
 
 
-def failing(name: str):
+def failing(name: str, failures: object = ()):
     def verify(*_args: object) -> dict:
-        raise CheckFailure(f"{name}: {{}}")
+        raise CheckFailure(f"{name}: {json.dumps({'failures': sorted(failures)})}")
     return verify
 
 
 class NegativeControlExitStatus(unittest.TestCase):
     def test_each_control_failing_on_its_own_check_returns_zero(self) -> None:
-        for control, (_old, _new, check_name) in proof.NEGATIVE_CONTROLS.items():
+        for control, (_target, _old, _new, check_name, required) in proof.NEGATIVE_CONTROLS.items():
             with self.subTest(control=control):
-                status, out, _err = run_main(control, failing(check_name))
+                status, out, _err = run_main(control, failing(check_name, required or ()))
                 self.assertEqual(status, 0)
                 self.assertIn("failed as required", out)
+
+    def test_gate_control_naming_other_failures_is_a_failure(self) -> None:
+        for control, (_target, _old, _new, check_name, required) in proof.NEGATIVE_CONTROLS.items():
+            if required is None:
+                continue
+            with self.subTest(control=control):
+                for wrong in (set(), required | {"ink:unrelated"}):
+                    status, _out, err = run_main(control, failing(check_name, wrong))
+                    self.assertEqual(status, 1)
+                    self.assertIn("not exactly", err)
 
     def test_control_failing_on_another_check_is_a_failure(self) -> None:
         status, _out, err = run_main("move", failing("mapping"))

@@ -1848,8 +1848,7 @@ def forwarded_arguments(args: argparse.Namespace) -> list[str]:
     if args.command == "import":
         ignored.update({"output", "provenance", "timeout", "illustrator_input", "manifest",
                         "validate_only", "emit", "mode", "source_out",
-                        "detect_only", "report_new_format", "compat"})
-                        "validate_only", "emit", "mode", "source_out", "dry_run",
+                        "detect_only", "report_new_format", "compat", "dry_run",
                         "strict_fidelity"})
     forwarded: list[str] = []
     for key, value in vars(args).items():
@@ -1956,7 +1955,6 @@ def main(argv: Iterable[str] | None = None) -> int:
                     "--detect-only takes one file or directory and no import options.",
                     status="invalid_arguments", exit_code=EXIT_USAGE,
                 )
-            if args.source_type in {"jsx", "preconverted-svg"} and not detecting:
             if args.emit not in BAKED_EMITS and (args.dry_run or args.strict_fidelity):
                 raise CliFailure(
                     "--dry-run and --strict-fidelity apply only to --emit cpp or swiftui.",
@@ -1964,7 +1962,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                 )
             if args.emit in BAKED_EMITS:
                 validate_baked_emit(args)
-            elif args.source_type in {"jsx", "preconverted-svg"}:
+            elif args.source_type in {"jsx", "preconverted-svg"} and not detecting:
                 if args.source_type == "preconverted-svg" and args.validate_only is False:
                     raise CliFailure(
                         "preconverted-svg requires --validate-only",
