@@ -14,6 +14,18 @@ build plan and refuses to plan anything it cannot prove:
 - every generated input the build needs is produced here or by its mirrored
   producer, and must hash to the closure's recorded digest.
 
+A closure names the Skia/Dawn archive it was exported against. When Vellum
+locks a different archive, the closure is accepted only by content: the new
+archive must be the one Vellum's records attest and declare release eligible,
+built from the closure's Skia commit and its archive's recorded Dawn commit
+(both records naming the same Skia and Dawn commits), every other file under
+an emitted Skia include directory must be a pinned library or a recorded
+file, its whole header tree must equal both the lock's recorded tree
+and the tree recorded for the closure's own archive in
+``tools/mirror/closure_renderer_headers.json``, and every file the closure pins
+must be present with an identical digest. The plan records each closure
+accepted that way. Decision 0016 states the rule.
+
 Once the units are transferred to ``framework/`` the file set is the transfer
 record's, minus the removals and plus the additions of the ports ledger
 (``tools/mirror/framework_ports.py``). A ledger-added source is compiled into
@@ -563,6 +575,9 @@ def external_dependencies(units: list[tuple[str, dict[str, Any]]]) -> dict[str, 
             })
             if (entry["pin"], entry["source"], entry["root"]) != (pin, source, root):
                 raise PlanError(f"closures disagree on the pin of {name}")
+            if entry["asset_sha256"] != row.get("asset_sha256"):
+                raise PlanError(f"closures disagree on the archive of {name}: "
+                                f"{entry['asset_sha256']} and {row.get('asset_sha256')}")
             if not SHA256.match(str(row.get("sha256"))):
                 raise PlanError(f"{unit}: {path} has no recorded digest")
             previous = entry["files"].get(match.group("rel"))
@@ -894,11 +909,273 @@ def restore_patched(name: str, root: Path, paths: list[str]) -> None:
         raise PlanError(f"restoring {name} patched files failed: {completed.stderr.strip()}")
 
 
+RENDERER_ATTESTATION = "provenance/renderer-attestation.json"
+THIRD_PARTY_LOCK = "provenance/third-party-lock.json"
+# The header tree of each renderer archive the landed closures were exported
+# against, keyed by that archive's sha256. A closure is accepted against
+# another archive only when the new archive's whole header tree is this one.
+CLOSURE_RENDERER_HEADERS = "tools/mirror/closure_renderer_headers.json"
+CLOSURE_RENDERER_HEADERS_SCHEMA = "vellum.mirror-closure-renderer-headers.v1"
+
+
+def header_tree_digest(root: Path) -> tuple[str, int]:
+    """The digest third-party-lock.json's headers.digest_command gives for root.
+
+    That command is, from root, `find . -type f -print0 | LC_ALL=C sort -z |
+    xargs -0 shasum -a 256 | shasum -a 256`: the sha256 of one
+    "<sha256>  ./<path>" line per file, in byte order of "./<path>". A symlink,
+    or any entry that is neither a directory nor a regular file, is refused
+    rather than skipped, since find would skip it while the compiler could
+    still read through it. So is a name shasum would escape.
+    """
+    if not root.is_dir() or root.is_symlink():
+        raise PlanError(f"renderer header tree {root} is not a directory")
+    paths: list[str] = []
+    def refuse_walk_error(error: OSError) -> None:
+        raise PlanError(f"cannot enumerate renderer header tree {root}: {error}")
+
+    for directory, subdirs, names in os.walk(root, onerror=refuse_walk_error):
+        for item in [*subdirs, *names]:
+            candidate = Path(directory) / item
+            if candidate.is_symlink() or not (candidate.is_dir() or candidate.is_file()):
+                raise PlanError(f"renderer header tree holds {candidate}, which is not a plain file")
+            if "\n" in item or "\\" in item:
+                raise PlanError(f"renderer header tree holds a name shasum would escape: {candidate!r}")
+        paths.extend("./" + (Path(directory) / name).relative_to(root).as_posix() for name in names)
+    paths.sort(key=lambda path: path.encode("utf-8"))
+    listing = "".join(f"{sha256_file(root / path[2:])}  {path}\n" for path in paths)
+    return hashlib.sha256(listing.encode("utf-8")).hexdigest(), len(paths)
+
+
+def attested_renderer(repo: Path | None, asset_sha256: str) -> dict[str, Any] | None:
+    """The locked renderer's identity, when Vellum's records attest exactly it.
+
+    Both records must name this archive: the attestation record in its
+    builder-attested state, and the third-party lock with the renderer release
+    eligible. Their Skia and Dawn commits must agree. Anything else returns None.
+    """
+    if repo is None:
+        return None
+    try:
+        record = json.loads((repo / RENDERER_ATTESTATION).read_text(encoding="utf-8"))
+        renderer = json.loads((repo / THIRD_PARTY_LOCK).read_text(encoding="utf-8"))[
+            "runtime_toolchain_dependencies"]["renderer"]
+        if (record["state"] != "builder-attested" or record["artifact"]["sha256"] != asset_sha256
+                or renderer["release_eligibility"] != "eligible"
+                or renderer["artifact"]["sha256"] != asset_sha256):
+            return None
+        skia = renderer["source_identities"]["skia"]["commit"]
+        if record["source_identities"]["skia"]["commit"] != skia:
+            return None
+        dawn = renderer["source_identities"]["dawn"]["commit"]
+        if record["source_identities"]["dawn"]["commit"] != dawn:
+            return None
+        headers = renderer["headers"]
+        identity = {"skia_commit": skia, "dawn_commit": dawn, "header_root": headers["root"],
+                    "header_tree_sha256": headers["construction_specific_sha256"],
+                    "header_file_count": headers["file_count"]}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not (isinstance(identity["header_root"], str)
+            and platform_closures.safe_relative_path(identity["header_root"])
+            and isinstance(identity["header_tree_sha256"], str)
+            and SHA256.match(identity["header_tree_sha256"])
+            and isinstance(identity["header_file_count"], int)):
+        return None
+    return identity
+
+
+def closure_header_tree(repo: Path, asset_sha256: str) -> dict[str, Any] | None:
+    """The recorded header tree of the archive a closure was exported against, or None."""
+    try:
+        record = json.loads((repo / CLOSURE_RENDERER_HEADERS).read_text(encoding="utf-8"))
+        if record["schema"] != CLOSURE_RENDERER_HEADERS_SCHEMA:
+            return None
+        tree = record["archives"][asset_sha256]
+        if (not isinstance(tree["header_tree_sha256"], str) or not SHA256.match(tree["header_tree_sha256"])
+                or not isinstance(tree["file_count"], int)
+                or not isinstance(tree["dawn_commit"], str) or not SHA40.match(tree["dawn_commit"])):
+            return None
+        others = tree.get("other_files", {})
+        if not isinstance(others, dict) or not all(
+                isinstance(path, str) and platform_closures.safe_relative_path(path)
+                and isinstance(digest, str) and SHA256.match(digest) for path, digest in others.items()):
+            return None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return tree
+
+
+def locked_header_tree(repo: Path | None, asset_sha256: str) -> dict[str, Any] | None:
+    """The header tree third-party-lock.json records for asset_sha256, or None if it records none."""
+    if repo is None:
+        return None
+    try:
+        renderer = json.loads((repo / THIRD_PARTY_LOCK).read_text(encoding="utf-8"))[
+            "runtime_toolchain_dependencies"]["renderer"]
+        if renderer["artifact"]["sha256"] != asset_sha256:
+            return None
+        headers = renderer["headers"]
+        tree = {"root": headers["root"], "sha256": headers["construction_specific_sha256"],
+                "file_count": headers["file_count"]}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not (isinstance(tree["root"], str) and platform_closures.safe_relative_path(tree["root"])):
+        raise PlanError(f"{THIRD_PARTY_LOCK} records a malformed renderer header root: {tree['root']!r}")
+    return tree
+
+
+def locked_archive_files(repo: Path | None, asset_sha256: str) -> dict[str, str] | None:
+    """Archive-relative path -> sha256 of every static library the lock pins for asset_sha256."""
+    if repo is None:
+        return None
+    try:
+        renderer = json.loads((repo / THIRD_PARTY_LOCK).read_text(encoding="utf-8"))[
+            "runtime_toolchain_dependencies"]["renderer"]
+        if renderer["artifact"]["sha256"] != asset_sha256:
+            return None
+        archive_root = renderer["artifact"]["archive_root"]
+        files = {f"{archive_root}/{row['name']}": row["sha256"] for row in renderer["archives"]}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not (isinstance(archive_root, str) and platform_closures.safe_relative_path(archive_root)
+            and all(platform_closures.safe_relative_path(path) and isinstance(digest, str)
+                    and SHA256.match(digest) for path, digest in files.items())):
+        raise PlanError(f"{THIRD_PARTY_LOCK} records a malformed renderer archive inventory")
+    return files
+
+
+def emitted_skia_include_roots(target_lists: list[list[dict[str, Any]]]) -> set[str]:
+    """Archive-relative Skia include directories any planned target puts on the include path."""
+    found: set[str] = set()
+    for targets in target_lists:
+        for target in targets:
+            for path in target.get("include_dirs", []):
+                match = re.match(r"@external/skia/[^/]+(?:/(?P<rel>.*))?\Z", path)
+                if match:
+                    found.add((match.group("rel") or "").rstrip("/"))
+    return found
+
+
+def check_skia_include_roots(skia_dir: Path, header_root: str, allowed: dict[str, str],
+                             include_roots: set[str]) -> None:
+    """Every file a Skia include directory can expose is bound.
+
+    Files under header_root are bound by the header-tree digest. Any other file
+    under an emitted include directory must be a library the lock pins or a
+    file recorded for the closure's archive, with that digest. Anything else,
+    such as a planted build/vector or build/modules/x.h ahead of build/include,
+    is refused.
+    """
+    header_prefix = header_root.rstrip("/") + "/"
+    for relative in sorted(include_roots):
+        if relative == header_root or relative.startswith(header_prefix):
+            continue
+        base = skia_dir / relative if relative else skia_dir
+        if base.is_symlink():
+            raise PlanError(f"Skia include directory {relative or '.'} is a symlink")
+        if not base.is_dir():
+            continue
+        def refuse_walk_error(error: OSError) -> None:
+            raise PlanError(f"cannot enumerate Skia include directory {relative or '.'}: {error}")
+
+        for directory, subdirs, names in os.walk(base, onerror=refuse_walk_error):
+            for item in [*subdirs, *names]:
+                candidate = Path(directory) / item
+                if candidate.is_symlink() or not (candidate.is_dir() or candidate.is_file()):
+                    raise PlanError(f"Skia include directory {relative or '.'} holds {candidate}, "
+                                    "which is not a plain file")
+            for name in names:
+                path = (Path(directory) / name).relative_to(skia_dir).as_posix()
+                if path.startswith(header_prefix):
+                    continue
+                expected = allowed.get(path)
+                if expected is None:
+                    raise PlanError(f"Skia include directory {relative or '.'} holds {path}, which is "
+                                    f"neither under {header_root} nor a file the lock or "
+                                    f"{CLOSURE_RENDERER_HEADERS} records")
+                if sha256_file(Path(directory) / name) != expected:
+                    raise PlanError(f"Skia include directory {relative or '.'} holds {path}, whose "
+                                    "digest is not the recorded one")
+
+
+def skia_include_binding(repo: Path | None, deps: dict[str, dict[str, Any]],
+                         skia_asset_sha256: str | None) -> tuple[str, dict[str, str]] | None:
+    """The header root and allowed files that bind the Skia include directories, or None.
+
+    On the content-equivalent path this is required; on the exact path it applies
+    whenever the lock records the archive's header tree and libraries.
+    """
+    entry = deps.get("skia")
+    if entry is None or not skia_asset_sha256:
+        return None
+    tree = locked_header_tree(repo, skia_asset_sha256)
+    libraries = locked_archive_files(repo, skia_asset_sha256)
+    by_content = entry["asset_sha256"] != skia_asset_sha256
+    if tree is None or libraries is None:
+        if by_content:
+            raise PlanError(f"{THIRD_PARTY_LOCK} records no header tree and library inventory for "
+                            f"the locked archive {skia_asset_sha256}")
+        return None
+    recorded = closure_header_tree(repo, entry["asset_sha256"]) if repo is not None else None
+    others = (recorded or {}).get("other_files", {})
+    return tree["root"], {**others, **libraries}
+
+
+def archive_mismatch(name: str, entry: dict[str, Any], skia_asset_sha256: str,
+                     repo: Path | None, skia_dir: Path | None = None) -> tuple[str | None, dict[str, Any]]:
+    """Check a closure exported against another archive by content.
+
+    Returns (refusal, None-or-empty) when it cannot be accepted, and
+    (None, header tree) when the locked archive is attested, built from the
+    closure's Skia commit, and its whole header tree equals both the lock's
+    recorded tree and the tree recorded for the closure's own archive. The
+    pinned files themselves are then checked by prepare_dependencies.
+    """
+    refusal = (f"closure was exported against {name} archive {entry['asset_sha256']}, "
+               f"but Vellum locks {skia_asset_sha256}")
+    attested = attested_renderer(repo, skia_asset_sha256)
+    if attested is None or repo is None:
+        return f"{refusal}, which {RENDERER_ATTESTATION} and {THIRD_PARTY_LOCK} do not attest as eligible", {}
+    if entry["pin"] != attested["skia_commit"]:
+        return f"{refusal}, built from Skia {attested['skia_commit']}, not the closure's {entry['pin']}", {}
+    if not entry["files"]:
+        return f"{refusal}, and the closure pins no file to compare", {}
+    recorded = closure_header_tree(repo, entry["asset_sha256"])
+    if recorded is None:
+        return f"{refusal}, and {CLOSURE_RENDERER_HEADERS} records no header tree for the closure's archive", {}
+    if attested["dawn_commit"] != recorded["dawn_commit"]:
+        return (f"{refusal}, built from Dawn {attested['dawn_commit']}, not the closure archive's "
+                f"{recorded['dawn_commit']}"), {}
+    if (attested["header_tree_sha256"], attested["header_file_count"]) != (
+            recorded["header_tree_sha256"], recorded["file_count"]):
+        return (f"{refusal}, whose locked header tree {attested['header_tree_sha256']} "
+                f"({attested['header_file_count']} files) is not the closure archive's "
+                f"{recorded['header_tree_sha256']} ({recorded['file_count']} files)"), {}
+    if skia_dir is None:
+        return f"{refusal}, and no extracted archive was given to check its header tree", {}
+    digest, count = header_tree_digest(skia_dir / attested["header_root"])
+    if (digest, count) != (recorded["header_tree_sha256"], recorded["file_count"]):
+        return (f"{refusal}, and the extracted {attested['header_root']} tree is {digest} ({count} files), "
+                f"not the closure archive's {recorded['header_tree_sha256']} ({recorded['file_count']} files)"), {}
+    return None, {"header_root": attested["header_root"], "header_tree_sha256": digest,
+                  "header_file_count": count}
+
+
 def prepare_dependencies(deps: dict[str, dict[str, Any]], deps_dir: Path, skia_dir: Path | None,
-                         skia_asset_sha256: str | None, repo: Path | None = None) -> dict[str, Path]:
+                         skia_asset_sha256: str | None, repo: Path | None = None,
+                         content_equivalence: list[dict[str, Any]] | None = None) -> dict[str, Path]:
+    """Fetch or locate each dependency and prove every file the closures pin from it.
+
+    A closure exported against an archive other than the locked one is
+    accepted only by content (see archive_mismatch); each such acceptance is
+    appended to content_equivalence when given.
+    """
     roots: dict[str, Path] = {}
     for name, entry in sorted(deps.items()):
         recipe = DEPENDENCIES[name]
+        by_content = False
+        header_tree: dict[str, Any] = {}
         if recipe["kind"] == "in-tree":
             if repo is None:
                 raise PlanError(f"{name} is an in-tree dependency but no repository was given")
@@ -907,9 +1184,21 @@ def prepare_dependencies(deps: dict[str, dict[str, Any]], deps_dir: Path, skia_d
             if skia_dir is None or not skia_asset_sha256:
                 raise PlanError(f"closure needs {name} but no extracted Skia/Dawn archive was given")
             if entry["asset_sha256"] != skia_asset_sha256:
-                raise PlanError(
-                    f"closure was exported against {name} archive {entry['asset_sha256']}, "
-                    f"but Vellum locks {skia_asset_sha256}")
+                problem, header_tree = archive_mismatch(name, entry, skia_asset_sha256, repo, skia_dir)
+                if problem:
+                    raise PlanError(problem)
+                by_content = True
+            elif (locked := locked_header_tree(repo, skia_asset_sha256)) is not None:
+                # An extracted directory (VELLUM_SKIA_DIR) binds no archive
+                # digest, so an unpinned header there could shadow a pinned
+                # one. When the lock records the archive's header tree, the
+                # extract must hold exactly that tree.
+                digest, count = header_tree_digest(skia_dir / locked["root"])
+                if (digest, count) != (locked["sha256"], locked["file_count"]):
+                    raise PlanError(
+                        f"the extracted {locked['root']} tree is {digest} ({count} files), not the "
+                        f"{locked['sha256']} ({locked['file_count']} files) {THIRD_PARTY_LOCK} records "
+                        f"for archive {skia_asset_sha256}")
             root = skia_dir
         else:
             root = deps_dir / f"{name}-{entry['pin']}"
@@ -929,10 +1218,28 @@ def prepare_dependencies(deps: dict[str, dict[str, Any]], deps_dir: Path, skia_d
                 raise PlanError(f"{name}@{entry['pin'][:12]} has no {relative}")
             if sha256_file(candidate) != digest:
                 raise PlanError(f"{name}@{entry['pin'][:12]}:{relative} does not match the closure digest")
+        if by_content and content_equivalence is not None:
+            content_equivalence.append({
+                "dependency": name, "pin": entry["pin"],
+                "closure_asset_sha256": entry["asset_sha256"],
+                "locked_asset_sha256": skia_asset_sha256,
+                "files_verified": len(entry["files"]), **header_tree})
         for patch in recipe.get("post_patches", []):
             apply_patch(name, patch, root)
         roots[name] = root
     return roots
+
+
+def check_skia_link(row: dict[str, Any], target: str, skia_asset_sha256: str | None,
+                    content_equivalence: list[dict[str, Any]]) -> None:
+    """A target links the locked archive, or one its closure was proven against by content."""
+    if row.get("asset_sha256") == skia_asset_sha256:
+        return
+    if any(row.get("asset_sha256") == proof["closure_asset_sha256"] and row.get("pin") == proof["pin"]
+           and proof["locked_asset_sha256"] == skia_asset_sha256 for proof in content_equivalence):
+        return
+    raise PlanError(f"{target} links skia archive {row.get('asset_sha256')}, "
+                    f"but Vellum locks {skia_asset_sha256}")
 
 
 def render_build_info(template: str, receipt: dict[str, Any], version: str, config: str, timestamp: str) -> str:
@@ -1419,7 +1726,13 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
     deps = external_dependencies(units)
     closure_pinned = set(deps)
     declared_deps = declared_dependencies(declared, units, closure_pinned)
-    roots = prepare_dependencies({**deps, **declared_deps}, deps_dir, skia_dir, skia_asset_sha256, repo)
+    content_equivalence: list[dict[str, Any]] = []
+    roots = prepare_dependencies({**deps, **declared_deps}, deps_dir, skia_dir, skia_asset_sha256, repo,
+                                 content_equivalence)
+    binding = skia_include_binding(repo, {**deps, **declared_deps}, skia_asset_sha256)
+    if binding is not None and skia_dir is not None:
+        check_skia_include_roots(skia_dir, binding[0], binding[1], emitted_skia_include_roots(
+            [closure.get("targets", []) for _, closure in units] + [declared]))
     generated = prepare_generated(repo, build_receipt, units, generated_dir)
     # GPU device types are not part of the installed surface: the installed
     # copy of each choke header carries an #error guard (gpu_surface_guard.py).
@@ -1505,12 +1818,9 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
                     raise PlanError(f"{unit}/{name} links {link}, which is neither mirrored nor a recipe target")
             skia = [row for row in target.get("external_link_inputs", []) if row.get("dependency") == "skia"]
             for row in skia:
-                # The target links the archive Vellum locks, not merely one
-                # whose headers happen to match.
-                if row.get("asset_sha256") != skia_asset_sha256:
-                    raise PlanError(
-                        f"{unit}/{name} links skia archive {row.get('asset_sha256')}, "
-                        f"but Vellum locks {skia_asset_sha256}")
+                # The target links the archive Vellum locks: exactly, or an
+                # attested one its closure's pinned files were proven against.
+                check_skia_link(row, f"{unit}/{name}", skia_asset_sha256, content_equivalence)
             others = [row for row in target.get("external_link_inputs", []) if row.get("dependency") != "skia"]
             if others:
                 raise PlanError(f"{unit}/{name} has external link inputs with no recipe: {others}")
@@ -1547,7 +1857,9 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
                 "internal_links": internal,
                 "external_links": external,
                 "skia": bool(skia),
-                "skia_asset_sha256": skia[0].get("asset_sha256") if skia else None,
+                # The archive actually linked: the locked one, which check_skia_link
+                # proved is the closure's own or content-equivalent to it.
+                "skia_asset_sha256": skia_asset_sha256 if skia else None,
                 "in_tree_interfaces": in_tree_interfaces,
             })
             planned[name] = (unit, targets[-1])
@@ -1617,6 +1929,9 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
         "dependencies": {name: {"pin": entry["pin"], "source": entry["source"],
                                  "files_verified": len(entry["files"])}
                           for name, entry in sorted({**deps, **declared_deps}.items())},
+        # Present only when a closure was accepted by content, so plans for an
+        # exactly matching archive are unchanged.
+        **({"renderer_content_equivalence": content_equivalence} if content_equivalence else {}),
         "cmake_dependencies": cmake_deps,
         "licenses": licenses,
         "choc_root": str(roots["choc"]) if "choc" in roots else None,
@@ -1780,6 +2095,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"vellum-mirror-package: planned export {build_plan['export_id']} "
           f"({build_plan['mirror_files_verified']} mirrored files, "
           f"{sum(d['files_verified'] for d in build_plan['dependencies'].values())} pinned inputs verified)")
+    for proof in build_plan.get("renderer_content_equivalence", []):
+        print(f"vellum-mirror-package: {proof['dependency']} closure exported against archive "
+              f"{proof['closure_asset_sha256']} validated by content against locked archive "
+              f"{proof['locked_asset_sha256']} ({proof['files_verified']} pinned files identical, "
+              f"{proof['header_root']} tree {proof['header_tree_sha256']} of {proof['header_file_count']} files)")
     return 0
 
 

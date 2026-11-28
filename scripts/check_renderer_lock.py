@@ -74,7 +74,11 @@ DOCUMENTS_WITH_DIGEST = ("README.md", "DEPENDENCIES.md")
 # (PRIOR_RENDERER_PIN), so it is not a hand copy of the current lock.
 PRIOR_PIN_HOLDER = "tools/provenance/verify_extraction.py"
 EVIDENCE = ("provenance/mirror/closures/*", "tools/provenance/testdata/*",
-            "scripts/testdata/renderer_platform/*")
+            "scripts/testdata/renderer_platform/*",
+            # The header tree of the archive the closures were exported
+            # against, keyed by that archive's digest; tools/mirror/mirror_package.py
+            # checks it.
+            "tools/mirror/closure_renderer_headers.json")
 
 
 def load_lock(root: Path, problems: list[str]) -> dict | None:

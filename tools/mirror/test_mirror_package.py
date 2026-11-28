@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import re
@@ -300,6 +302,113 @@ class MirrorPackagePlanTest(unittest.TestCase):
     def test_closure_against_another_skia_archive_is_refused(self) -> None:
         self.fixture.skia_asset = "0" * 64
         self.assertRefused("but Vellum locks")
+
+    def attest_content_equivalent_archive(self, asset: str = "d" * 64) -> tuple[str, int]:
+        """Lock asset, attested, with the fixture archive's own header tree."""
+        tree = mp.header_tree_digest(self.fixture.skia / "build/include")
+        DependencyPreparationRefusalTest.write_renderer_records(self.fixture.repo, asset, tree, skia="b" * 40)
+        self.fixture.skia_asset = asset
+        return tree
+
+    def test_a_closure_plans_against_an_attested_content_equivalent_archive(self) -> None:
+        tree = self.attest_content_equivalent_archive()
+        plan = self.fixture.plan()
+        self.assertEqual(plan["renderer_content_equivalence"], [{
+            "dependency": "skia", "pin": "b" * 40, "closure_asset_sha256": "c" * 64,
+            "locked_asset_sha256": "d" * 64, "files_verified": 1, "header_root": "build/include",
+            "header_tree_sha256": tree[0], "header_file_count": 1}])
+        # The target links the archive Vellum locks, and the plan says so.
+        self.assertEqual(plan["units"][0]["targets"][0]["skia_asset_sha256"], "d" * 64)
+
+    def test_an_exactly_matching_archive_plans_with_no_equivalence_record(self) -> None:
+        plan = self.fixture.plan()
+        self.assertNotIn("renderer_content_equivalence", plan)
+        self.assertEqual(plan["units"][0]["targets"][0]["skia_asset_sha256"], "c" * 64)
+
+    def test_a_planted_shadow_header_refuses_the_content_equivalent_plan(self) -> None:
+        self.attest_content_equivalent_archive()
+        (self.fixture.skia / "build/include/core/SkArc.h").write_bytes(b'#error "shadow"\n')
+        self.assertRefused("the extracted build/include tree is")
+
+    def test_the_packager_prints_each_content_acceptance(self) -> None:
+        self.attest_content_equivalent_archive()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = mp.main(["--repo", str(self.fixture.repo), "--deps-dir", str(self.fixture.deps),
+                            "--generated-dir", str(self.fixture.generated), "--skia-dir", str(self.fixture.skia),
+                            "--skia-asset-sha256", "d" * 64,
+                            "--cmake-output", str(Path(self.temporary.name) / "plan.cmake")])
+        self.assertEqual(code, 0)
+        self.assertIn(f"skia closure exported against archive {'c' * 64} validated by content against "
+                      f"locked archive {'d' * 64} (1 pinned files identical, build/include tree", out.getvalue())
+
+    def test_an_exact_archive_extract_must_hold_the_locked_header_tree(self) -> None:
+        tree = mp.header_tree_digest(self.fixture.skia / "build/include")
+        DependencyPreparationRefusalTest.write_renderer_records(self.fixture.repo, "c" * 64, tree, skia="b" * 40)
+        plan = self.fixture.plan()
+        self.assertNotIn("renderer_content_equivalence", plan)
+        (self.fixture.skia / "build/include/core/SkArc.h").write_bytes(b'#error "shadow"\n')
+        self.assertRefused(f"records for archive {'c' * 64}")
+
+    def put_build_root_on_the_include_path(self, asset: str) -> None:
+        """The real closures' order: <skia>/build before <skia>/build/include.
+
+        The archive also holds a pinned library and a recorded data file under
+        build/, as the real one does.
+        """
+        target = self.fixture.closure["targets"][0]
+        target["include_dirs"].insert(2, f"@external/skia/{'b' * 40}/build")
+        self.fixture.write_receipt()
+        (self.fixture.skia / "build/lib").mkdir(parents=True)
+        (self.fixture.skia / "build/lib/libskia.a").write_bytes(b"lib")
+        (self.fixture.skia / "build/share").mkdir()
+        (self.fixture.skia / "build/share/data.dat").write_bytes(b"data")
+        tree = mp.header_tree_digest(self.fixture.skia / "build/include")
+        DependencyPreparationRefusalTest.write_renderer_records(
+            self.fixture.repo, asset, tree, skia="b" * 40, libraries={"libskia.a": sha(b"lib")},
+            other_files={"build/share/data.dat": sha(b"data")})
+        self.fixture.skia_asset = asset
+
+    def test_every_file_under_the_build_include_root_is_bound(self) -> None:
+        unrecorded = "which is neither under build/include nor a file"
+        changed = "whose digest is not the recorded one"
+        plants = {
+            "planted header beside build/include": (lambda d: (d / "build/modules").mkdir() or
+                                                    (d / "build/modules/x.h").write_bytes(b'#error "shadow"\n'),
+                                                    f"holds build/modules/x.h, {unrecorded}"),
+            "planted system-header name": (lambda d: (d / "build/vector").write_bytes(b'#error "shadow"\n'),
+                                           f"holds build/vector, {unrecorded}"),
+            "changed pinned library": (lambda d: (d / "build/lib/libskia.a").write_bytes(b"other lib"),
+                                       f"holds build/lib/libskia.a, {changed}"),
+            "changed recorded data file": (lambda d: (d / "build/share/data.dat").write_bytes(b"other"),
+                                           f"holds build/share/data.dat, {changed}"),
+            "symlink beside build/include": (lambda d: (d / "build/SkCanvas.h").symlink_to(
+                d / "build/include/core/SkCanvas.h"), "build/SkCanvas.h, which is not a plain file"),
+        }
+        for path_label, asset in (("content-equivalent", "d" * 64), ("exact", "c" * 64)):
+            with self.subTest(path_label):
+                self.put_build_root_on_the_include_path(asset)
+                plan = self.fixture.plan()
+                self.assertEqual(asset == "d" * 64, "renderer_content_equivalence" in plan)
+                self.assertIn(str(self.fixture.skia / "build"), plan["units"][0]["targets"][0]["include_dirs"])
+            for label, (plant, message) in plants.items():
+                with self.subTest(f"{path_label}: {label}"):
+                    self.tearDown()
+                    self.setUp()
+                    self.put_build_root_on_the_include_path(asset)
+                    plant(self.fixture.skia)
+                    self.assertRefused(message if "plain file" in message
+                                       else f"Skia include directory build {message}")
+            self.tearDown()
+            self.setUp()
+
+    def test_a_content_equivalent_plan_needs_the_locks_library_inventory(self) -> None:
+        self.put_build_root_on_the_include_path("d" * 64)
+        lock_path = self.fixture.repo / "provenance/third-party-lock.json"
+        lock = json.loads(lock_path.read_text())
+        del lock["runtime_toolchain_dependencies"]["renderer"]["artifact"]["archive_root"]
+        lock_path.write_text(json.dumps(lock))
+        self.assertRefused(f"records no header tree and library inventory for the locked archive {'d' * 64}")
 
     def test_target_linking_another_skia_archive_is_refused(self) -> None:
         self.fixture.closure["targets"][0]["external_link_inputs"][0]["asset_sha256"] = "0" * 64
@@ -2479,6 +2588,11 @@ class ExternalDependencyRefusalTest(unittest.TestCase):
         deps = mp.external_dependencies([("foundation", {"external_inputs": [self.row()]})])
         self.assertEqual(deps["skia"]["files"], {"include/a.h": "d" * 64})
 
+    def test_closures_must_agree_on_the_archive_they_were_exported_against(self) -> None:
+        other = self.row(path=f"@external/skia/{self.PIN}/include/b.h", asset_sha256="e" * 64)
+        self.assertIn(f"closures disagree on the archive of skia: {'c' * 64} and {'e' * 64}",
+                      self.refused(self.row(), other))
+
     def test_a_malformed_external_path_is_refused(self) -> None:
         self.assertIn("external input path is malformed", self.refused(self.row(path="@external/skia")))
 
@@ -2562,6 +2676,218 @@ class DependencyPreparationRefusalTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(mp.PlanError, f"exported against skia archive {'c' * 64}, but Vellum locks {'d' * 64}"):
                 mp.prepare_dependencies({"skia": entry}, Path(tmp), Path(tmp), "d" * 64)
+
+    @staticmethod
+    def write_renderer_records(repo: Path, asset: str, header_tree: tuple[str, int], *,
+                               state: str = "builder-attested", eligibility: str = "eligible",
+                               skia: str = "a" * 40, record_skia: str | None = None,
+                               dawn: str = "f" * 40, record_dawn: str | None = None,
+                               record_asset: str | None = None,
+                               closure_tree: tuple[str, int] | None = None,
+                               closure_asset: str = "c" * 64, closure_dawn: str | None = None,
+                               libraries: dict[str, str] | None = None,
+                               other_files: dict[str, str] | None = None) -> None:
+        """Vellum's renderer records attesting asset, and the closure archive's header tree."""
+        (repo / "provenance").mkdir(parents=True, exist_ok=True)
+        (repo / "provenance/renderer-attestation.json").write_text(json.dumps({
+            "state": state, "artifact": {"sha256": record_asset or asset},
+            "source_identities": {"skia": {"commit": record_skia or skia},
+                                  "dawn": {"commit": record_dawn or dawn}}}), encoding="utf-8")
+        (repo / "provenance/third-party-lock.json").write_text(json.dumps({
+            "runtime_toolchain_dependencies": {"renderer": {
+                "release_eligibility": eligibility,
+                "artifact": {"sha256": asset, "archive_root": "build/lib"},
+                "archives": [{"name": name, "sha256": digest} for name, digest in (libraries or {}).items()],
+                "source_identities": {"skia": {"commit": skia}, "dawn": {"commit": dawn}},
+                "headers": {"root": "build/include", "construction_specific_sha256": header_tree[0],
+                            "file_count": header_tree[1]}}}}), encoding="utf-8")
+        tree = closure_tree or header_tree
+        (repo / "tools/mirror").mkdir(parents=True, exist_ok=True)
+        (repo / mp.CLOSURE_RENDERER_HEADERS).write_text(json.dumps({
+            "schema": mp.CLOSURE_RENDERER_HEADERS_SCHEMA,
+            "archives": {closure_asset: {"header_tree_sha256": tree[0], "file_count": tree[1],
+                                         "dawn_commit": closure_dawn or dawn,
+                                         "other_files": other_files or {}}}}),
+            encoding="utf-8")
+
+    def content_fixture(self, base: Path) -> tuple[dict, Path, Path, tuple[str, int]]:
+        """A closure pinned to archive c*64: two pinned headers and one unpinned one."""
+        skia_dir = base / "skia"
+        (skia_dir / "build/include/core").mkdir(parents=True)
+        files = {}
+        for name, body in (("build/include/core/a.h", b"a"), ("build/include/core/b.h", b"b")):
+            (skia_dir / name).write_bytes(body)
+            files[name] = hashlib.sha256(body).hexdigest()
+        (skia_dir / "build/include/core/unpinned.h").write_bytes(b"u")
+        entry = {"pin": "a" * 40, "source": "s", "asset_sha256": "c" * 64, "root": "a" * 40, "files": files}
+        repo = base / "repo"
+        repo.mkdir()
+        return entry, skia_dir, repo, mp.header_tree_digest(skia_dir / "build/include")
+
+    def test_the_header_tree_digest_is_the_locks_digest_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "include"
+            for name, body in (("core/b.h", b"b"), ("core/a.h", b"a"), ("Z.h", b"z"), ("a-b/c.h", b"c")):
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_bytes(body)
+            shell = subprocess.run(
+                "find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256",
+                shell=True, cwd=root, capture_output=True, text=True, check=True).stdout.split()[0]
+            self.assertEqual(mp.header_tree_digest(root), (shell, 4))
+            # The fixture's own control: a different tree gives a different digest.
+            (root / "core/a.h").write_bytes(b"A")
+            self.assertNotEqual(mp.header_tree_digest(root)[0], shell)
+
+    def test_a_symlink_in_the_header_tree_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "include"
+            root.mkdir()
+            (root / "a.h").write_bytes(b"a")
+            (root / "b.h").symlink_to(root / "a.h")
+            with self.assertRaisesRegex(mp.PlanError, "is not a plain file"):
+                mp.header_tree_digest(root)
+
+    def test_a_header_tree_walk_error_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "include"
+            root.mkdir()
+
+            def fail_walk(path, **kwargs):
+                kwargs["onerror"](PermissionError(13, "permission denied", str(path)))
+
+            with mock.patch.object(mp.os, "walk", side_effect=fail_walk), \
+                    self.assertRaisesRegex(mp.PlanError, "cannot enumerate renderer header tree"):
+                mp.header_tree_digest(root)
+
+    def test_a_skia_include_root_walk_error_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            skia_dir = Path(tmp) / "skia"
+            (skia_dir / "build").mkdir(parents=True)
+
+            def fail_walk(path, **kwargs):
+                kwargs["onerror"](PermissionError(13, "permission denied", str(path)))
+
+            with mock.patch.object(mp.os, "walk", side_effect=fail_walk), \
+                    self.assertRaisesRegex(mp.PlanError, "cannot enumerate Skia include directory build"):
+                mp.check_skia_include_roots(skia_dir, "build/include", {}, {"build"})
+
+    def test_a_closure_is_accepted_by_content_against_an_attested_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            entry, skia_dir, repo, tree = self.content_fixture(Path(tmp))
+            self.write_renderer_records(repo, "d" * 64, tree)
+            proofs: list = []
+            roots = mp.prepare_dependencies({"skia": entry}, Path(tmp), skia_dir, "d" * 64, repo, proofs)
+            self.assertEqual(roots["skia"], skia_dir)
+            self.assertEqual(proofs, [{"dependency": "skia", "pin": "a" * 40, "closure_asset_sha256": "c" * 64,
+                                       "locked_asset_sha256": "d" * 64, "files_verified": 2,
+                                       "header_root": "build/include", "header_tree_sha256": tree[0],
+                                       "header_file_count": 3}])
+
+    def test_an_exactly_matching_archive_needs_no_records_and_records_no_proof(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            entry, skia_dir, _, _ = self.content_fixture(Path(tmp))
+            proofs: list = []
+            mp.prepare_dependencies({"skia": entry}, Path(tmp), skia_dir, "c" * 64, None, proofs)
+            self.assertEqual(proofs, [])
+
+    def test_a_changed_pinned_header_refuses_the_content_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            entry, skia_dir, repo, tree = self.content_fixture(Path(tmp))
+            (skia_dir / "build/include/core/b.h").write_bytes(b"changed")
+            # Record the changed tree as both the lock's and the closure's, so
+            # only the per-file check stands between it and acceptance.
+            self.write_renderer_records(repo, "d" * 64, mp.header_tree_digest(skia_dir / "build/include"))
+            with self.assertRaisesRegex(mp.PlanError, "core/b.h does not match the closure digest"):
+                mp.prepare_dependencies({"skia": entry}, Path(tmp), skia_dir, "d" * 64, repo, [])
+
+    def test_a_pinned_header_missing_from_the_new_archive_refuses_the_content_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            entry, skia_dir, repo, tree = self.content_fixture(Path(tmp))
+            (skia_dir / "build/include/core/a.h").unlink()
+            self.write_renderer_records(repo, "d" * 64, mp.header_tree_digest(skia_dir / "build/include"))
+            with self.assertRaisesRegex(mp.PlanError, "has no build/include/core/a.h"):
+                mp.prepare_dependencies({"skia": entry}, Path(tmp), skia_dir, "d" * 64, repo, [])
+
+    def test_an_unpinned_header_change_in_the_extract_refuses_the_content_check(self) -> None:
+        for label, change in (
+                ("planted shadow header", lambda d: (d / "build/include/core/SkArc.h").write_bytes(b"#error")),
+                ("changed unpinned header", lambda d: (d / "build/include/core/unpinned.h").write_bytes(b"U")),
+                ("removed unpinned header", lambda d: (d / "build/include/core/unpinned.h").unlink())):
+            with self.subTest(label), tempfile.TemporaryDirectory() as tmp:
+                entry, skia_dir, repo, tree = self.content_fixture(Path(tmp))
+                self.write_renderer_records(repo, "d" * 64, tree)
+                change(skia_dir)
+                with self.assertRaisesRegex(mp.PlanError, "the extracted build/include tree is"):
+                    mp.prepare_dependencies({"skia": entry}, Path(tmp), skia_dir, "d" * 64, repo, [])
+
+    def test_a_locked_header_tree_other_than_the_closure_archives_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            entry, skia_dir, repo, tree = self.content_fixture(Path(tmp))
+            self.write_renderer_records(repo, "d" * 64, tree, closure_tree=("e" * 64, tree[1]))
+            with self.assertRaisesRegex(mp.PlanError, "is not the closure archive's"):
+                mp.prepare_dependencies({"skia": entry}, Path(tmp), skia_dir, "d" * 64, repo, [])
+
+    def test_a_closure_archive_with_no_recorded_header_tree_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            entry, skia_dir, repo, tree = self.content_fixture(Path(tmp))
+            self.write_renderer_records(repo, "d" * 64, tree, closure_asset="9" * 64)
+            with self.assertRaisesRegex(mp.PlanError, "records no header tree for the closure's archive"):
+                mp.prepare_dependencies({"skia": entry}, Path(tmp), skia_dir, "d" * 64, repo, [])
+
+    def test_an_archive_the_records_do_not_attest_is_refused_even_with_identical_inputs(self) -> None:
+        cases = {
+            "no records": None,
+            "pending attestation": {"state": "pending-build-provenance"},
+            "blocked eligibility": {"eligibility": "blocked"},
+            "attestation names another archive": {"record_asset": "e" * 64},
+            "lock names another archive": "lock-other",
+            "attestation names another Skia commit": {"record_skia": "b" * 40},
+            "attestation names another Dawn commit": {"record_dawn": "e" * 40},
+        }
+        for label, change in cases.items():
+            with self.subTest(label), tempfile.TemporaryDirectory() as tmp:
+                entry, skia_dir, repo, tree = self.content_fixture(Path(tmp))
+                if change == "lock-other":
+                    self.write_renderer_records(repo, "e" * 64, tree, record_asset="d" * 64)
+                elif change is not None:
+                    self.write_renderer_records(repo, "d" * 64, tree, **change)
+                with self.assertRaisesRegex(mp.PlanError, "do not attest as eligible"):
+                    mp.prepare_dependencies({"skia": entry}, Path(tmp), skia_dir, "d" * 64, repo, [])
+
+    def test_an_attested_archive_from_another_dawn_commit_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            entry, skia_dir, repo, tree = self.content_fixture(Path(tmp))
+            # Both new records agree on Dawn e*40; the closure's archive was f*40.
+            self.write_renderer_records(repo, "d" * 64, tree, dawn="e" * 40, closure_dawn="f" * 40)
+            with self.assertRaisesRegex(mp.PlanError, "built from Dawn e{40}, not the closure archive's f{40}"):
+                mp.prepare_dependencies({"skia": entry}, Path(tmp), skia_dir, "d" * 64, repo, [])
+
+    def test_an_attested_archive_from_another_skia_commit_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            entry, skia_dir, repo, tree = self.content_fixture(Path(tmp))
+            self.write_renderer_records(repo, "d" * 64, tree, skia="b" * 40)
+            with self.assertRaisesRegex(mp.PlanError, "built from Skia b{40}, not the closure's a{40}"):
+                mp.prepare_dependencies({"skia": entry}, Path(tmp), skia_dir, "d" * 64, repo, [])
+
+    def test_a_closure_pinning_no_archive_file_cannot_be_accepted_by_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            entry, skia_dir, repo, tree = self.content_fixture(Path(tmp))
+            self.write_renderer_records(repo, "d" * 64, tree)
+            entry["files"] = {}
+            with self.assertRaisesRegex(mp.PlanError, "pins no file to compare"):
+                mp.prepare_dependencies({"skia": entry}, Path(tmp), skia_dir, "d" * 64, repo, [])
+
+    def test_a_skia_link_is_accepted_only_for_the_locked_or_content_proven_archive(self) -> None:
+        proof = {"dependency": "skia", "pin": "a" * 40, "closure_asset_sha256": "c" * 64,
+                 "locked_asset_sha256": "d" * 64, "files_verified": 2}
+        mp.check_skia_link({"asset_sha256": "d" * 64, "pin": "a" * 40}, "u/t", "d" * 64, [])
+        mp.check_skia_link({"asset_sha256": "c" * 64, "pin": "a" * 40}, "u/t", "d" * 64, [proof])
+        for row, proofs in (({"asset_sha256": "c" * 64, "pin": "a" * 40}, []),
+                            ({"asset_sha256": "c" * 64, "pin": "b" * 40}, [proof]),
+                            ({"asset_sha256": "e" * 64, "pin": "a" * 40}, [proof])):
+            with self.subTest(row=row, proofs=bool(proofs)), \
+                    self.assertRaisesRegex(mp.PlanError, f"u/t links skia archive {row['asset_sha256']}"):
+                mp.check_skia_link(row, "u/t", "d" * 64, proofs)
 
     def test_a_recorded_file_the_dependency_lacks_is_refused(self) -> None:
         entry = {"pin": "a" * 40, "source": "s", "asset_sha256": "c" * 64, "root": "a" * 40,

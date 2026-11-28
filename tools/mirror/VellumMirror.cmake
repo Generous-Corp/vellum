@@ -137,6 +137,11 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${PROJECT_SOURCE_DIR}/tools/mirror/verify_mirror_rename_identity.py"
     "${PROJECT_SOURCE_DIR}/tools/mirror/VellumMirrorPlatform.cmake"
     "${PROJECT_SOURCE_DIR}/provenance/framework/transfer.json"
+    # A closure exported against another renderer archive is accepted only
+    # when these records attest the locked one.
+    "${PROJECT_SOURCE_DIR}/provenance/renderer-attestation.json"
+    "${PROJECT_SOURCE_DIR}/provenance/third-party-lock.json"
+    "${PROJECT_SOURCE_DIR}/tools/mirror/closure_renderer_headers.json"
     # Its mtime moves when a manifest below is added, which an absent file cannot signal.
     "${PROJECT_SOURCE_DIR}/provenance/framework")
 # Planning reads the platform index, each platform's record and its closure
