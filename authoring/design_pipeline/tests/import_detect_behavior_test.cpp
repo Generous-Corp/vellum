@@ -435,6 +435,28 @@ TEST_CASE("snapshot_input accepts script tag and attribute whitespace boundaries
     fs::remove_all(dir);
 }
 
+TEST_CASE("snapshot_input ignores commented scripts and accepts spaced equals",
+          "[import-detect]") {
+    auto dir = fs::temp_directory_path() / "vellum-import-detect-script-comments";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    {
+        std::ofstream f(dir / "code.html");
+        f << R"HTML(
+<!-- <script type="__bundler/template" src="comment.js"></script> -->
+<script type = "spaced/type" src = 'spaced.js'></script>
+)HTML";
+    }
+
+    auto snap = det::snapshot_input(dir);
+    REQUIRE(snap.script_srcs == std::vector<std::string>{"spaced.js"});
+    REQUIRE(snap.script_types == std::vector<std::string>{"spaced/type"});
+    CHECK(std::find(snap.script_types.begin(), snap.script_types.end(),
+                    "__bundler/template") == snap.script_types.end());
+
+    fs::remove_all(dir);
+}
+
 TEST_CASE("snapshot_input falls back to sorted html candidates with attribute forms",
           "[import-detect]") {
     auto dir = fs::temp_directory_path() / "vellum-import-detect-script-fallback";
