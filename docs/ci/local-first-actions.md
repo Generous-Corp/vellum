@@ -162,7 +162,8 @@ proof (the pinned Skia/Dawn archive, mirror and RmlUi included), and
 merge group runs the full GPU proof and `sterile-consumer` exactly as before,
 on the merged tree, so `main` keeps its guarantee. The cheap lane writes no
 `vellum-gpu-proof-tree` receipt, so the merge group never reuses a cheap run in
-place of a GPU proof.
+place of a GPU proof. A merge-queue run that built the proof writes one too, so a
+rebuilt group whose tree an earlier group already proved reports that run.
 
 A pull request runs the full proof now, as it did before, when any of these hold:
 

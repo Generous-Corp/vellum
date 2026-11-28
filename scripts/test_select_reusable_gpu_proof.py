@@ -208,7 +208,7 @@ class SelectorTests(unittest.TestCase):
         github.artifacts[RUN_ID] = []
         self.assert_declines(github, "uploaded no tree receipt")
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        for step in ("Record the tree this pull-request proof covered", "Upload the proven-tree receipt"):
+        for step in ("Record the tree this proof covered", "Upload the proven-tree receipt"):
             block = workflow.split(f"      - name: {step}\n", 1)[1].split("\n      - name:", 1)[0]
             self.assertIn("steps.depth.outputs.cheap != 'true'", block, step)
 
@@ -249,6 +249,219 @@ class SelectorTests(unittest.TestCase):
         github = FakeGitHub()
         github.runs = []
         self.assert_declines(github, "no pull_request run")
+
+
+QUEUE_RUN = 42000
+QUEUE_COMMIT = "d" * 40
+
+
+class FakeQueueGitHub:
+    """A merge-queue run that built a proof of TREE, and its receipt."""
+
+    def __init__(self) -> None:
+        self.runs = [self.run(QUEUE_RUN, QUEUE_COMMIT)]
+        self.jobs = {QUEUE_RUN: self.proof_jobs(QUEUE_COMMIT)}
+        self.artifacts = {QUEUE_RUN: [{
+            "id": 9, "name": selector.RECEIPT_ARTIFACT, "expired": False,
+            "workflow_run": {"id": QUEUE_RUN},
+        }]}
+        self.archives = {9: receipt_zip(
+            event="merge_group", run_id=QUEUE_RUN, commit=QUEUE_COMMIT,
+        )}
+        self.queries: list[str] = []
+
+    @staticmethod
+    def run(run_id: int, commit: str) -> dict:
+        return {
+            "id": run_id,
+            "run_attempt": ATTEMPT,
+            "event": "merge_group",
+            "path": selector.WORKFLOW_PATH,
+            "head_sha": commit,
+            "head_branch": f"gh-readonly-queue/main/pr-825-{'9' * 40}",
+            "repository": {"full_name": REPO},
+            "head_repository": {"full_name": REPO},
+            "status": "completed",
+            "conclusion": "success",
+            "run_started_at": "2026-11-04T10:00:00Z",
+        }
+
+    @staticmethod
+    def proof_jobs(commit: str) -> list:
+        return [
+            {"name": name, "conclusion": "success", "run_attempt": ATTEMPT, "head_sha": commit}
+            for name in selector.PROOF_JOBS
+        ]
+
+    def api(self, path: str):
+        self.queries.append(path)
+        if "/actions/workflows/gpu-macos.yml/runs?" in path:
+            for required in ("event=merge_group", "status=success",
+                             "created=%3E%3D2026-11-04T06:00:00Z", "per_page=100"):
+                assert required in path, path
+            assert "head_sha" not in path, path
+            page = int(re.search(r"[?&]page=(\d+)", path).group(1))
+            return {"workflow_runs": self.runs[(page - 1) * 100:page * 100]}
+        match = re.search(r"/actions/runs/(\d+)/(jobs|artifacts)\?", path)
+        assert match, path
+        run_id = int(match.group(1))
+        if match.group(2) == "jobs":
+            assert "filter=latest" in path, path
+            return {"jobs": self.jobs.get(run_id, [])}
+        return {"artifacts": self.artifacts.get(run_id, [])}
+
+    def download(self, path: str) -> bytes:
+        match = re.search(r"/actions/artifacts/(\d+)/zip$", path)
+        assert match, path
+        return self.archives[int(match.group(1))]
+
+    def select(self) -> int:
+        return selector.select_queue_proof(
+            repository=REPO, tree=TREE, api=self.api, download=self.download,
+            now=lambda: NOW,
+        )
+
+
+class QueueProofTests(unittest.TestCase):
+    def assert_declines(self, github: FakeQueueGitHub, fragment: str) -> None:
+        with self.assertRaises(selector.Decline) as caught:
+            github.select()
+        self.assertIn(fragment, str(caught.exception))
+
+    def test_reuses_a_queue_run_that_built_this_tree(self) -> None:
+        self.assertEqual(FakeQueueGitHub().select(), QUEUE_RUN)
+
+    def test_a_queue_run_of_another_tree_is_never_reused(self) -> None:
+        github = FakeQueueGitHub()
+        github.archives[9] = receipt_zip(event="merge_group", run_id=QUEUE_RUN,
+                                         commit=QUEUE_COMMIT, tree="e" * 40)
+        self.assert_declines(github, "receipt tree")
+
+    def test_a_queue_run_that_did_not_build_is_never_reused(self) -> None:
+        # Reused, classifier-skipped and cheap runs upload no tree receipt, so
+        # a reuse can never be reused again.
+        github = FakeQueueGitHub()
+        github.artifacts[QUEUE_RUN] = []
+        self.assert_declines(github, "uploaded no tree receipt")
+
+    def test_the_receipt_must_bind_this_run_attempt_and_commit(self) -> None:
+        cases = {
+            "pull-request receipt": ({"event": "pull_request"}, "receipt event"),
+            "other run": ({"run_id": QUEUE_RUN + 1}, "receipt run_id"),
+            "other commit": ({"commit": "f" * 40}, "receipt commit"),
+            "other repository": ({"repository": "someone/vellum"}, "receipt repository"),
+            "other schema": ({"schema": "vellum.gpu-proof-tree.v0"}, "receipt schema"),
+            "boolean run id": ({"run_id": True}, "receipt run_id"),
+            "no commit": ({"commit": None}, "receipt commit"),
+        }
+        for name, (change, fragment) in cases.items():
+            with self.subTest(case=name):
+                github = FakeQueueGitHub()
+                fields = {"event": "merge_group", "run_id": QUEUE_RUN, "commit": QUEUE_COMMIT}
+                fields.update(change)
+                github.archives[9] = receipt_zip(**fields)
+                self.assert_declines(github, fragment)
+        # A receipt from another attempt is not this attempt's receipt.
+        github = FakeQueueGitHub()
+        github.archives[9] = receipt_zip(event="merge_group", run_id=QUEUE_RUN,
+                                         commit=QUEUE_COMMIT, run_attempt=ATTEMPT - 1)
+        self.assert_declines(github, "uploaded no tree receipt")
+
+    def test_only_a_successful_first_party_queue_run_qualifies(self) -> None:
+        cases = {
+            "pull request run": ({"event": "pull_request"}, "pull_request run"),
+            "push run": ({"event": "push"}, "push run"),
+            "other workflow": ({"path": ".github/workflows/other.yml"}, "other.yml"),
+            "not a queue ref": ({"head_branch": "main"}, "not a main queue ref"),
+            "other base queue": ({"head_branch": "gh-readonly-queue/release/pr-1-x"}, "not a main queue ref"),
+            "no ref": ({"head_branch": None}, "not a main queue ref"),
+            "fork repository": ({"repository": {"full_name": "someone/vellum"}}, "repository is outside"),
+            "fork head": ({"head_repository": {"full_name": "someone/vellum"}}, "head_repository is outside"),
+            "failure": ({"conclusion": "failure"}, "completed/failure"),
+            "in progress": ({"status": "in_progress", "conclusion": None}, "in_progress"),
+            "short commit": ({"head_sha": "d" * 39}, "no valid commit"),
+            "boolean id": ({"id": True}, "invalid ID"),
+            "boolean attempt": ({"run_attempt": True}, "invalid attempt"),
+            "older than the bound": ({"run_started_at": "2026-11-04T05:59:59Z"}, "outside"),
+            "from the future": ({"run_started_at": "2026-11-04T12:00:01Z"}, "outside"),
+            "unparseable start": ({"run_started_at": "yesterday"}, "not a UTC timestamp"),
+        }
+        for name, (change, fragment) in cases.items():
+            with self.subTest(case=name):
+                github = FakeQueueGitHub()
+                github.runs[0].update(change)
+                self.assert_declines(github, fragment)
+
+    def test_both_proof_jobs_must_succeed_on_that_commit_in_that_attempt(self) -> None:
+        mutations = {
+            "skipped proof": lambda jobs: jobs[0].update(conclusion="skipped"),
+            "failed sterile": lambda jobs: jobs[1].update(conclusion="failure"),
+            "older attempt": lambda jobs: jobs[0].update(run_attempt=ATTEMPT - 1),
+            "other commit": lambda jobs: jobs[1].update(head_sha="f" * 40),
+            "missing job": lambda jobs: jobs.pop(),
+            "duplicate job": lambda jobs: jobs.append(dict(jobs[0])),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(case=name):
+                github = FakeQueueGitHub()
+                mutate(github.jobs[QUEUE_RUN])
+                with self.assertRaises(selector.Decline):
+                    github.select()
+
+    def test_the_newest_matching_queue_run_wins_and_others_do_not_block(self) -> None:
+        github = FakeQueueGitHub()
+        other = QUEUE_RUN - 5
+        github.runs.append(FakeQueueGitHub.run(other, "e" * 40))
+        github.jobs[other] = FakeQueueGitHub.proof_jobs("e" * 40)
+        github.artifacts[other] = [{"id": 11, "name": selector.RECEIPT_ARTIFACT,
+                                    "expired": False, "workflow_run": {"id": other}}]
+        github.archives[11] = receipt_zip(event="merge_group", run_id=other,
+                                          commit="e" * 40, tree="e" * 40)
+        self.assertEqual(github.select(), QUEUE_RUN)
+        github.artifacts[QUEUE_RUN] = []
+        github.archives[11] = receipt_zip(event="merge_group", run_id=other, commit="e" * 40)
+        self.assertEqual(github.select(), other)
+
+    def test_no_runs_or_too_many_runs_decline(self) -> None:
+        github = FakeQueueGitHub()
+        github.runs = []
+        self.assert_declines(github, "no successful queue run")
+        github = FakeQueueGitHub()
+        github.runs = [FakeQueueGitHub.run(QUEUE_RUN + n, QUEUE_COMMIT)
+                       for n in range(selector.MAX_QUEUE_CANDIDATES + 1)]
+        self.assert_declines(github, f"over {selector.MAX_QUEUE_CANDIDATES}")
+
+    def test_main_falls_back_to_the_queue_proof_only_after_the_pull_request_path(self) -> None:
+        calls: list[str] = []
+
+        def pull(**_: object) -> int:
+            calls.append("pull")
+            raise selector.Decline("no pull_request run")
+
+        def queue(**_: object) -> int:
+            calls.append("queue")
+            return QUEUE_RUN
+
+        stdout = io.StringIO()
+        from contextlib import redirect_stderr, redirect_stdout
+        from unittest import mock
+        with mock.patch.object(selector, "queue_commit", return_value=(TREE, HEAD)), \
+                mock.patch.object(selector, "select", side_effect=pull), \
+                mock.patch.object(selector, "select_queue_proof", side_effect=queue), \
+                redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+            status = selector.main(["--repository", REPO, "--merge-group-sha", HEAD])
+        self.assertEqual((status, stdout.getvalue(), calls), (0, f"{QUEUE_RUN}\n", ["pull", "queue"]))
+
+        def queue_declines(**_: object) -> int:
+            raise selector.Decline("no successful queue run")
+
+        stdout = io.StringIO()
+        with mock.patch.object(selector, "queue_commit", return_value=(TREE, HEAD)), \
+                mock.patch.object(selector, "select", side_effect=pull), \
+                mock.patch.object(selector, "select_queue_proof", side_effect=queue_declines), \
+                redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+            status = selector.main(["--repository", REPO, "--merge-group-sha", HEAD])
+        self.assertEqual((status, stdout.getvalue()), (selector.NO_REUSE, ""))
 
 
 class QueueCommitTests(unittest.TestCase):
@@ -332,6 +545,9 @@ REUSE_IF = (
     "(github.event_name == 'merge_group' && steps.classify.outputs.unaffected != 'true') "
     "|| (github.event_name == 'push' && github.ref == 'refs/heads/main')"
 )
+# Only a pull request or a merge-queue entry that built the proof records the
+# tree it proved; a push, tag or dispatch never writes a reusable receipt.
+RECEIPT_EVENTS = "contains(fromJSON('[\"pull_request\",\"merge_group\"]'), github.event_name)"
 GPU_GATE = (
     "steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' "
     "&& steps.reuse.outputs.run_id == ''"
@@ -429,10 +645,11 @@ def assert_reuse_wiring(test: unittest.TestCase, text: str) -> None:
     # The agreement check sits between the decision and the re-check.
     test.assertEqual(names[reuse + 1:reuse + 4], [AGREE_STEP, "Refuse to build off a Mac", RECHECK_STEP])
     test.assertIn("verify_extraction.py", text)
-    receipt = dict(steps)["Record the tree this pull-request proof covered"]
-    test.assertEqual(receipt, f"{GPU_GATE} && github.event_name == 'pull_request'")
+    receipt = dict(steps)["Record the tree this proof covered"]
+    test.assertEqual(receipt, f"{GPU_GATE} && {RECEIPT_EVENTS}")
+    test.assertEqual(dict(steps)["Upload the proven-tree receipt"], f"{GPU_GATE} && {RECEIPT_EVENTS}")
     test.assertGreater(
-        names.index("Record the tree this pull-request proof covered"),
+        names.index("Record the tree this proof covered"),
         names.index("Prove installed HTML import through DesignIR and GPU capture"),
     )
     test.assertIn(
@@ -484,9 +701,21 @@ class WorkflowWiringTests(unittest.TestCase):
                 f"      - name: {RECHECK_STEP}\n", "      - name: Re-check nothing\n", 1,
             ),
             "receipt on every event": text.replace(
-                f"        if: {GPU_GATE} && github.event_name == 'pull_request'\n"
+                f"        if: {GPU_GATE} && {RECEIPT_EVENTS}\n"
                 "        shell: bash",
                 f"        if: {GPU_GATE}\n        shell: bash", 1,
+            ),
+            "receipt on pushes too": text.replace(
+                f"        if: {GPU_GATE} && {RECEIPT_EVENTS}\n"
+                "        shell: bash",
+                f"        if: {GPU_GATE} && contains(fromJSON('[\"pull_request\",\"merge_group\",\"push\"]'), github.event_name)\n"
+                "        shell: bash", 1,
+            ),
+            "receipt from a reused run": text.replace(
+                f"        if: {GPU_GATE} && {RECEIPT_EVENTS}\n"
+                "        shell: bash",
+                "        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' "
+                f"&& {RECEIPT_EVENTS}\n        shell: bash", 1,
             ),
         }
         for name, mutated in mutations.items():

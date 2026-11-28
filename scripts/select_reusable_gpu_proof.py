@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""Find a pull-request GPU proof that already ran on this merge-queue tree.
+"""Find a GPU proof that already ran on this merge-queue tree.
 
 A merge-queue entry's synthetic commit usually carries exactly the tree its
 pull request's own merge ref did: when no other change landed on main between
 the pull request's proof and the queue's, GitHub builds the same merge twice.
-The GPU proof is a pure function of that tree (every external input is pinned
-by digest inside it), so this selector lets the queue run report the earlier
-result instead of rebuilding the same tree.
+The same tree also comes back in the queue itself: when a group is rebuilt
+after an entry leaves or the order changes, a later entry can carry exactly the
+combined tree an earlier group already proved. The GPU proof is a pure function
+of that tree (every external input is pinned by digest inside it), so this
+selector lets the queue run report the earlier result instead of rebuilding the
+same tree.
 
-It prints one workflow run ID, and exits 0, only when every one of these holds:
+It looks for a pull-request proof first, then for a merge-queue proof.
+
+It prints a pull-request run ID, and exits 0, only when every one of these holds:
 
 * HEAD is the queue commit and has exactly two parents; the second is the
   pull request's head.
@@ -23,6 +28,18 @@ It prints one workflow run ID, and exits 0, only when every one of these holds:
   (Pulp's history, the attested view-audio archive); the queue run re-checks
   those itself, and the age bound keeps the reused result from describing a
   world much older than the queue that consumes it.
+
+Failing that, it prints a merge-queue run ID, and exits 0, only when every one
+of these holds:
+
+* A completed, successful ``merge_group`` run of this same workflow file, from
+  this repository, on a ``gh-readonly-queue/main/`` ref, started within MAX_AGE.
+* In that run's latest attempt both proof jobs concluded ``success`` (not
+  ``skipped``), on that run's commit.
+* That attempt uploaded the tree receipt, and the receipt names that run, that
+  attempt, that run's commit, and this exact tree. Only a run that built the
+  proof writes the receipt (a reused, classifier-skipped or cheap run never
+  does), so a reuse is never reused again.
 
 Anything else, including any API or parsing error, prints a reason on stderr
 and exits 3: the caller then runs the full proof. The selector can only ever
@@ -49,6 +66,11 @@ RECEIPT_ARTIFACT = "vellum-gpu-proof-tree"
 RECEIPT_FILE = "gpu-proof-tree.json"
 RECEIPT_SCHEMA = "vellum.gpu-proof-tree.v1"
 PROOF_JOBS = ("gpu-macos-arm64", "sterile-consumer")
+QUEUE_REF_PREFIX = "gh-readonly-queue/main/"
+# Merge-queue candidates read per selection. A queue lands a few entries an
+# hour, so the runs of the last MAX_AGE fit well inside this; the bound only
+# caps the API calls a selection can make.
+MAX_QUEUE_CANDIDATES = 60
 NO_REUSE = 3
 # A pull request is normally approved and queued within hours of its proof;
 # anything older is rebuilt rather than trusted across that much drift.
@@ -151,6 +173,18 @@ def check_run(
                 f"in attempt {job.get('run_attempt')}"
             )
 
+    return check_receipt(
+        repository=repository, run_id=run_id, attempt=attempt,
+        expected={"event": "pull_request", "tree": tree},
+        api=api, download=download,
+    )
+
+
+def check_receipt(
+    *, repository: str, run_id: int, attempt: int, expected: dict[str, Any],
+    api: Api, download: Download,
+) -> int:
+    """Return run_id when its attempt's receipt carries every expected field."""
     listing = api(
         f"repos/{repository}/actions/runs/{run_id}/artifacts"
         f"?name={RECEIPT_ARTIFACT}&per_page=100"
@@ -168,15 +202,14 @@ def check_run(
         ))
         if not (positive_int(receipt.get("run_attempt")) and receipt["run_attempt"] == attempt):
             continue
-        expected = {
+        fields = {
             "schema": RECEIPT_SCHEMA,
-            "event": "pull_request",
             "repository": repository,
             "run_id": run_id,
             "run_attempt": attempt,
-            "tree": tree,
+            **expected,
         }
-        for key, value in expected.items():
+        for key, value in fields.items():
             # type() as well as value: JSON true must not stand in for 1.
             if type(receipt.get(key)) is not type(value) or receipt.get(key) != value:
                 raise Decline(
@@ -184,6 +217,100 @@ def check_run(
                 )
         return run_id
     raise Decline(f"run {run_id} attempt {attempt} uploaded no tree receipt")
+
+
+def check_queue_run(
+    run: dict[str, Any], *, repository: str, tree: str,
+    api: Api, download: Download, now: Clock,
+) -> int:
+    """Return the ID of a merge-queue run that built and proved this tree."""
+    run_id = run.get("id")
+    attempt = run.get("run_attempt")
+    if not positive_int(run_id):
+        raise Decline("queue run has an invalid ID")
+    if not positive_int(attempt):
+        raise Decline(f"queue run {run_id} has an invalid attempt")
+    age = now() - started_at(run.get("run_started_at"))
+    if not timedelta(0) <= age <= MAX_AGE:
+        raise Decline(f"queue run {run_id} started {age} ago, outside {MAX_AGE}")
+    if run.get("event") != "merge_group":
+        raise Decline(f"queue run {run_id} is a {run.get('event')} run")
+    if run.get("path") != WORKFLOW_PATH:
+        raise Decline(f"queue run {run_id} ran {run.get('path')}, not {WORKFLOW_PATH}")
+    commit = run.get("head_sha")
+    if not isinstance(commit, str) or not SHA40.fullmatch(commit):
+        raise Decline(f"queue run {run_id} has no valid commit")
+    branch = run.get("head_branch")
+    if not isinstance(branch, str) or not branch.startswith(QUEUE_REF_PREFIX):
+        raise Decline(f"queue run {run_id} ran ref {branch!r}, not a main queue ref")
+    for field in ("repository", "head_repository"):
+        if (run.get(field) or {}).get("full_name") != repository:
+            raise Decline(f"queue run {run_id} {field} is outside {repository}")
+    if run.get("status") != "completed" or run.get("conclusion") != "success":
+        raise Decline(f"queue run {run_id} is {run.get('status')}/{run.get('conclusion')}")
+
+    # The receipt first: it is the cheap way to rule out another tree.
+    check_receipt(
+        repository=repository, run_id=run_id, attempt=attempt,
+        expected={"event": "merge_group", "commit": commit, "tree": tree},
+        api=api, download=download,
+    )
+    jobs = api(f"repos/{repository}/actions/runs/{run_id}/jobs?filter=latest&per_page=100")
+    by_name: dict[str, list[dict[str, Any]]] = {}
+    for job in jobs.get("jobs", []):
+        by_name.setdefault(job.get("name"), []).append(job)
+    for name in PROOF_JOBS:
+        matches = by_name.get(name, [])
+        if len(matches) != 1:
+            raise Decline(f"queue run {run_id} has {len(matches)} {name} jobs")
+        job = matches[0]
+        if (
+            job.get("conclusion") != "success"
+            or not positive_int(job.get("run_attempt")) or job["run_attempt"] != attempt
+            or job.get("head_sha") != commit
+        ):
+            raise Decline(
+                f"queue run {run_id} {name} is {job.get('conclusion')} "
+                f"in attempt {job.get('run_attempt')} on {job.get('head_sha')}"
+            )
+    return run_id
+
+
+def select_queue_proof(
+    *, repository: str, tree: str, api: Api, download: Download,
+    now: Clock = lambda: datetime.now(timezone.utc),
+) -> int:
+    """Return a successful merge-queue run that built a proof of this tree."""
+    since = (now() - MAX_AGE).strftime("%Y-%m-%dT%H:%M:%SZ")
+    runs: list[dict[str, Any]] = []
+    for page in range(1, 4):
+        batch = api(
+            f"repos/{repository}/actions/workflows/gpu-macos.yml/runs"
+            f"?event=merge_group&status=success&created=%3E%3D{since}"
+            f"&per_page=100&page={page}"
+        ).get("workflow_runs", [])
+        runs.extend(batch)
+        if len(batch) < 100:
+            break
+    else:
+        raise Decline(f"more than 300 successful queue runs since {since}")
+    candidates = sorted(
+        runs, key=lambda value: value.get("id") if positive_int(value.get("id")) else 0,
+        reverse=True,
+    )
+    if len(candidates) > MAX_QUEUE_CANDIDATES:
+        raise Decline(f"{len(candidates)} queue runs since {since}, over {MAX_QUEUE_CANDIDATES}")
+    reasons = []
+    # Newest first: the most recent proof of the tree is the one that stands.
+    for run in candidates:
+        try:
+            return check_queue_run(
+                run, repository=repository, tree=tree,
+                api=api, download=download, now=now,
+            )
+        except Decline as reason:
+            reasons.append(str(reason))
+    raise Decline("; ".join(reasons) or f"no successful queue run since {since}")
 
 
 def successful_runs(api: Api, repository: str, head_sha: str) -> list[dict[str, Any]]:
@@ -242,10 +369,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         tree, head_sha = queue_commit(args.root, args.merge_group_sha)
-        run_id = select(
-            repository=args.repository, tree=tree, head_sha=head_sha,
-            api=gh_api, download=gh_download,
-        )
+        try:
+            run_id = select(
+                repository=args.repository, tree=tree, head_sha=head_sha,
+                api=gh_api, download=gh_download,
+            )
+        except Decline as reason:
+            print(f"no pull-request proof of this tree: {reason}", file=sys.stderr)
+            run_id = select_queue_proof(
+                repository=args.repository, tree=tree, api=gh_api, download=gh_download,
+            )
     except Decline as reason:
         print(f"no reusable proof: {reason}", file=sys.stderr)
         return NO_REUSE

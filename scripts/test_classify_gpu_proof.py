@@ -503,7 +503,7 @@ class CheapLaneWorkflowTests(unittest.TestCase):
         self.assertIn("ctest --test-dir build-cheap -L pr-fast", self.steps["Run the pr-fast tests"]["run"])
         self.assertIn("-DVELLUM_REQUIRE_GPU=ON", self.steps["Build the cheap pull-request slice"]["run"])
         # select_reusable_gpu_proof.py needs this receipt; a cheap run must never write it.
-        for name in ("Record the tree this pull-request proof covered", "Upload the proven-tree receipt"):
+        for name in ("Record the tree this proof covered", "Upload the proven-tree receipt"):
             self.assertIn("steps.depth.outputs.cheap != 'true'", self.steps[name]["if"])
 
     def test_the_verified_release_source_step_stays_in_the_cheap_lane(self) -> None:
