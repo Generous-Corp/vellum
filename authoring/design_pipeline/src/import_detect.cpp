@@ -163,50 +163,54 @@ OpenTag parse_open_tag(const std::string& html, size_t name_end) {
     return tag;
 }
 
-// Visit each <script> element outside HTML comments, passing its opening
-// tag and its body. Hand-rolled to keep a full HTML parser out of the CLI.
+// Visit each <script> element, passing its opening tag and its body. Every
+// tag is read with its quoting rules and comments and raw-text elements are
+// skipped, so script-shaped text inside another tag's attribute, a comment,
+// a <style>/<textarea>/<title> or a script body is never taken for a script.
+// Hand-rolled to keep a full HTML parser out of the CLI build.
 template <typename Visit>
 void for_each_script(const std::string& html, Visit&& visit) {
     std::string lower = html;
     for (auto& c : lower)
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    auto is_alpha = [](char c) { return std::isalpha(static_cast<unsigned char>(c)) != 0; };
     size_t i = 0;
-    while (i < html.size()) {
-        // A commented example is not a script element. Skip the whole comment
-        // whenever it appears before the next candidate tag.
-        auto comment = lower.find("<!--", i);
-        auto open = lower.find("<script", i);
-        if (comment != std::string::npos &&
-            (open == std::string::npos || comment < open)) {
-            auto comment_end = lower.find("-->", comment + 4);
+    while (true) {
+        auto lt = lower.find('<', i);
+        if (lt == std::string::npos || lt + 1 >= lower.size()) break;
+        if (lower.compare(lt, 4, "<!--") == 0) {
+            auto comment_end = lower.find("-->", lt + 4);
             if (comment_end == std::string::npos) break;
             i = comment_end + 3;
             continue;
         }
-        if (open == std::string::npos) break;
-        const auto name_end = open + 7;
-        if (name_end < lower.size()) {
-            const char next = lower[name_end];
-            if (!(next == '>' || next == '/' ||
-                  std::isspace(static_cast<unsigned char>(next)))) {
-                i = name_end;
-                continue;
-            }
+        if (!is_alpha(lower[lt + 1])) {
+            // A closing tag, doctype or stray '<': not an element start.
+            i = lt + 1;
+            continue;
         }
+        size_t name_end = lt + 1;
+        while (name_end < lower.size() &&
+               (std::isalnum(static_cast<unsigned char>(lower[name_end])) ||
+                lower[name_end] == '-'))
+            ++name_end;
+        const std::string name = lower.substr(lt + 1, name_end - lt - 1);
         auto tag = parse_open_tag(html, name_end);
         if (tag.end == std::string::npos) break;
-        if (tag.self_closing) {
+        const bool script = name == "script";
+        const bool raw_text = script || name == "style" || name == "textarea" ||
+                              name == "title" || name == "xmp";
+        if (!raw_text || (script && tag.self_closing)) {
             // `<script/>` is written as an empty element; its "body" would
             // otherwise swallow the next script.
-            visit(tag, std::string_view{});
+            if (script) visit(tag, std::string_view{});
             i = tag.end;
             continue;
         }
-        // A script body is raw text: markup inside a JS string is not an
-        // element, so resume after the closing tag.
-        auto body_end = lower.find("</script", tag.end);
+        auto body_end = lower.find("</" + name, tag.end);
         if (body_end == std::string::npos) body_end = html.size();
-        visit(tag, std::string_view(html).substr(tag.end, body_end - tag.end));
+        if (script)
+            visit(tag, std::string_view(html).substr(tag.end, body_end - tag.end));
         i = body_end;
     }
 }
@@ -267,10 +271,10 @@ std::string strip_js_comments(const std::string& code) {
 // clauses, so this surfaces representative keys; it does not rebuild a tree.
 std::vector<std::string> scrape_tailwind_tokens(const std::string& html) {
     std::set<std::string> seen;
-    // Match identifier-like keys "<ident>": before a colon, loose enough to
-    // handle Material 3 hyphenated tokens like "surface-container".
+    // Match quoted identifier-like keys ("<ident>": or '<ident>':), loose
+    // enough to handle Material 3 hyphenated tokens like "surface-container".
     static const std::regex token_re(
-        R"REX("([a-zA-Z][a-zA-Z0-9_-]{1,40})"\s*:)REX",
+        R"REX((["'])([a-zA-Z][a-zA-Z0-9_-]{1,40})\1\s*:)REX",
         std::regex::ECMAScript);
     static const std::regex config_re(
         R"REX((^|[^A-Za-z0-9_$])tailwind(\.config)?\s*=[^=])REX",
@@ -280,7 +284,7 @@ std::vector<std::string> scrape_tailwind_tokens(const std::string& html) {
         if (!std::regex_search(body, config_re)) return;
         auto begin = std::sregex_iterator(body.begin(), body.end(), token_re);
         for (auto it = begin; it != std::sregex_iterator{}; ++it)
-            seen.insert((*it)[1].str());
+            seen.insert((*it)[2].str());
     });
     return {seen.begin(), seen.end()};
 }

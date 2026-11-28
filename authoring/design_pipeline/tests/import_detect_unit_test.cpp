@@ -523,6 +523,14 @@ TEST_CASE("tailwind tokens come only from a live Tailwind config script",
     REQUIRE(has(live, "on-primary"));
     REQUIRE(has(live, "surface-container"));
     REQUIRE_FALSE(has(live, "commented-token"));
+
+    // JavaScript also allows single-quoted property names.
+    write_text(scratch.path / "single.html",
+               "<script>tailwind.config = {theme: {extend: {colors: "
+               "{'surface-container': '#fff', 'on-primary': '#000'}}}};</script>");
+    auto single = det::snapshot_input(scratch.path / "single.html");
+    REQUIRE(has(single, "surface-container"));
+    REQUIRE(has(single, "on-primary"));
 }
 
 TEST_CASE("script attributes are read outside other attributes' quoted values",
@@ -533,6 +541,9 @@ TEST_CASE("script attributes are read outside other attributes' quoted values",
 <script data-gt="a > b" type="module" src='/real.js'></script>
 <script type="text/plain" type="__bundler/template"></script>
 <script>const example = '<script type="__bundler/template" src="/in-js.js">';</script>
+<div data-example='<script type="__bundler/template"></script>'></div>
+<style>.x::after { content: "<script type='__bundler/template'>"; }</style>
+<textarea><script src="/in-textarea.js"></script></textarea>
 )HTML");
     auto snap = det::snapshot_input(scratch.path / "quoted.html");
     REQUIRE(snap.script_types == std::vector<std::string>{"module", "text/plain"});
