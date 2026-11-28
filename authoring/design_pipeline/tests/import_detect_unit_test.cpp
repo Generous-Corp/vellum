@@ -532,6 +532,7 @@ TEST_CASE("script attributes are read outside other attributes' quoted values",
 <script data-example=' type="__bundler/template" src="/fake.js"'></script>
 <script data-gt="a > b" type="module" src='/real.js'></script>
 <script type="text/plain" type="__bundler/template"></script>
+<script>const example = '<script type="__bundler/template" src="/in-js.js">';</script>
 )HTML");
     auto snap = det::snapshot_input(scratch.path / "quoted.html");
     REQUIRE(snap.script_types == std::vector<std::string>{"module", "text/plain"});

@@ -107,6 +107,7 @@ std::string lower_trim(std::string s) {
 struct OpenTag {
     std::vector<std::pair<std::string, std::string>> attrs;  // lowercase name, raw value
     size_t end = std::string::npos;
+    bool self_closing = false;  // the tag ends in "/>"
 };
 
 OpenTag parse_open_tag(const std::string& html, size_t name_end) {
@@ -116,10 +117,15 @@ OpenTag parse_open_tag(const std::string& html, size_t name_end) {
     };
     size_t i = name_end;
     while (i < html.size()) {
-        while (i < html.size() && (is_space(html[i]) || html[i] == '/')) ++i;
+        bool slash = false;
+        while (i < html.size() && (is_space(html[i]) || html[i] == '/')) {
+            slash = html[i] == '/';
+            ++i;
+        }
         if (i >= html.size()) break;
         if (html[i] == '>') {
             tag.end = i + 1;
+            tag.self_closing = slash;
             return tag;
         }
         size_t name_start = i;
@@ -189,12 +195,19 @@ void for_each_script(const std::string& html, Visit&& visit) {
         }
         auto tag = parse_open_tag(html, name_end);
         if (tag.end == std::string::npos) break;
+        if (tag.self_closing) {
+            // `<script/>` is written as an empty element; its "body" would
+            // otherwise swallow the next script.
+            visit(tag, std::string_view{});
+            i = tag.end;
+            continue;
+        }
+        // A script body is raw text: markup inside a JS string is not an
+        // element, so resume after the closing tag.
         auto body_end = lower.find("</script", tag.end);
         if (body_end == std::string::npos) body_end = html.size();
         visit(tag, std::string_view(html).substr(tag.end, body_end - tag.end));
-        // Resume after the opening tag, not the body: `<script/>` has no
-        // closing tag, and skipping to the next one would hide a script.
-        i = tag.end;
+        i = body_end;
     }
 }
 
