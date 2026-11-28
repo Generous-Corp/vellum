@@ -76,15 +76,39 @@ FRAMEWORK_TEST(css_vars_output_is_sorted_and_repeatable) {
     CHECK(at("--spacing-base") < at("--typography-body-fontFamily"));
 }
 
-FRAMEWORK_TEST(css_vars_sanitizes_names_and_values_and_drops_collisions) {
+FRAMEWORK_TEST(css_vars_sanitizes_names_and_drops_collisions) {
     const auto parsed = parse_designmd(
-        "---\nname: Test\ncolors:\n  \"a b\": \"#000000\"\n  a.b: \"#111111\"\n"
-        "typography:\n  body:\n    fontFamily: \"Inter;} body { x: y\"\n---\n");
+        "---\nname: Test\ncolors:\n  \"a b\": \"#000000\"\n  a.b: \"#111111\"\n---\n");
     const std::string css = export_css_vars(parsed);
     CHECK(contains(css, "  --color-a-b: #"));
     CHECK(css.find("--color-a-b:") == css.rfind("--color-a-b:"));
-    CHECK(!contains(css, "} body"));
-    CHECK(!contains(css, "Inter;"));
+}
+
+FRAMEWORK_TEST(css_vars_refuses_values_that_would_escape_their_declaration) {
+    const auto parsed = parse_designmd(
+        "---\nname: Test\ntypography:\n  body:\n    fontFamily: \"Inter;} body { x: y\"\n"
+        "    fontSize: \"calc(1px\"\n    fontWeight: \"a /* b\"\n"
+        "    lineHeight: \"he said \\\"hi\"\n"
+        "  label:\n    fontFamily: \"Inter Display\"\n---\n");
+    const std::string css = export_css_vars(parsed);
+    CHECK(!contains(css, "body-fontFamily"));
+    CHECK(!contains(css, "body-fontSize"));
+    CHECK(!contains(css, "body-fontWeight"));
+    CHECK(contains(css, "  --typography-label-fontFamily: Inter Display;\n"));
+    // Every line is a whole declaration, and there is exactly one block.
+    CHECK(css.find('{') == css.rfind('{'));
+    CHECK(css.find('}') == css.rfind('}'));
+}
+
+FRAMEWORK_TEST(css_vars_exports_resolved_spacing_and_rounded_aliases) {
+    const auto parsed = parse_designmd(
+        "---\nname: Test\nrounded:\n  sm: 4px\n  pill: \"{rounded.sm}\"\n"
+        "spacing:\n  base: 8\n  alias: \"{spacing.base}\"\n---\n");
+    const std::string css = export_css_vars(parsed);
+    CHECK(contains(css, "  --spacing-base: 8px;\n"));
+    CHECK(contains(css, "  --spacing-alias: 8px;\n"));
+    CHECK(contains(css, "  --rounded-sm: 4px;\n"));
+    CHECK(contains(css, "  --rounded-pill: 4px;\n"));
 }
 
 FRAMEWORK_TEST(css_vars_of_an_empty_system_is_an_empty_block) {
@@ -110,6 +134,35 @@ FRAMEWORK_TEST(color_mix_requires_explicit_percentage_weights) {
         parse_colors("  a: \"color-mix(in srgb, red 130%, blue)\"\n")));
     CHECK(has_color_shape_warning(
         parse_colors("  a: \"color-mix(in srgb, red 30%)\"\n")));
+}
+
+FRAMEWORK_TEST(color_mix_accepts_substitutions_and_checks_the_interpolation_method) {
+    CHECK(!has_color_shape_warning(
+        parse_colors("  a: \"color-mix(in srgb, var(--brand) 30%, blue)\"\n")));
+    CHECK(!has_color_shape_warning(
+        parse_colors("  a: \"color-mix(in oklch longer hue, red, blue)\"\n")));
+    CHECK(has_color_shape_warning(
+        parse_colors("  a: \"color-mix(in nonsense, red, blue)\"\n")));
+    CHECK(has_color_shape_warning(
+        parse_colors("  a: \"color-mix(in srgb longer hue, red, blue)\"\n")));
+    CHECK(has_color_shape_warning(parse_colors("  a: \"color-mix(srgb, red, blue)\"\n")));
+}
+
+FRAMEWORK_TEST(color_mix_weights_use_one_percentage_grammar_in_both_positions) {
+    CHECK(!has_color_shape_warning(
+        parse_colors("  a: \"color-mix(in srgb, red 5e1%, blue)\"\n")));
+    CHECK(!has_color_shape_warning(
+        parse_colors("  a: \"color-mix(in srgb, 5e1% red, blue)\"\n")));
+    CHECK(!has_color_shape_warning(
+        parse_colors("  a: \"color-mix(in srgb, red 100%, blue 0%)\"\n")));
+    CHECK(has_color_shape_warning(
+        parse_colors("  a: \"color-mix(in srgb, red -10%, blue)\"\n")));
+    CHECK(has_color_shape_warning(
+        parse_colors("  a: \"color-mix(in srgb, -10% red, blue)\"\n")));
+    CHECK(has_color_shape_warning(
+        parse_colors("  a: \"color-mix(in srgb, red 100.5%, blue)\"\n")));
+    CHECK(has_color_shape_warning(
+        parse_colors("  a: \"color-mix(in srgb, 101% red, blue)\"\n")));
 }
 
 FRAMEWORK_TEST(angle_units_in_color_functions_are_valid_colors) {
