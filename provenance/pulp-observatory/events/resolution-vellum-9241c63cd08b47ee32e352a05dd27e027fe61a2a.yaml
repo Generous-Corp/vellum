@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-9241c63cd08b47ee32e352a05dd27e027fe61a2a",
+  "kind": "resolution",
+  "created_at": "2026-11-28T05:24:24Z",
+  "resolves": "vellum-9241c63cd08b47ee32e352a05dd27e027fe61a2a",
+  "disposition": "framework-only",
+  "rationale": "Vellum PR #756, authored by the Vellum lead's own lane (PR body owner marker host=m5s client=claude-code). Carries captured canvas pixels through the native render: content-hashed PNG image nodes, alpha-preserving PNG decode, the rendered-tree materializer painting packaged browser-capture images, the app-host staging and live geometry checks, and the transparent-missing image sampling mode. The rendered-tree materializer, the Vellum image decode/GPU path and the app-host live import geometry check exist only in Vellum; Pulp renders through pulp::view and its own canvas, so there is no Pulp counterpart to port to. The touched paths are outside framework/ and mirror/, the event carries no schema or API delta and is not security or P0. Evidence: [absent] `git -C <pulp> grep -l -F -e 'rendered_tree_materializer' <rev> -- core tools test examples apple ship inspect` = 0 at both the frozen cursor aa630815630c and Pulp main f6dc34e14e11; [absent] `git -C <pulp> grep -l -F -e 'image_gpu_test' <rev> -- core tools test examples apple ship inspect` = 0 at both the frozen cursor aa630815630c and Pulp main f6dc34e14e11; [absent] `git -C <pulp> grep -l -F -e 'test_html_import_geometry' <rev> -- core tools test examples apple ship inspect` = 0 at both the frozen cursor aa630815630c and Pulp main f6dc34e14e11; [absent] `git -C <pulp> grep -l -F -e 'transparent_missing' <rev> -- core tools test examples apple ship inspect` = 0 at both the frozen cursor aa630815630c and Pulp main f6dc34e14e11; [control] same instrument, same revisions, term 'browser_capture_tree' (Pulp's nearest capture-tree counterpart) = 5 at aa630815630c and 11 at f6dc34e14e11; the search finds Pulp's counterpart code, so the zeros above are real. Classified framework-only by the Vellum lead's lane for its own PR under the README rule of 2026-11-10; any later resolution overrides it.",
+  "owner": "@vellum-lead",
+  "linked_commits": [
+    "9241c63cd08b47ee32e352a05dd27e027fe61a2a"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/vellum/pull/756"
+  ],
+  "contract_tests": [
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 3
+}

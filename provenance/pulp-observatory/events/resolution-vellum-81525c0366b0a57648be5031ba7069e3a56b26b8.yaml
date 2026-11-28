@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-81525c0366b0a57648be5031ba7069e3a56b26b8",
+  "kind": "resolution",
+  "created_at": "2026-11-28T05:43:00Z",
+  "resolves": "vellum-81525c0366b0a57648be5031ba7069e3a56b26b8",
+  "disposition": "not-applicable",
+  "rationale": "Vellum PR #802, the Vellum lead's own lane (PR body owner marker host=m5s client=claude-code), moves Pulp's design-tool JS into Vellum verbatim. Pulp already contains identical content, so nothing is owed to Pulp. Blob comparison (git rev-parse <commit>:<path>): apps/design-tool/design-tool-core.js blob d0fb050dc09ea590d26ce4fd3933f6891b11d5b7 = Pulp examples/design-tool/design-tool-core.js blob d0fb050dc09ea590d26ce4fd3933f6891b11d5b7 at source_commit 50c4eaa3fe02c9805c3b7dbae16d12072722eaeb; apps/design-tool/design-tool-export.js blob 0991baaf426964ac10181a920470060aaf27a718 = Pulp examples/design-tool/design-tool-export.js blob 0991baaf426964ac10181a920470060aaf27a718 at source_commit 50c4eaa3fe02c9805c3b7dbae16d12072722eaeb; apps/design-tool/oklch.js blob ff0ae95d7aaca8dd04aec210cf9abd41590958c3 = Pulp examples/design-tool/oklch.js blob ff0ae95d7aaca8dd04aec210cf9abd41590958c3 at source_commit 50c4eaa3fe02c9805c3b7dbae16d12072722eaeb. The same Pulp blobs are also present, unchanged, at the frozen cursor aa630815630c and at Pulp main f6dc34e14e11. The remaining mapped paths in this event (the move manifest under apps/design-tool/moves/ and, where listed, the README and verifier tooling) are Vellum's own records of the move and have no Pulp counterpart. Classified not-applicable by the Vellum lead's lane for its own PR on the lead's ruling; any later resolution overrides it.",
+  "owner": "@vellum-lead",
+  "linked_commits": [
+    "81525c0366b0a57648be5031ba7069e3a56b26b8"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/vellum/pull/802"
+  ],
+  "contract_tests": [
+    "vellum.capture-stats",
+    "vellum.gpu-native"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 3
+}
