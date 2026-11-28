@@ -93,6 +93,11 @@ int main(int argc, char** argv) {
             c.set_fill_color(vellum::canvas::Color::rgba8(40, 120, 220, 255));
             c.fill_rect(0, 0, 32, 32);
         }
+        void layout_children() override {
+            // This fixture paints in fixed design coordinates. Keep the button
+            // there when a viewport change repaints and lays out the tree.
+            if (child_count() != 0) child_at(0)->set_bounds({10, 20, 30, 40});
+        }
         bool on_key_event(const vellum::view::KeyEvent&) override { ++keys; return true; }
         void on_mouse_event(const vellum::view::MouseEvent& event) override {
             if (event.phase == vellum::view::MousePhase::press) {
@@ -193,11 +198,16 @@ int main(int argc, char** argv) {
         styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];
     [accessibility_window setReleasedWhenClosed:NO];
     [accessibility_window.contentView addSubview:parent];
-    probe.child_at(0)->set_bounds({10, 20, 30, 40});
     auto verify_frame = [&](NSRect root_rect) {
         NSRect expected = [host_view convertRect:root_rect toView:nil];
         expected = [accessibility_window convertRectToScreen:expected];
-        return NSEqualRects([host_view.accessibilityChildren.firstObject accessibilityFrame], expected);
+        const NSRect actual = [host_view.accessibilityChildren.firstObject accessibilityFrame];
+        if (!NSEqualRects(actual, expected)) {
+            std::fprintf(stderr, "accessibility frame: actual %s expected %s\n",
+                NSStringFromRect(actual).UTF8String, NSStringFromRect(expected).UTF8String);
+            return false;
+        }
+        return true;
     };
     if (!verify_frame(NSMakeRect(20, 180, 60, 80)))
         return fail("accessibility frame ignores viewport scale or vertical letterbox");
