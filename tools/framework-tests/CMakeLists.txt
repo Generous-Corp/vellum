@@ -506,6 +506,10 @@ vellum_add_framework_test(design-codegen-web-grid
     SOURCES design_codegen_web_grid_test.cpp
     UNITS Vellum::MirrorView_script)
 
+vellum_add_framework_test(design-frame-host-param
+    SOURCES design_frame_host_param_test.cpp
+    UNITS Vellum::MirrorView_core Vellum::Value)
+
 vellum_add_framework_test(host-param-surface-model
     SOURCES host_param_surface_model_test.cpp
     UNITS Vellum::MirrorView_core Vellum::Value)
