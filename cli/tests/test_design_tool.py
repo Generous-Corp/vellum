@@ -173,6 +173,61 @@ class DesignToolCliTests(unittest.TestCase):
         self.assertNotEqual(missing.returncode, 0)
         self.assertEqual(json.loads(self.design("record", "--list", "--json").stdout)["assets"], assets)
 
+    def test_gallery(self) -> None:
+        self.write("cards/knob.js", "// @dsCard group=knobs viewport=120x140\nexport const k = 1;\n")
+        self.write("cards/plain.js", "export const p = 1;\n")
+        inventory = self.design("gallery", "--root", ".", "--json")
+        self.assertEqual(inventory.returncode, 0, inventory.stderr)
+        manifest = json.loads(inventory.stdout)
+        self.assertEqual(manifest["total"], 1)
+        self.assertEqual(manifest["groups"][0]["cards"][0]["file"], "cards/knob.js")
+        written = self.design("gallery", "--root", ".", "--no-render")
+        self.assertEqual(written.returncode, 0, written.stderr)
+        self.assertTrue((self.root / ".pulp-gallery/gallery.html").is_file())
+        # Rendering needs an offscreen capture tool the SDK does not ship, so it
+        # is refused instead of producing a gallery without its PNGs.
+        render = self.design("gallery", "--root", ".", "--out", "rendered")
+        self.assertEqual(render.returncode, 2)
+        self.assertIn("card rendering is not available", render.stderr)
+        self.assertFalse((self.root / "rendered/gallery.html").exists())
+
+    def test_handoff(self) -> None:
+        self.write("proj/README.md", "# Handoff\n\nFidelity: hi-fi\n\n## Screens\n\n### Main\n"
+                   "- Background: #101010\n")
+        contract = self.design("handoff", "proj", "--json")
+        self.assertEqual(contract.returncode, 0, contract.stderr)
+        parsed = json.loads(contract.stdout)
+        self.assertEqual(parsed["fidelity"], "hifi")
+        self.assertEqual(parsed["screens"][0]["specs"], {"Background": "#101010"})
+        missing = self.design("handoff", "absent", "--json")
+        self.assertNotEqual(missing.returncode, 0)
+
+    def test_variants(self) -> None:
+        names = self.write("variants.txt", "# Button\nSize=Small, State=Default\n\nSize=Large, State=Hover\n")
+        contract = self.design("variants", "--component", "Button", str(names), "--json")
+        self.assertEqual(contract.returncode, 0, contract.stderr)
+        parsed = json.loads(contract.stdout)
+        self.assertEqual(parsed["variant_count"], 2)
+        self.assertEqual({p["name"]: sorted(p["values"]) for p in parsed["props"]},
+                         {"Size": ["Large", "Small"], "State": ["Default", "Hover"]})
+        unnamed = self.design("variants", str(names), "--json")
+        self.assertNotEqual(unnamed.returncode, 0)
+
+    def test_tweak(self) -> None:
+        artifact = self.write(
+            "art.js", 'const cfg = /*EDITMODE-BEGIN*/{"accent":"#33aaff","radius":8}/*EDITMODE-END*/;\n')
+        updated = self.design("tweak", str(artifact), "--set", "radius=12", "--set", "accent=#fff")
+        self.assertEqual(updated.returncode, 0, updated.stderr)
+        self.assertEqual(
+            artifact.read_text(encoding="utf-8"),
+            'const cfg = /*EDITMODE-BEGIN*/{"accent":"#fff","radius":12}/*EDITMODE-END*/;\n')
+        listed = self.design("tweak", str(artifact), "--json")
+        self.assertEqual(json.loads(listed.stdout), {"accent": "#fff", "radius": 12})
+        plain = self.write("plain.js", "const cfg = {};\n")
+        refused = self.design("tweak", str(plain), "--set", "radius=1")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertEqual(plain.read_text(encoding="utf-8"), "const cfg = {};\n")
+
     def test_export_tokens(self) -> None:
         w3c = self.design("export-tokens", "--dry-run")
         self.assertEqual(w3c.returncode, 0, w3c.stderr)
@@ -224,7 +279,7 @@ class DesignToolDiscoveryTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         for verb in ("check", "diff", "md-lint", "md-diff", "compile", "lint-adherence",
-                     "record", "export-tokens"):
+                     "record", "gallery", "handoff", "variants", "tweak", "export-tokens"):
             self.assertIn(verb, completed.stdout)
 
 

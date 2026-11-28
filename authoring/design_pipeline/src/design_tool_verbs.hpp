@@ -18,6 +18,10 @@ int run_diff(const std::vector<std::string>& rest);
 int run_compile(const std::vector<std::string>& rest);
 int run_lint_adherence(const std::vector<std::string>& rest);
 int run_record(const std::vector<std::string>& rest);
+int run_gallery(const std::vector<std::string>& rest);
+int run_handoff(const std::vector<std::string>& rest);
+int run_variants(const std::vector<std::string>& rest);
+int run_tweak(const std::vector<std::string>& rest);
 int run_export_tokens(const std::vector<std::string>& rest);
 
 }  // namespace vellum::design_tool
