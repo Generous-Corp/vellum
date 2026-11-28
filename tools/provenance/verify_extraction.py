@@ -244,6 +244,10 @@ RENAMED_MIRROR_EXEMPT_PATHS = {
     # The mirror package's own build glue: the provider anchor compiled into
     # the canvas unit, and the GPU guard whose #error names the guarded header.
     "tools/mirror/canvas_provider_anchor.cpp",
+    # The bytecode generator, built against the view-script unit and shipped in the
+    # SDK's mirror scope, and the consumer that proves its blobs.
+    "cmake/vellum_js_bytecode_main.cpp",
+    "tools/mirror/js-bytecode-consumer/main.cpp",
     "tools/mirror/gpu_surface_guard.py",
     # The rule itself, its installer copy and its tests.
     "scripts/install_core.py",
