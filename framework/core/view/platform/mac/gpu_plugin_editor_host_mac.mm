@@ -1,6 +1,8 @@
 #include <vellum/view/plugin_view_host.hpp>
 #include <vellum/view/input_events.hpp>
 #include <vellum/view/pointer_dispatch.hpp>
+#include <vellum/view/accessibility.hpp>
+#include <vellum/view/text_accessibility.hpp>
 #include <vellum/view/window_host.hpp>
 #include <vellum/render/gpu_surface.hpp>
 #include <vellum/render/skia_surface.hpp>
@@ -12,12 +14,98 @@
 
 #import <Cocoa/Cocoa.h>
 #include <objc/runtime.h>
+#include <objc/message.h>
 #include <cstdio>
+#include <vector>
+
+// Provided by the accessibility units compiled into this image: the window-host
+// element tree and the painted-text element lookup.
+namespace vellum::view {
+NSArray* build_accessibility_elements(View& root, NSView* host);
+}
+extern "C" NSArray* vellum_text_accessibility_elements_for_host_macos(const void* host);
 
 namespace vellum::view::detail {
 namespace {
 class MacPluginViewHost;
 Class host_class();
+
+// Mirrors the order build_accessibility_elements() walks: every descendant of
+// the root, parents before children, keeping the views that pass the shared
+// exposure gate. Each entry records whether the view and all its ancestors are
+// visible and accessibility-exposed, so hidden subtrees stay out of the tree.
+void collect_exposure_flags(const View& parent, bool parent_visible, std::vector<bool>& out) {
+    for (std::size_t i = 0; i < parent.child_count(); ++i) {
+        const View* child = parent.child_at(i);
+        const bool visible = parent_visible && child->visible() && child->access_hidden() != "true";
+        if (is_accessibility_element(*child)) out.push_back(visible);
+        collect_exposure_flags(*child, visible, out);
+    }
+}
+
+NSArray* editor_accessibility_children(VellumMirrorView* host) {
+    NSMutableArray* children = [NSMutableArray array];
+    if (host.isHiddenOrHasHiddenAncestor ||
+        (host.rootView && (!host.rootView->visible() || host.rootView->access_hidden() == "true")))
+        return children;
+
+    // Start at the class that supplied the inherited implementation, not at the
+    // runtime subclass (Metal hosts inherit this override too).
+    objc_super parent{host, class_getSuperclass([VellumMirrorView class])};
+    auto inherited_children = reinterpret_cast<NSArray* (*)(objc_super*, SEL)>(objc_msgSendSuper);
+    for (id child in inherited_children(&parent, @selector(accessibilityChildren))) {
+        if ([child isKindOfClass:[NSView class]] && [(NSView*)child isHiddenOrHasHiddenAncestor])
+            continue;
+        [children addObject:child];
+    }
+    if (View* root = host.rootView) {
+        NSArray* elements = build_accessibility_elements(*root, host);
+        std::vector<bool> shown;
+        collect_exposure_flags(*root, root->visible() && root->access_hidden() != "true", shown);
+        const bool aligned = shown.size() == elements.count;
+        for (NSUInteger i = 0; i < elements.count; ++i) {
+            if (!aligned || !shown[i]) continue;
+            [elements[i] setAccessibilityParent:host];
+            [children addObject:elements[i]];
+        }
+    }
+    // Painted text is registered apart from the view tree; without this merge a
+    // screen reader never reaches it.
+    if (!host.rootView || !host.rootView->visible() || host.rootView->access_hidden() == "true")
+        return children;
+    for (NSAccessibilityElement* element in vellum_text_accessibility_elements_for_host_macos((__bridge const void*)host)) {
+        [element setAccessibilityParent:host];
+        [children addObject:element];
+    }
+    return children;
+}
+
+// CPU and Metal hosts share the same accessibility tree. The methods are added
+// to their common view class once when this image loads.
+void add_method(Class cls, SEL selector, const char* return_type, id block) {
+    char types[8];
+    std::snprintf(types, sizeof types, "%s@:", return_type);
+    class_addMethod(cls, selector, imp_implementationWithBlock(block), types);
+}
+
+void install_view_accessibility() {
+    Class cls = [VellumMirrorView class];
+    add_method(cls, @selector(isAccessibilityElement), @encode(BOOL), ^BOOL(id) { return YES; });
+    add_method(cls, @selector(accessibilityRole), @encode(id), ^NSAccessibilityRole(id) {
+        return NSAccessibilityGroupRole;
+    });
+    add_method(cls, @selector(accessibilityLabel), @encode(id), ^NSString*(NSView* host) {
+        NSString* title = host.window.title;
+        return title.length > 0 ? title : @"UI";
+    });
+    add_method(cls, @selector(accessibilityChildren), @encode(id), ^NSArray*(VellumMirrorView* host) {
+        return editor_accessibility_children(host);
+    });
+}
+
+__attribute__((constructor)) void install_view_accessibility_at_load() {
+    install_view_accessibility();
+}
 
 class MacPluginViewHost final : public PluginViewHost {
 public:
@@ -205,6 +293,7 @@ private:
 Class host_class() {
     static Class c=[] { char n[96]; std::snprintf(n,sizeof n,"VellumPluginViewHost_%p",reinterpret_cast<void*>(&host_class));
         if (Class old=objc_getClass(n)) return old; Class x=objc_allocateClassPair([VellumMirrorMetalView class],n,0);
+        add_method(x, @selector(accessibilityLabel), @encode(id), ^NSString*(id) { return @"Plugin UI"; });
         objc_registerClassPair(x); return x; }(); return c;
 }
 }
