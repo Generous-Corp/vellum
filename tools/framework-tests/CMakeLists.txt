@@ -186,6 +186,18 @@ else()
         PASS_REGULAR_EXPRESSION "PASS quickjs_is_not_reported_as_v8\n.*8 cases, 7 failed")
 endif()
 
+# The Draco decoder is built in only with VELLUM_ENABLE_DRACO. The test expects
+# the build's own answer, so a build without Draco is the control: it expects the
+# stub and fails if a decode succeeds.
+vellum_add_framework_test(draco-decoder
+    SOURCES draco_decoder_test.cpp
+    UNITS Vellum::MirrorRender_2d)
+if(VELLUM_ENABLE_DRACO)
+    target_compile_definitions(vellum-framework-draco-decoder-test PRIVATE VELLUM_TEST_EXPECT_DRACO=1)
+else()
+    target_compile_definitions(vellum-framework-draco-decoder-test PRIVATE VELLUM_TEST_EXPECT_DRACO=0)
+endif()
+
 # The scripted WebGPU binding against a headless Dawn device (the Null
 # adapter). The provider exports the gpu_runtime surface ABI, so these tests
 # use Vellum::Gpu and keep the provider's Dawn copy process-wide. They need the

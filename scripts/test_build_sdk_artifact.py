@@ -36,6 +36,7 @@ class NativeConfigureOptions(unittest.TestCase):
         self.assertIn("-DVELLUM_ENABLE_RMLUI=ON", options)
         self.assertIn("-DVELLUM_RMLUI_VELLUM_RENDERER=ON", options)
         self.assertIn("-DVELLUM_ENABLE_MIRROR=ON", options)
+        self.assertIn("-DVELLUM_ENABLE_DRACO=ON", options)
         self.assertIn("-DVELLUM_SKIA_ARCHIVE=/locked/skia.tar.gz", options)
 
     def test_build_configures_installs_and_checks_through_the_helpers(self):

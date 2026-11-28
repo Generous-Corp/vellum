@@ -135,6 +135,10 @@ def native_configure_options(skia_archive: Path) -> list[str]:
         # The native package carries the units built from the landed
         # mirror (Decision 0010).
         "-DVELLUM_ENABLE_MIRROR=ON",
+        # decode_draco decodes in the SDK (the pinned Draco
+        # decoder is linked into the provider) instead of reporting itself
+        # unavailable.
+        "-DVELLUM_ENABLE_DRACO=ON",
         # And the RmlUi editor package, with its renderer on Vellum's GPU path.
         "-DVELLUM_ENABLE_RMLUI=ON",
         "-DVELLUM_RMLUI_VELLUM_RENDERER=ON",

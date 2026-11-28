@@ -548,6 +548,7 @@ jobs:
             -DVELLUM_SKIA_ARCHIVE="$VELLUM_SKIA_ARCHIVE" \
             -DVELLUM_ENABLE_MIRROR=ON \
             -DVELLUM_MIRROR_DEPS_DIR="$VELLUM_MIRROR_DEPS_DIR" \
+            -DVELLUM_ENABLE_DRACO=ON \
             -DVELLUM_ENABLE_RMLUI=ON \
             -DVELLUM_RMLUI_VELLUM_RENDERER=ON
           cmake --build build-cheap --parallel "$VELLUM_BUILD_JOBS"
@@ -605,6 +606,7 @@ jobs:
             -DVELLUM_SKIA_ARCHIVE="$VELLUM_SKIA_ARCHIVE" \
             -DVELLUM_ENABLE_MIRROR=ON \
             -DVELLUM_MIRROR_DEPS_DIR="$VELLUM_MIRROR_DEPS_DIR" \
+            -DVELLUM_ENABLE_DRACO=ON \
             -DVELLUM_VIEW_AUDIO_ARCHIVE="$VELLUM_VIEW_AUDIO_ARCHIVE" \
             -DVELLUM_GPU_RUNTIME_PREFIX="$RUNNER_TEMP/gpu-runtime-prefix" \
             -DVELLUM_ENABLE_V8=ON \
