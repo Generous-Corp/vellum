@@ -2260,6 +2260,7 @@ printf 'number=%s\ncurrent=%s\n' "$number" "$current" >> "$GITHUB_OUTPUT"'''),
             'job': {
                 'needs': 'plan',
                 'if': "needs.plan.outputs.action == 'bump' && needs.plan.outputs.current != 'true'",
+                'environment': 'app-key',
                 'runs-on': 'ubuntu-latest',
                 'timeout-minutes': '10',
             },

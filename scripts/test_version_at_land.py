@@ -355,7 +355,11 @@ class Workflow(unittest.TestCase):
         self.assertIn("on:\n  push:\n    branches: [main]\n", self.text)
         self.assertNotIn("pull_request", self.text.split("\njobs:\n")[0])
         self.assertNotIn("git tag", self.text)
-        self.assertNotIn("environment:", self.text)
+        # Only the push job names an environment: the main-only `app-key`, which
+        # holds the App key. Neither job may name `release`.
+        self.assertEqual(self.text.count("environment:"), 1)
+        self.assertIn("\n    environment: app-key\n", self.push_job)
+        self.assertNotIn("environment:", self.plan_job)
         self.assertIn("permissions:\n  contents: read\n  pull-requests: read\n", self.text)
         self.assertIn(f"BUMP_BRANCH: {val.BUMP_BRANCH}\n", self.text)
 

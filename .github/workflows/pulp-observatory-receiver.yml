@@ -43,6 +43,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'push' ||
       github.event_name == 'repository_dispatch'
+    environment: app-key
     runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["ubuntu-latest"]') }}
     steps:
       # Tokens come from the same GitHub App the merge steward uses, minted

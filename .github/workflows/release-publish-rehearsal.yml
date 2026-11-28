@@ -34,6 +34,7 @@ jobs:
   rehearse-publication:
     name: rehearse-publication
     if: github.ref == 'refs/heads/main'
+    environment: app-key
     runs-on: ${{ fromJSON(vars.VELLUM_AUTHORITY_RUNS_ON_JSON || '["ubuntu-latest"]') }}
     env:
       RELEASE_TAG: publish-rehearsal/${{ github.run_id }}-${{ github.run_attempt }}
@@ -225,6 +226,7 @@ jobs:
     name: clean-rehearsal
     needs: rehearse-publication
     if: always() && github.ref == 'refs/heads/main'
+    environment: app-key
     runs-on: ${{ fromJSON(vars.VELLUM_AUTHORITY_RUNS_ON_JSON || '["ubuntu-latest"]') }}
     steps:
       - name: Mint one-repository cleanup token
