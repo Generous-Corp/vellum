@@ -128,7 +128,8 @@ def chrome_boxes(html: str) -> dict[str, tuple[float, float, float, float]]:
                 with CdpAdmission(("127.0.0.1", port)) as admission:
                     client = CdpClient(admission.endpoint, timeout=10.0)
                     client.discover()
-                    client.connect()
+                    # The port is published before the page target is listed.
+                    client.connect(page_wait=15.0)
                     try:
                         client.wait_for_dom()
                         client.settle_idle()
