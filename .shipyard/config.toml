@@ -11,6 +11,15 @@ reviewer_signers = ["pulp-review", "infra-review2"]
 # its ghapp session stamp matches one of these globs (a HOLD from any session
 # still counts).
 reviewer_stamp_sessions = ["fleet-pass-reviewer-*"]
+# When the same test ejects two or more different heads from the merge queue
+# within the window, re-enqueue each of those heads once instead of demanding a
+# new head. A HOLD or a missing approval still blocks.
+flake_requeue = "apply"
+# Tests whose merge-queue failure earns the one same-head retry while they are
+# being fixed. Remove an entry once its fix has landed.
+# vellum.app-host-agent-workflow: CDP target discovery sometimes omits the page
+# target, which ejects heads that do not touch it.
+known_flaky_tests = ["vellum.app-host-agent-workflow"]
 
 [queue.environment_requeue]
 # Re-enqueue an approved head once when its merge-queue ejection was not the
