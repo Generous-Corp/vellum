@@ -80,6 +80,15 @@ vellum import designmd ./DESIGN.md
 vellum reimport --source ./DESIGN.md
 ```
 
+For DESIGN.md, the SDK also exposes token exporters next to the importer
+(`export_tailwind_v3_json`, `export_tailwind_v4_css` and `export_css_vars`).
+`export_css_vars(parsed, prefix)` writes a `:root { ... }` block of custom
+properties named `--<prefix>-<group>-<name>`, for example `--ds-color-primary`,
+`--ds-spacing-base` and `--ds-typography-body-fontFamily`. Output is sorted by
+name, and characters outside `[A-Za-z0-9_-]` in a token name become `-`. No CLI
+command calls the exporters yet. The color lint flags a `color-mix()` whose
+weight is not an explicit percentage, as DESIGN.md 0.4.0 does.
+
 The v0 route uses the static JSX parser for host elements, inline styles and
 supported Tailwind layout classes. It preserves class strings and reports
 partial capture for dynamic JSX. Pass a local TSX export.
