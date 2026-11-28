@@ -93,8 +93,9 @@ std::filesystem::path find_compat_json(const std::filesystem::path& start_dir);
 struct InputSnapshot {
     bool is_directory = false;
     std::filesystem::path root;
-    std::string filename;                          // basename of the input file
-                                                   // (empty when input is a directory)
+    std::string filename;                          // basename of the input file,
+                                                   // or DESIGN.md fallback in a
+                                                   // Markdown-only directory
     std::vector<std::string> directory_basenames;  // top-level only
     std::string html_text;             // primary HTML content (file or
                                        // dir/code.html / dir/index.html)

@@ -181,6 +181,42 @@ TEST_CASE("detect prefers higher confidence when match counts tie",
     CHECK(result.confidence_pct == 100);
 }
 
+TEST_CASE("detect prefers confidence over raw match count",
+          "[import-detect]") {
+    det::ImportsManifest manifest;
+    det::SourceEntry source;
+    source.source = "ratio";
+    source.parser_version = "1.0";
+
+    det::FingerprintClause match;
+    match.kind = det::FingerprintClause::Kind::html_script_type;
+    match.raw_kind = "html-script-type";
+    match.value = "module";
+    det::FingerprintClause miss = match;
+    miss.value = "missing";
+
+    det::FormatEntry broad;
+    broad.format_version = "broad";
+    broad.parser_version = source.parser_version;
+    broad.fingerprint = {match, match, miss, miss, miss, miss, miss, miss, miss, miss};
+
+    det::FormatEntry exact;
+    exact.format_version = "exact";
+    exact.parser_version = source.parser_version;
+    exact.fingerprint = {match};
+
+    source.formats = {broad, exact};
+    manifest.sources.push_back(source);
+
+    det::InputSnapshot snap;
+    snap.script_types = {"module"};
+    auto result = det::detect(manifest, snap);
+    CHECK(result.format_version == "exact");
+    CHECK(result.matched_clauses == 1);
+    CHECK(result.total_clauses == 1);
+    CHECK(result.confidence_pct == 100);
+}
+
 TEST_CASE("snapshot_input extracts Markdown frontmatter only from markdown files",
           "[import-detect]") {
     auto dir = fs::temp_directory_path() / "vellum-import-detect-phase3-frontmatter";
@@ -205,6 +241,32 @@ TEST_CASE("snapshot_input extracts Markdown frontmatter only from markdown files
     auto html_snap = det::snapshot_input(html);
     CHECK_FALSE(html_snap.has_frontmatter_fence);
     cleanup();
+}
+
+TEST_CASE("snapshot_input detects a DESIGN.md-only directory export",
+          "[import-detect]") {
+    ScratchDir scratch("designmd-directory-only");
+    write_text(scratch.path / "DESIGN.md",
+               "---\n"
+               "name: Directory export\n"
+               "colors:\n"
+               "  primary: '#fff'\n"
+               "---\n"
+               "# Design\n");
+
+    auto snap = det::snapshot_input(scratch.path);
+    REQUIRE(snap.is_directory);
+    CHECK(snap.filename == "DESIGN.md");
+    CHECK(snap.has_frontmatter_fence);
+    CHECK(std::find(snap.frontmatter_keys.begin(), snap.frontmatter_keys.end(), "name") !=
+          snap.frontmatter_keys.end());
+
+    auto manifest = det::parse_compat_json(slurp(locate_compat_json()));
+    REQUIRE(manifest.has_value());
+    auto result = det::detect(*manifest, snap);
+    CHECK(result.source == "designmd");
+    CHECK(result.format_version == "alpha");
+    CHECK(result.confidence_pct == 100);
 }
 
 TEST_CASE("snapshot_input accepts CRLF frontmatter and filters invalid top-level keys",
@@ -354,6 +416,7 @@ TEST_CASE("snapshot_input ignores script-like tags and prefixed attributes",
 <html>
   <description src="not-a-script.js"></description>
   <scriptish src="also-not-a-script.js"></scriptish>
+  <!-- <script src="commented.js" type="__bundler/template"></script> -->
   <script data-src="not-src.js" type="ignored-prefixed"></script>
   <script src=unquoted.js type=module></script>
   <SCRIPT SRC='quoted.js' TYPE='application/json'></SCRIPT>
@@ -380,10 +443,14 @@ TEST_CASE("snapshot_input ignores script-like tags and prefixed attributes",
                       "also-not-a-script.js") == snap.script_srcs.end());
     REQUIRE(std::find(snap.script_srcs.begin(), snap.script_srcs.end(),
                       "not-src.js") == snap.script_srcs.end());
+    REQUIRE(std::find(snap.script_srcs.begin(), snap.script_srcs.end(),
+                      "commented.js") == snap.script_srcs.end());
     REQUIRE(snap.script_types.size() == 3);
     REQUIRE(snap.script_types[0] == "ignored-prefixed");
     REQUIRE(snap.script_types[1] == "module");
     REQUIRE(snap.script_types[2] == "application/json");
+    REQUIRE(std::find(snap.script_types.begin(), snap.script_types.end(),
+                      "__bundler/template") == snap.script_types.end());
     REQUIRE(std::find(snap.tailwind_tokens.begin(), snap.tailwind_tokens.end(),
                       "surface-container") != snap.tailwind_tokens.end());
     REQUIRE(std::find(snap.tailwind_tokens.begin(), snap.tailwind_tokens.end(),
@@ -410,25 +477,28 @@ TEST_CASE("snapshot_input accepts script tag and attribute whitespace boundaries
           << "<script\ttype=\"tab/module\"></script>\n"
           << "<script\rtype=\"cr/module\"></script>\n"
           << "<script\ntype=\"nl/module\"></script>\n"
+          << "<script src = \"equals-space.js\" type = \"equals/module\"></script>\n"
           << "<scripture src=\"not-a-script.js\"></scripture>\n";
     }
 
     auto snap = det::snapshot_input(dir);
-    REQUIRE(snap.script_srcs.size() == 4);
+    REQUIRE(snap.script_srcs.size() == 5);
     CHECK(snap.script_srcs[0] == "tab.js");
     CHECK(snap.script_srcs[1] == "cr.js");
     CHECK(snap.script_srcs[2] == "nl.js");
     CHECK(snap.script_srcs[3] == "space.js");
+    CHECK(snap.script_srcs[4] == "equals-space.js");
     CHECK(std::find(snap.script_srcs.begin(), snap.script_srcs.end(), "ignored.js") ==
           snap.script_srcs.end());
     CHECK(std::find(snap.script_srcs.begin(), snap.script_srcs.end(), "not-a-script.js") ==
           snap.script_srcs.end());
 
-    REQUIRE(snap.script_types.size() == 4);
+    REQUIRE(snap.script_types.size() == 5);
     CHECK(snap.script_types[0] == "space/module");
     CHECK(snap.script_types[1] == "tab/module");
     CHECK(snap.script_types[2] == "cr/module");
     CHECK(snap.script_types[3] == "nl/module");
+    CHECK(snap.script_types[4] == "equals/module");
     CHECK(std::find(snap.script_types.begin(), snap.script_types.end(), "ignored/module") ==
           snap.script_types.end());
 

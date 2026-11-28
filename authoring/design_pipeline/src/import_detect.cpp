@@ -7,6 +7,7 @@
 #include "strict_json.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <regex>
 #include <set>
@@ -112,8 +113,18 @@ std::vector<std::string> scrape_script_attr(const std::string& html, const std::
 
     size_t i = 0;
     while (i < html.size()) {
+        // A commented example is not a script element. Skip the whole comment
+        // whenever it appears before the next candidate tag.
+        auto comment = html_lower.find("<!--", i);
         // Find next "<script" (case-insensitive) opening.
         auto open = html_lower.find("<script", i);
+        if (comment != std::string::npos &&
+            (open == std::string::npos || comment < open)) {
+            auto comment_end = html_lower.find("-->", comment + 4);
+            if (comment_end == std::string::npos) break;
+            i = comment_end + 3;
+            continue;
+        }
         if (open == std::string::npos) break;
         const auto tag_name_end = open + 7;
         if (tag_name_end < html_lower.size()) {
@@ -133,24 +144,35 @@ std::vector<std::string> scrape_script_attr(const std::string& html, const std::
         for (auto& c : tag_lower)
             c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         size_t a = 0;
-        while ((a = tag_lower.find(needle + "=", a)) != std::string::npos) {
+        while ((a = tag_lower.find(needle, a)) != std::string::npos) {
             if (a > 0) {
                 const char before = tag_lower[a - 1];
                 if (!(before == ' ' || before == '\t' ||
                       before == '\r' || before == '\n')) {
-                    a += needle.size() + 1;
+                    a += needle.size();
                     continue;
                 }
             }
-            // Skip past `attr=`.
-            auto v = a + needle.size() + 1;
+            // HTML permits whitespace around the equals sign.
+            auto equals = a + needle.size();
+            while (equals < tag_lower.size() &&
+                   std::isspace(static_cast<unsigned char>(tag_lower[equals])))
+                ++equals;
+            if (equals >= tag_lower.size() || tag_lower[equals] != '=') {
+                a += needle.size();
+                continue;
+            }
+            auto v = equals + 1;
+            while (v < tag.size() &&
+                   std::isspace(static_cast<unsigned char>(tag[v])))
+                ++v;
             if (v < tag.size() && (tag[v] == '"' || tag[v] == '\'')) {
                 char q = tag[v++];
                 auto end = tag.find(q, v);
                 if (end != std::string::npos)
                     out.push_back(tag.substr(v, end - v));
             } else {
-                auto end = tag.find_first_of(" \t>", v);
+                auto end = tag.find_first_of(" \t\r\n>", v);
                 if (end == std::string::npos) end = tag.size();
                 out.push_back(tag.substr(v, end - v));
             }
@@ -237,7 +259,8 @@ fs::path find_compat_json(const fs::path& start_dir) {
     fs::path cur = fs::absolute(start_dir);
     for (int i = 0; i < 32; ++i) {
         auto candidate = cur / "compat.json";
-        if (fs::exists(candidate)) return candidate;
+        std::error_code ec;
+        if (fs::exists(candidate, ec) && !ec) return candidate;
         if (!cur.has_parent_path() || cur.parent_path() == cur) break;
         cur = cur.parent_path();
     }
@@ -249,12 +272,16 @@ fs::path find_compat_json(const fs::path& start_dir) {
 InputSnapshot snapshot_input(const fs::path& input) {
     InputSnapshot snap;
     snap.root = input;
-    if (!fs::exists(input)) return snap;
+    std::error_code input_ec;
+    if (!fs::exists(input, input_ec) || input_ec) return snap;
 
-    if (fs::is_directory(input)) {
+    const bool input_is_directory = fs::is_directory(input, input_ec);
+    if (input_ec) return snap;
+    if (input_is_directory) {
         snap.is_directory = true;
         std::error_code ec;
         std::vector<fs::path> html_candidates;
+        std::vector<fs::path> markdown_candidates;
         for (auto& entry : fs::directory_iterator(input, ec)) {
             if (ec) break;
             auto path = entry.path();
@@ -264,6 +291,8 @@ InputSnapshot snapshot_input(const fs::path& input) {
                 auto ext = lower_trim(path.extension().string());
                 if (ext == ".html" || ext == ".htm")
                     html_candidates.push_back(path);
+                else if (lower_trim(path.filename().string()) == "design.md")
+                    markdown_candidates.push_back(path);
             }
         }
         std::sort(snap.directory_basenames.begin(), snap.directory_basenames.end());
@@ -272,13 +301,22 @@ InputSnapshot snapshot_input(const fs::path& input) {
         // Prefer code.html (Stitch-style), then index.html.
         for (auto candidate : {"code.html", "index.html"}) {
             auto p = input / candidate;
-            if (fs::exists(p)) {
+            std::error_code candidate_ec;
+            if (fs::exists(p, candidate_ec) && !candidate_ec) {
                 snap.html_text = read_text_file(p);
                 break;
             }
         }
         if (snap.html_text.empty() && !html_candidates.empty())
             snap.html_text = read_text_file(html_candidates.front());
+        // A DESIGN.md-only export has no HTML primary. Promote its Markdown
+        // member to the primary text so filename and frontmatter fingerprints
+        // can detect the directory just like a direct DESIGN.md input.
+        if (snap.html_text.empty() && !markdown_candidates.empty()) {
+            std::sort(markdown_candidates.begin(), markdown_candidates.end());
+            snap.filename = markdown_candidates.front().filename().string();
+            snap.html_text = read_text_file(markdown_candidates.front());
+        }
     } else {
         snap.filename = input.filename().string();
         snap.directory_basenames.push_back(snap.filename);

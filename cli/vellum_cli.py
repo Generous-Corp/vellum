@@ -1483,7 +1483,6 @@ def detect_command(args: argparse.Namespace) -> dict[str, Any]:
                   status="detected" if detected else "no_detected_source",
                   message=message, data=data)
 
-
 BAKED_EMITS = ("cpp", "swiftui")
 BAKED_EMIT_SOURCES = ("design-ir", "figma", "figma-plugin", "pencil", "v0", "designmd")
 DESIGN_EMIT_NAME = "vellum-design-emit.exe" if os.name == "nt" else "vellum-design-emit"
@@ -1950,23 +1949,34 @@ def main(argv: Iterable[str] | None = None) -> int:
                     "--compat applies only to --detect-only or --report-new-format.",
                     status="invalid_arguments", exit_code=EXIT_USAGE,
                 )
-            if detecting and (not isinstance(args.source, str) or args.file or args.frame
-                              or args.outline or args.page is not None
-                              or args.emit in BAKED_EMITS or args.dry_run
-                              or args.strict_fidelity):
-                raise CliFailure(
-                    "--detect-only takes one file or directory and no import options.",
-                    status="invalid_arguments", exit_code=EXIT_USAGE,
-                )
-            if not detecting and args.emit not in BAKED_EMITS and (
-                    args.dry_run or args.strict_fidelity):
+            if detecting:
+                detection_forbidden = {
+                    "--as", "--emit", "--file", "--frame", "--interaction-plan",
+                    "--manifest", "--mode", "--out", "--output", "--page",
+                    "--project", "--provenance", "--source-out", "--source-type",
+                    "--strict-fidelity", "--timeout", "--validate-only", "--dry-run",
+                }
+                explicit_forbidden = [
+                    token for token in raw
+                    if token in detection_forbidden or any(
+                        token.startswith(option + "=") for option in detection_forbidden
+                    )
+                ]
+                if (not isinstance(args.source, str) or args.file or args.frame
+                        or args.outline or args.page is not None or explicit_forbidden
+                        or args.project is not None):
+                    raise CliFailure(
+                        "--detect-only takes one file or directory and no import options.",
+                        status="invalid_arguments", exit_code=EXIT_USAGE,
+                    )
+            elif args.emit not in BAKED_EMITS and (args.dry_run or args.strict_fidelity):
                 raise CliFailure(
                     "--dry-run and --strict-fidelity apply only to --emit cpp or swiftui.",
                     status="invalid_arguments", exit_code=EXIT_USAGE,
                 )
-            if not detecting and args.emit in BAKED_EMITS:
+            elif args.emit in BAKED_EMITS:
                 validate_baked_emit(args)
-            elif args.source_type in {"jsx", "preconverted-svg"} and not detecting:
+            elif args.source_type in {"jsx", "preconverted-svg"}:
                 if args.source_type == "preconverted-svg" and args.validate_only is False:
                     raise CliFailure(
                         "preconverted-svg requires --validate-only",

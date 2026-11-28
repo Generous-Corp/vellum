@@ -103,6 +103,7 @@ if(VELLUM_BUILD_TESTS)
         OSX_ARCHITECTURES arm64
         MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
     add_test(NAME vellum.import-detect-behavior COMMAND vellum-import-detect-behavior-test)
+
     # The tweak sidecar store needs only CHOC, so its test links the library
     # without the design importer's runtime.
     add_executable(vellum-tweak-store-test tests/tweak_store_test.cpp)

@@ -91,7 +91,7 @@ int run_source_detect(int argc, const char* const* argv, std::ostream& out, std:
         return 1;
     }
     std::error_code ec;
-    if (!fs::exists(scan_path, ec)) {
+    if (!fs::exists(scan_path, ec) || ec) {
         err << "Error: path does not exist: " << scan_path << "\n";
         return 1;
     }
@@ -101,8 +101,13 @@ int run_source_detect(int argc, const char* const* argv, std::ostream& out, std:
     if (!compat_override.empty()) {
         compat_path = compat_override;
     } else {
-        fs::path start = fs::is_directory(scan_path) ? fs::path(scan_path)
-                                                     : fs::path(scan_path).parent_path();
+        const bool scan_is_directory = fs::is_directory(scan_path, ec);
+        if (ec) {
+            err << "Error: cannot inspect input path: " << scan_path << "\n";
+            return 1;
+        }
+        fs::path start = scan_is_directory ? fs::path(scan_path)
+                                           : fs::path(scan_path).parent_path();
         if (start.empty()) start = fs::current_path();
         compat_path = det::find_compat_json(start);
         if (compat_path.empty()) compat_path = det::find_compat_json(fs::current_path());
