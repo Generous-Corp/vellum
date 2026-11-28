@@ -29,16 +29,23 @@ hold:
    eligible`. CI proves both records against the builder's Sigstore
    attestation, legal manifest and toolchain receipt
    (`docs/provenance/renderer-release-attestation.md`).
-2. Both records name the same Skia commit and the same Dawn commit, and the
-   Skia commit is the closure's pin.
+2. Both records name the same Skia commit and the same Dawn commit. The Skia
+   commit is the closure's pin, and the Dawn commit is the one
+   `tools/mirror/closure_renderer_headers.json` records for C.
 3. The closure pins at least one archive file.
 4. The extracted header tree of D (`headers.root`, hashed with the lock's
    `digest_command`) equals the lock's recorded tree for D, and equals the
    tree `tools/mirror/closure_renderer_headers.json` records for C. A symlink
    or special file in the tree is refused. A planted, changed or removed
-   unpinned header therefore fails, so nothing outside the closure's pinned
-   files can shadow one on the include path.
-5. Every file the closure pins is present in D with an identical digest.
+   unpinned header there therefore fails.
+5. Every other file under any Skia include directory a planned target emits
+   is bound too. The closures put `build` on the include path ahead of
+   `build/include`, so every file under `build` outside the header tree must
+   be a library the lock pins for D, or a file the record lists for C
+   (`other_files`), with its recorded digest. A planted `build/vector` or
+   `build/modules/x.h` is refused, as is a symlink. Together with item 4, no
+   file the compiler can reach through a Skia include directory is unbound.
+6. Every file the closure pins is present in D with an identical digest.
 
 A Skia link row naming C is then accepted, provided its pin matches. The plan
 records each acceptance under `renderer_content_equivalence`, the packager
@@ -46,9 +53,11 @@ prints it, and `targets[].skia_asset_sha256` names D, the archive actually
 linked. Closures that disagree on the archive they were exported against are
 refused.
 
-When the archive matches exactly and the lock records its header tree, the
-extracted directory must hold that tree too. This closes the same shadowing
-gap for a `VELLUM_SKIA_DIR` extract, which binds no archive digest.
+When the archive matches exactly and the lock records its header tree and
+libraries, the extracted directory must satisfy items 4 and 5 too. This
+closes the same shadowing gap for a `VELLUM_SKIA_DIR` extract, which binds no
+archive digest. A lock that records neither keeps the older behavior on the
+exact path only.
 
 ## Consequences
 

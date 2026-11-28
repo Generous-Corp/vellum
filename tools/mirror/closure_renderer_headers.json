@@ -5,7 +5,12 @@
     "dca73c0eee5b0f6d129fe357d0754f7165c6b436051e0de947aeedd3e1bde250": {
       "release": "https://github.com/danielraffel/skia-builder/releases/download/chrome/m158/skia-build-mac-universal-gpu-release.zip",
       "header_tree_sha256": "fb5e47c00c77719a284e2401de12cb0e8489686a0d32c5d2d903208f96407c2b",
-      "file_count": 811
+      "file_count": 811,
+      "dawn_commit": "1716e88cc9e58398fab5d4473f7f2e858667b677",
+      "other_files": {
+        "build/mac-gpu/lib/gn_args.txt": "85b23873e84b7b6bf14452bc36c0af980396553453d5b5d78190047c5cc69809",
+        "build/share/icudtl.dat": "9f48c7f9c7c94d516a14870707e910ab94d75ae640ff6842c4af53276cd26ebe"
+      }
     }
   }
 }
