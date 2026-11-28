@@ -1,0 +1,8 @@
+{
+  "$schema": "https://pulp.dev/schemas/figma-plugin-export-v1.json",
+  "format_version": "2026.05-figma-plugin-v1",
+  "parser_version": "0.1.0",
+  "compat_schema_version": "0.3",
+  "provenance": {"adapter": "figma-plugin", "version": "0.2.0", "source_uri": "figma://sample/1:1"},
+  "root": {"type": "frame", "name": "Sample", "figma_node_id": "1:1", "children": []}
+}

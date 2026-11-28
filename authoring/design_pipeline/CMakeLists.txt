@@ -19,14 +19,29 @@ target_include_directories(vellum-design-pipeline
         "${VELLUM_MIRROR_CHOC_ROOT}")
 target_link_libraries(vellum-design-pipeline PUBLIC Vellum::MirrorDesign_import)
 
-add_executable(vellum-source-adapter src/source_adapter_main.cpp)
+# The design-import source detector: matches a file or directory against the
+# fingerprints in a detection manifest. It links nothing from the view layer.
+add_library(vellum-import-detect STATIC src/import_detect.cpp src/import_detect_report.cpp)
+target_include_directories(vellum-import-detect PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+# The detector reads JSON with CHOC, behind a strict whole-document wrapper.
+target_include_directories(vellum-import-detect PRIVATE "${VELLUM_MIRROR_CHOC_ROOT}")
+target_compile_features(vellum-import-detect PUBLIC cxx_std_20)
+set_target_properties(vellum-import-detect PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
+
+add_executable(vellum-source-adapter src/source_adapter_main.cpp src/source_detect_cli.cpp)
 target_compile_features(vellum-source-adapter PRIVATE cxx_std_20)
-target_link_libraries(vellum-source-adapter PRIVATE Vellum::DesignPipeline)
+target_link_libraries(vellum-source-adapter PRIVATE Vellum::DesignPipeline vellum-import-detect)
 set_target_properties(vellum-source-adapter PROPERTIES
     OSX_ARCHITECTURES arm64
     MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
     INSTALL_RPATH "@loader_path/../mirror/${CMAKE_INSTALL_LIBDIR};@loader_path/../${CMAKE_INSTALL_LIBDIR}")
 install(TARGETS vellum-source-adapter RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+# The detection manifest `vellum-source-adapter detect` falls back to.
+install(FILES "${PROJECT_SOURCE_DIR}/product/source-detection.json"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/vellum")
 
 # Scores a rendered panel against the design it was meant to realize. Kept a
 # tool rather than a test: it is pointed at whichever pair is being compared.
@@ -51,6 +66,43 @@ if(VELLUM_BUILD_TESTS)
         BUILD_RPATH "$<TARGET_FILE_DIR:vellum-skia-dawn-provider>")
     add_test(NAME vellum.design-pipeline COMMAND vellum-design-pipeline-test)
 
+    add_executable(vellum-import-detect-unit-test tests/import_detect_unit_test.cpp)
+    target_link_libraries(vellum-import-detect-unit-test PRIVATE vellum-import-detect)
+    target_include_directories(vellum-import-detect-unit-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src" "${VELLUM_MIRROR_CHOC_ROOT}")
+    set_target_properties(vellum-import-detect-unit-test PROPERTIES
+        OSX_ARCHITECTURES arm64
+        MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
+    add_test(NAME vellum.import-detect-unit COMMAND vellum-import-detect-unit-test)
+
+    add_executable(vellum-import-detect-report-test tests/import_detect_report_test.cpp)
+    target_link_libraries(vellum-import-detect-report-test PRIVATE vellum-import-detect)
+    set_target_properties(vellum-import-detect-report-test PROPERTIES
+        OSX_ARCHITECTURES arm64
+        MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
+    add_test(NAME vellum.import-detect-report COMMAND vellum-import-detect-report-test)
+
+    add_executable(vellum-import-detect-data-test tests/import_detect_data_test.cpp)
+    target_link_libraries(vellum-import-detect-data-test PRIVATE vellum-import-detect)
+    target_include_directories(vellum-import-detect-data-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src" "${VELLUM_MIRROR_CHOC_ROOT}")
+    target_compile_definitions(vellum-import-detect-data-test PRIVATE
+        VELLUM_SOURCE_DETECTION_JSON="${PROJECT_SOURCE_DIR}/product/source-detection.json"
+        VELLUM_SOURCE_DETECTION_FIXTURES="${PROJECT_SOURCE_DIR}/fixtures/source-detection")
+    set_target_properties(vellum-import-detect-data-test PROPERTIES
+        OSX_ARCHITECTURES arm64
+        MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
+    add_test(NAME vellum.import-detect-data COMMAND vellum-import-detect-data-test)
+
+    add_executable(vellum-import-detect-behavior-test tests/import_detect_behavior_test.cpp)
+    target_link_libraries(vellum-import-detect-behavior-test PRIVATE vellum-import-detect)
+    target_compile_definitions(vellum-import-detect-behavior-test PRIVATE
+        VELLUM_SOURCE_DETECTION_JSON="${PROJECT_SOURCE_DIR}/product/source-detection.json"
+        VELLUM_SOURCE_DETECTION_FIXTURES="${PROJECT_SOURCE_DIR}/fixtures/source-detection")
+    set_target_properties(vellum-import-detect-behavior-test PROPERTIES
+        OSX_ARCHITECTURES arm64
+        MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
+    add_test(NAME vellum.import-detect-behavior COMMAND vellum-import-detect-behavior-test)
     # The tweak sidecar store needs only CHOC, so its test links the library
     # without the design importer's runtime.
     add_executable(vellum-tweak-store-test tests/tweak_store_test.cpp)

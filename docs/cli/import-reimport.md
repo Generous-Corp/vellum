@@ -143,6 +143,27 @@ screen. A reference to an unknown token stops the import before project files
 change. These routes keep the original input as a revision snapshot for
 reimport and `vellum design check`.
 
+## Detecting a source without importing
+
+`vellum import --detect-only SOURCE` reports which design tool produced a
+file or directory, its format version, and the parser version that reads it,
+without importing anything or needing a project. `--report-new-format` prints
+a draft detection entry for an export the manifest does not recognize, naming
+the tokens it has not seen.
+
+```sh
+vellum import --detect-only ./stitch-export
+vellum import --report-new-format ./stitch-export
+```
+
+The detection manifest is `--compat PATH` when given; otherwise the nearest
+`compat.json` above the source, or above the working directory; otherwise the
+installed SDK's `sdk/share/vellum/source-detection.json`. With `--json` the result carries
+the source, versions, matched and unmatched clause kinds, confidence, and the
+manifest used. A source that matches nothing exits 3 with status
+`no_detected_source`. Detection reads the files only; it does not launch a
+browser.
+
 `.pulp.zip` is unpacked by the installed Python dispatcher with no external
 unzip dependency. Before any member is written, the dispatcher rejects path
 traversal, absolute/drive/backslash paths, links and special files, duplicate or

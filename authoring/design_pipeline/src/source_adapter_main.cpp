@@ -1,4 +1,5 @@
 #include <vellum/authoring/design_pipeline.hpp>
+#include <vellum/authoring/source_detect_cli.hpp>
 #include <vellum/view/design_ir_io.hpp>
 
 #include <iostream>
@@ -7,6 +8,8 @@
 
 int main(int argc, char** argv) {
     using namespace vellum::authoring;
+    if (argc >= 2 && std::string_view(argv[1]) == "detect")
+        return run_source_detect(argc - 2, argv + 2, std::cout, std::cerr);
     if (argc != 2) return 2;
 
     ImportInput input;

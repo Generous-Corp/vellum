@@ -1,0 +1,375 @@
+{
+  "registry-schema-version": "vellum.source-contracts.v1",
+  "notes": ["Each contract records what Vellum promises for one design-import source: its parser, dispatch label, detection manifest entry, tests, fixtures and installed journey.", "A promise that has a Vellum equivalent still in an open pull request is listed under pending; one with no Vellum equivalent is listed under deferred with its reason. scripts/check_source_contracts.py counts both, so neither is dropped silently."],
+  "contracts": [
+    {
+      "source": "claude",
+      "display_name": "Claude Design",
+      "kind": "screen-export",
+      "trust": "absent",
+      "last_verified": "2026-05-14",
+      "recheck_interval": "manual",
+      "compat": {"mode": "foreign-key", "source": "claude", "parser_version_owner": "product/source-detection.json"},
+      "dispatch": {"kind": "design-source-label", "label": "claude"},
+      "upstream": [
+        {"url": "fixtures/source-detection/claude/2024.10/example.html", "kind": "fixture", "proves": "Observed Claude Design standalone HTML bundle shape for parser-version 2.1 / format-version 2024.10.", "last_verified": "2026-05-14", "recheck_interval_days": null}
+      ],
+      "detected_artifact_shape": "Manual standalone HTML export or Send to Local Coding Agent bundle.",
+      "runtime_export_shape": "HTML bundle with encoded asset map evaluated by parse_claude_html_with_runtime when requested.",
+      "runtime_requirements": {"sdk_min": "0.1.8", "surface_refs": ["framework/core/view", "framework/core/view/js"]},
+      "parser": {"file": "framework/core/view/src/design_import.cpp", "runtime_file": "framework/core/view/src/claude_bundle.cpp", "runtime": "parse_claude_html_with_runtime", "static": "parse_claude_html"},
+      "format_versions": [
+        {"version": "2024.10", "fixture_paths": ["fixtures/source-detection/claude/2024.10/example.html"], "expected_paths": ["fixtures/source-detection/claude/2024.10/expected.json"]}
+      ],
+      "validation": {
+        "tests": ["ctest:vellum.framework.design-import-jsx-runtime", "ctest:vellum.import-detect-data", "lane:cli/tests/test_html_source.py"],
+        "fixtures": ["fixtures/source-detection/claude/2024.10/example.html"],
+        "journey": null,
+        "render_reference": {"status": "not-applicable", "path": null}
+      },
+      "pending": [],
+      "deferred": []
+    },
+    {
+      "source": "html",
+      "display_name": "Runnable HTML",
+      "kind": "screen-export",
+      "trust": "official",
+      "last_verified": "2026-07-29",
+      "recheck_interval_days": 180,
+      "compat": {"mode": "not-applicable", "source": null, "parser_version_owner": "browser-capture-protocol"},
+      "dispatch": {"kind": "design-source-label", "label": "html"},
+      "upstream": [
+        {"url": "https://html.spec.whatwg.org/", "kind": "spec", "proves": "Authoritative HTML document and browser execution semantics.", "last_verified": "2026-07-29", "recheck_interval_days": 180}
+      ],
+      "detected_artifact_shape": "HTML or HTM document, including extensionless documents with an HTML root element.",
+      "runtime_export_shape": "A pulp-browser-capture-v1 evidence envelope lowered to DesignIR with faithful-capture backing.",
+      "runtime_requirements": {"sdk_min": "0.1.8", "surface_refs": ["framework/core/view", "framework/core/view/js"]},
+      "parser": {"file": "framework/core/view/src/design_import.cpp", "runtime_file": "cli/vellum_web_backend.py", "runtime": "run_chrome_interaction_capture", "static": null},
+      "format_versions": [],
+      "validation": {
+        "tests": ["lane:cli/tests/test_html_source.py", "lane:cli/tests/test_web_backend.py", "ctest:vellum.app-host-html-import-geometry"],
+        "fixtures": ["fixtures/html-import/index.html"],
+        "journey": null,
+        "render_reference": {"status": "not-applicable", "path": null}
+      },
+      "pending": [],
+      "deferred": []
+    },
+    {
+      "source": "stitch",
+      "display_name": "Google Stitch",
+      "kind": "screen-export",
+      "trust": "observed",
+      "last_verified": "2026-08-12",
+      "recheck_interval_days": 90,
+      "compat": {"mode": "foreign-key", "source": "stitch", "parser_version_owner": "product/source-detection.json"},
+      "dispatch": {"kind": "design-source-label", "label": "stitch"},
+      "upstream": [
+        {"url": "https://stitch.withgoogle.com/docs", "kind": "docs", "proves": "Official Stitch product documentation anchor.", "last_verified": "2026-08-12", "recheck_interval_days": 90},
+        {"url": "https://github.com/google-labs-code/stitch-sdk", "kind": "sdk", "proves": "SDK exposes generated screen HTML and screenshot artifacts.", "last_verified": "2026-08-12", "recheck_interval_days": 90}
+      ],
+      "detected_artifact_shape": "Stitch SDK HTML plus screenshot artifacts.",
+      "runtime_export_shape": "Constrained plain React TSX with inline styles.",
+      "runtime_requirements": {"sdk_min": "0.2.0", "surface_refs": ["framework/core/view", "framework/core/view/js"]},
+      "parser": {"file": "framework/core/view/src/design_import.cpp", "runtime_file": "framework/core/view/src/claude_bundle_sources.cpp", "runtime": "parse_stitch_react", "static": "parse_stitch_html"},
+      "format_versions": [
+        {"version": "2025.04", "fixture_paths": ["fixtures/source-detection/stitch/2025.04/code.html", "fixtures/source-detection/stitch/2025.04/DESIGN.md"], "expected_paths": ["fixtures/source-detection/stitch/2025.04/expected.json"]}
+      ],
+      "validation": {
+        "tests": ["ctest:vellum.design-pipeline", "ctest:vellum.import-detect-data", "ctest:vellum.source-adapter-detect"],
+        "fixtures": ["fixtures/source-detection/stitch/2025.04/code.html"],
+        "journey": null,
+        "render_reference": {"status": "pending", "path": null}
+      },
+      "pending": [
+        {"check": "tests", "item": "ctest:vellum.framework.runtime-import-parsers", "reason": "the Stitch runtime parser and bridge dispatch tests are open", "pr": "https://github.com/Generous-Corp/vellum/pull/787"},
+        {"check": "fixtures", "item": "fixtures/runtime-import/stitch/transport-bar.tsx", "reason": "the runtime-import fixture arrives with its tests", "pr": "https://github.com/Generous-Corp/vellum/pull/787"},
+        {"check": "journey", "item": "scripts/validate_installed_sdk.py::validate_installed_stitch_import", "reason": "the vellum import stitch route and its installed journey are open", "pr": "https://github.com/Generous-Corp/vellum/pull/781"},
+        {"check": "render_reference", "item": "a synthetic public reference render", "reason": "Pulp's reference render lives in its private planning repository and is not published; a public synthetic one has not been made", "pr": null}
+      ],
+      "deferred": []
+    },
+    {
+      "source": "designmd",
+      "display_name": "DESIGN.md",
+      "kind": "system-tokens",
+      "trust": "official",
+      "last_verified": "2026-08-12",
+      "recheck_interval_days": 90,
+      "compat": {"mode": "foreign-key", "source": "designmd", "parser_version_owner": "product/source-detection.json"},
+      "dispatch": {"kind": "design-source-label", "label": "designmd"},
+      "upstream": [
+        {"url": "https://github.com/google-labs-code/design.md", "kind": "spec", "proves": "Official DESIGN.md YAML frontmatter plus Markdown design-system shape.", "last_verified": "2026-08-12", "recheck_interval_days": 90},
+        {"url": "https://stitch.withgoogle.com/docs/design-md/specification", "kind": "docs", "proves": "Stitch-adjacent DESIGN.md specification documentation.", "last_verified": "2026-08-12", "recheck_interval_days": 90}
+      ],
+      "detected_artifact_shape": "Static DESIGN.md file with YAML frontmatter and Markdown body.",
+      "runtime_export_shape": "No runtime screen export; emits tokens.json only.",
+      "runtime_requirements": {"sdk_min": "0.2.2", "surface_refs": ["framework/core/view", "product/source-detection.json"]},
+      "parser": {"file": "framework/core/view/src/design_import_designmd.cpp", "runtime": null, "static": "parse_designmd"},
+      "format_versions": [
+        {"version": "alpha", "fixture_paths": ["fixtures/source-detection/designmd/alpha/DESIGN.md"], "expected_paths": ["fixtures/source-detection/designmd/alpha/expected.json"]}
+      ],
+      "validation": {
+        "tests": ["ctest:vellum.design-pipeline", "ctest:vellum.import-detect-data"],
+        "fixtures": ["fixtures/source-detection/designmd/alpha/DESIGN.md"],
+        "journey": "scripts/validate_installed_sdk.py::validate_installed_source_imports[designmd]",
+        "render_reference": {"status": "not-applicable", "path": null}
+      },
+      "pending": [
+        {"check": "tests", "item": "DESIGN.md lint, diff and compile verbs", "reason": "the DESIGN.md design verbs are being ported in the design-CLI lane (cutover row C14); no Vellum test exists for them yet", "pr": null}
+      ],
+      "deferred": []
+    },
+    {
+      "source": "pencil",
+      "display_name": "Pencil / OpenPencil",
+      "kind": "screen-export",
+      "trust": "official",
+      "last_verified": "2026-08-12",
+      "recheck_interval_days": 90,
+      "compat": {"mode": "foreign-key", "source": "pencil", "parser_version_owner": "product/source-detection.json"},
+      "dispatch": {"kind": "design-source-label", "label": "pencil"},
+      "upstream": [
+        {"url": "https://openpencil.dev/programmable/cli/exporting", "kind": "docs", "proves": "OpenPencil CLI export modes and JSX/Tailwind shape.", "last_verified": "2026-08-12", "recheck_interval_days": 90},
+        {"url": "https://openpencil.dev/programmable/jsx-renderer", "kind": "docs", "proves": "OpenPencil JSX renderer element vocabulary.", "last_verified": "2026-08-12", "recheck_interval_days": 90}
+      ],
+      "detected_artifact_shape": "OpenPencil JSX/Tailwind export or MCP node tree.",
+      "runtime_export_shape": "Sanitized single-file JSX/TSX with Tailwind expanded to inline styles and --pencil-* tokens resolved.",
+      "runtime_requirements": {"sdk_min": "0.2.2", "surface_refs": ["framework/core/view", "framework/core/view/js"]},
+      "parser": {"file": "framework/core/view/src/design_import.cpp", "runtime_file": "framework/core/view/src/claude_bundle_sources.cpp", "runtime": "parse_pencil_react", "static": "parse_pencil_json"},
+      "format_versions": [],
+      "validation": {
+        "tests": ["ctest:vellum.design-pipeline"],
+        "fixtures": [],
+        "journey": "scripts/validate_installed_sdk.py::validate_installed_source_imports[pencil]",
+        "render_reference": {"status": "pending", "path": null}
+      },
+      "pending": [
+        {"check": "tests", "item": "parse_pencil_react runtime and bridge dispatch tests", "reason": "not yet ported from Pulp", "pr": null},
+        {"check": "fixtures", "item": "Pencil React runtime fixture", "reason": "arrives with the runtime tests", "pr": null},
+        {"check": "render_reference", "item": "a synthetic public reference render", "reason": "Pulp's reference render lives in its private planning repository and is not published; a public synthetic one has not been made", "pr": null}
+      ],
+      "deferred": []
+    },
+    {
+      "source": "figma",
+      "display_name": "Figma Make",
+      "kind": "screen-export",
+      "trust": "official",
+      "last_verified": "2026-08-12",
+      "recheck_interval_days": 90,
+      "compat": {"mode": "foreign-key", "source": "figma", "parser_version_owner": "product/source-detection.json"},
+      "dispatch": {"kind": "design-source-label", "label": "figma"},
+      "upstream": [
+        {"url": "https://developers.figma.com/docs/code", "kind": "docs", "proves": "Figma Code / Make React project model.", "last_verified": "2026-08-12", "recheck_interval_days": 90},
+        {"url": "https://developers.figma.com/docs/code/working-with-react", "kind": "docs", "proves": "Figma Make and Figma Sites use React, JSX, import/export, and App.tsx-style TSX project files.", "last_verified": "2026-08-12", "recheck_interval_days": 90},
+        {"url": "https://developers.figma.com/docs/code-connect/react/", "kind": "docs", "proves": "Code Connect React files are code-context glue, not executed runtime exports; Pulp intentionally rejects them in the runtime-import parser.", "last_verified": "2026-08-12", "recheck_interval_days": 90},
+        {"url": "https://developers.figma.com/docs/figma-mcp-server/", "kind": "docs", "proves": "Figma MCP provides design context to AI agents; Pulp models it as input acquisition, not raw runtime parser input.", "last_verified": "2026-08-12", "recheck_interval_days": 90}
+      ],
+      "detected_artifact_shape": "Figma Make React project files or Figma JSON via offline paths.",
+      "runtime_export_shape": "Constrained single-file React TSX with inline styles.",
+      "runtime_requirements": {"sdk_min": "0.1.0", "surface_refs": ["framework/core/view", "framework/core/view/js"]},
+      "parser": {"file": "framework/core/view/src/design_import.cpp", "runtime_file": "framework/core/view/src/claude_bundle_sources.cpp", "runtime": "parse_figma_make_react", "static": "parse_figma_json"},
+      "format_versions": [],
+      "validation": {
+        "tests": ["ctest:vellum.design-pipeline", "lane:cli/tests/test_import_backend.py"],
+        "fixtures": ["fixtures/design-ir/revision-a.source.json"],
+        "journey": "scripts/validate_installed_sdk.py::validate[figma]",
+        "render_reference": {"status": "pending", "path": null}
+      },
+      "pending": [
+        {"check": "tests", "item": "parse_figma_make_react runtime and bridge dispatch tests", "reason": "not yet ported from Pulp", "pr": null},
+        {"check": "fixtures", "item": "Figma Make runtime fixture", "reason": "arrives with the runtime tests", "pr": null},
+        {"check": "render_reference", "item": "a synthetic public reference render", "reason": "Pulp's reference render lives in its private planning repository and is not published; a public synthetic one has not been made", "pr": null}
+      ],
+      "deferred": []
+    },
+    {
+      "source": "figma-plugin",
+      "display_name": "Pulp Figma Plugin",
+      "kind": "screen-export",
+      "trust": "official",
+      "last_verified": "2026-05-29",
+      "recheck_interval_days": null,
+      "compat": {"mode": "foreign-key", "source": "figma-plugin", "parser_version_owner": "product/source-support.yaml"},
+      "dispatch": {"kind": "design-source-label", "label": "figma-plugin"},
+      "upstream": [
+        {"url": "https://github.com/Generous-Corp/pulp/blob/4729c9c0e58a7c0cec336a49deaf93a7cedab65c/tools/figma-plugin/schema/figma-plugin-export-v1.json", "kind": "schema", "proves": "Schema for the figma-plugin export envelope: format_version, parser_version, compat_schema_version, provenance, library_manifest?, tokens?, asset_manifest?, diagnostics?, root.", "last_verified": "2026-05-29", "recheck_interval_days": null},
+        {"url": "https://github.com/Generous-Corp/pulp/blob/4729c9c0e58a7c0cec336a49deaf93a7cedab65c/tools/figma-plugin/docs/testing-against-elysium.md", "kind": "docs", "proves": "End-to-end walkthrough of the figma-plugin export \u2192 CLI import lane against the ELYSIUM reference design.", "last_verified": "2026-05-29", "recheck_interval_days": null}
+      ],
+      "detected_artifact_shape": "JSON envelope produced by the Pulp Figma plugin's extract.ts walker.",
+      "runtime_export_shape": "Static JSON; no runtime bundle. Parsed offline by `pulp import-design --from figma-plugin`.",
+      "runtime_requirements": {"sdk_min": "0.2.3", "surface_refs": ["framework/core/view"]},
+      "parser": {"file": "framework/core/view/src/design_import.cpp", "runtime_file": "framework/core/view/src/design_import.cpp", "runtime": null, "static": "parse_figma_plugin_json"},
+      "format_versions": [],
+      "validation": {
+        "tests": ["lane:cli/tests/test_import_backend.py", "package:packages/vellum-design-ir/test/figma-plugin.test.js", "ctest:vellum.design-emitter-conformance"],
+        "fixtures": ["fixtures/design-ir/figma-plugin-a.export.json"],
+        "journey": "scripts/validate_installed_sdk.py::validate_installed_frame_import[figma-plugin]",
+        "render_reference": {"status": "not-applicable", "path": null}
+      },
+      "pending": [],
+      "deferred": []
+    },
+    {
+      "source": "preconverted-svg",
+      "display_name": "Preconverted SVG + control-map sidecar",
+      "kind": "static-only",
+      "trust": "observed",
+      "last_verified": "2026-10-18",
+      "recheck_interval": "manual",
+      "compat": {"mode": "not-applicable", "source": null, "parser_version_owner": "cli/vellum_import_assets.py"},
+      "dispatch": {"kind": "design-source-label", "label": "preconverted-svg"},
+      "upstream": [
+        {"url": "https://github.com/Generous-Corp/pulp/blob/4729c9c0e58a7c0cec336a49deaf93a7cedab65c/tools/import-design/annotated_capture.hpp", "kind": "local-contract", "proves": "The typed control-map sidecar fields and generated DesignFrameView boundary consumed by the annotated-capture lane.", "last_verified": "2026-10-18", "recheck_interval_days": null},
+        {"url": "https://github.com/Generous-Corp/pulp/blob/4729c9c0e58a7c0cec336a49deaf93a7cedab65c/tools/import-design/annotated_capture.cpp", "kind": "local-implementation", "proves": "SVG digest, root-envelope, selector uniqueness, canvas bounds, and control geometry validation.", "last_verified": "2026-10-18", "recheck_interval_days": null}
+      ],
+      "detected_artifact_shape": "SVG document plus JSON control-map sidecar with provenance, svg_sha256, positive canvas dimensions, and #id selectors.",
+      "runtime_export_shape": "Validation-only preconverted SVG lane; no source conversion or generated runtime export is accepted until the sidecar contract passes.",
+      "runtime_requirements": {"sdk_min": "0.2.3", "surface_refs": ["framework/core/view", "product/source-detection.json"]},
+      "parser": {"file": "framework/core/view/src/design_import.cpp", "runtime": null, "static": null},
+      "format_versions": [],
+      "validation": {
+        "tests": ["lane:cli/tests/test_import_backend.py"],
+        "fixtures": [],
+        "journey": null,
+        "render_reference": {"status": "not-applicable", "path": null}
+      },
+      "pending": [
+        {"check": "journey", "item": "scripts/validate_installed_sdk.py::validate_installed_asset_imports[preconverted-svg]", "reason": "the installed asset journey is open", "pr": "https://github.com/Generous-Corp/vellum/pull/785"}
+      ],
+      "deferred": []
+    },
+    {
+      "source": "v0",
+      "display_name": "v0.dev",
+      "kind": "screen-export",
+      "trust": "official",
+      "last_verified": "2026-08-12",
+      "recheck_interval_days": 90,
+      "compat": {"mode": "foreign-key", "source": "v0", "parser_version_owner": "product/source-detection.json"},
+      "dispatch": {"kind": "design-source-label", "label": "v0"},
+      "upstream": [
+        {"url": "https://v0.app/docs/design-systems-legacy", "kind": "docs", "proves": "v0 design-system and React/Tailwind/shadcn default surface.", "last_verified": "2026-08-12", "recheck_interval_days": 90},
+        {"url": "https://ui.shadcn.com/docs/registry", "kind": "docs", "proves": "shadcn registry shape that Pulp's v0 parser deliberately rejects.", "last_verified": "2026-08-12", "recheck_interval_days": 90},
+        {"url": "https://v0.app/docs/api/v1/adapters/mcp-server", "kind": "docs", "proves": "v0 MCP server access lets IDE agents create and inspect v0 chats; Pulp models this as acquisition before the constrained TSX parser.", "last_verified": "2026-08-12", "recheck_interval_days": 90}
+      ],
+      "detected_artifact_shape": "v0 React project envelope or single TSX component.",
+      "runtime_export_shape": "Constrained bare React TSX with inline styles; Tailwind and shadcn/Radix are rejected.",
+      "runtime_requirements": {"sdk_min": "0.2.3", "surface_refs": ["framework/core/view", "framework/core/view/js"]},
+      "parser": {"file": "framework/core/view/src/design_import_v0_tsx.cpp", "runtime_file": "framework/core/view/src/claude_bundle_sources.cpp", "runtime": "parse_v0_dev_react", "static": "parse_v0_tsx"},
+      "format_versions": [],
+      "validation": {
+        "tests": ["lane:cli/tests/test_cli.py"],
+        "fixtures": [],
+        "journey": "scripts/validate_installed_sdk.py::validate_installed_frame_import[v0]",
+        "render_reference": {"status": "pending", "path": null}
+      },
+      "pending": [
+        {"check": "tests", "item": "parse_v0_dev_react runtime and bridge dispatch tests", "reason": "not yet ported from Pulp", "pr": null},
+        {"check": "fixtures", "item": "v0.dev runtime fixture", "reason": "arrives with the runtime tests", "pr": null},
+        {"check": "render_reference", "item": "a synthetic public reference render", "reason": "Pulp's reference render lives in its private planning repository and is not published; a public synthetic one has not been made", "pr": null}
+      ],
+      "deferred": []
+    },
+    {
+      "source": "jsx",
+      "display_name": "JSX Instrument",
+      "kind": "screen-export",
+      "trust": "observed",
+      "last_verified": "2026-08-20",
+      "recheck_interval_days": 90,
+      "compat": {"mode": "not-applicable", "source": null, "parser_version_owner": "runtime-import"},
+      "dispatch": {"kind": "design-source-label", "label": "jsx"},
+      "upstream": [
+        {"url": "tools/import-design/jsx-runtime/README.md", "kind": "docs", "proves": "Local JSX runtime transform contract and current CLI wiring status.", "last_verified": "2026-08-20", "recheck_interval_days": 90}
+      ],
+      "detected_artifact_shape": "Single-file React JSX or TSX instrument component.",
+      "runtime_export_shape": "Bundled JavaScript app generated by tools/import-design/jsx-runtime/jsx-transform.mjs and materialized through the Claude runtime harness.",
+      "runtime_requirements": {"sdk_min": "0.2.0", "surface_refs": ["framework/core/view", "framework/core/view/js"]},
+      "parser": {"file": "framework/core/view/src/design_import.cpp", "runtime_file": "framework/core/view/src/claude_bundle.cpp", "runtime": "parse_jsx_react", "static": null},
+      "format_versions": [],
+      "validation": {
+        "tests": ["ctest:vellum.framework.design-import-jsx-runtime", "ctest:vellum.framework.react-materialization", "lane:cli/tests/test_import_backend.py"],
+        "fixtures": [],
+        "journey": null,
+        "render_reference": {"status": "pending", "path": null}
+      },
+      "pending": [
+        {"check": "journey", "item": "scripts/validate_installed_sdk.py::validate_installed_asset_imports[jsx]", "reason": "the installed asset journey is open", "pr": "https://github.com/Generous-Corp/vellum/pull/785"},
+        {"check": "render_reference", "item": "a synthetic public reference render", "reason": "Pulp's reference render lives in its private planning repository and is not published; a public synthetic one has not been made", "pr": null}
+      ],
+      "deferred": [
+        {"check": "fixtures", "reason": "Pulp's JSX fixtures live in its private planning repository; the Vellum tests build their JSX inline"}
+      ]
+    },
+    {
+      "source": "rn",
+      "display_name": "React Native",
+      "kind": "screen-export",
+      "trust": "official",
+      "last_verified": "2026-05-14",
+      "recheck_interval_days": 180,
+      "compat": {"mode": "not-applicable", "source": null, "parser_version_owner": "runtime-import"},
+      "dispatch": {"kind": "explicit-runtime-parser", "parser": "parse_react_native_export"},
+      "upstream": [
+        {"url": "https://reactnative.dev/docs/components-and-apis", "kind": "docs", "proves": "React Native core component vocabulary.", "last_verified": "2026-05-14", "recheck_interval_days": 180},
+        {"url": "https://reactnative.dev/docs/flexbox", "kind": "docs", "proves": "React Native Flexbox defaults including column direction.", "last_verified": "2026-05-14", "recheck_interval_days": 180},
+        {"url": "https://reactnative.dev/docs/stylesheet.html", "kind": "docs", "proves": "StyleSheet.create is the canonical React Native static style surface that Pulp normalizes for runtime import.", "last_verified": "2026-05-14", "recheck_interval_days": 180}
+      ],
+      "detected_artifact_shape": "Single-file React Native TSX component importing from react-native.",
+      "runtime_export_shape": "Constrained RN TSX normalized to Pulp DOM-compatible JS.",
+      "runtime_requirements": {"sdk_min": "0.2.0", "surface_refs": ["framework/core/view", "framework/core/view/js"]},
+      "parser": {"file": "framework/core/view/src/design_import.cpp", "runtime_file": "framework/core/view/src/claude_bundle_sources.cpp", "runtime": "parse_react_native_export", "static": null},
+      "format_versions": [],
+      "validation": {
+        "tests": [],
+        "fixtures": [],
+        "journey": null,
+        "render_reference": {"status": "pending", "path": null}
+      },
+      "pending": [
+        {"check": "tests", "item": "ctest:vellum.framework.runtime-import-parsers", "reason": "the React Native runtime parser and bridge dispatch tests are open", "pr": "https://github.com/Generous-Corp/vellum/pull/787"},
+        {"check": "fixtures", "item": "fixtures/runtime-import/rn/gain-stage.tsx", "reason": "the runtime-import fixture arrives with its tests", "pr": "https://github.com/Generous-Corp/vellum/pull/787"},
+        {"check": "render_reference", "item": "a synthetic public reference render", "reason": "Pulp's reference render lives in its private planning repository and is not published; a public synthetic one has not been made", "pr": null}
+      ],
+      "deferred": [
+        {"check": "journey", "reason": "Vellum has no CLI import route for React Native exports; they enter only through the runtime-import bridge"}
+      ]
+    },
+    {
+      "source": "jsx",
+      "display_name": "JSX runtime-import (instrument)",
+      "kind": "screen-export",
+      "trust": "observed",
+      "last_verified": "2026-08-20",
+      "recheck_interval_days": 90,
+      "compat": {"mode": "not-applicable", "source": null, "parser_version_owner": "jsx-runtime-transform"},
+      "dispatch": {"kind": "design-source-label", "label": "jsx"},
+      "upstream": [
+        {"url": "tools/import-design/jsx-runtime/README.md", "kind": "local-docs", "proves": "Documents the supported local JSX transform and runtime import path.", "last_verified": "2026-08-20", "recheck_interval_days": 90},
+        {"url": "tools/import-design/jsx-runtime/jsx-transform.mjs", "kind": "tooling", "proves": "Local Node/esbuild transform turns JSX/TSX input into the runtime bundle consumed by parse_jsx_react.", "last_verified": "2026-08-20", "recheck_interval_days": 90}
+      ],
+      "detected_artifact_shape": "Single-file JSX or TSX React component transformed through the local esbuild runtime bridge.",
+      "runtime_export_shape": "Self-contained JS bundle (React + ReactDOM + user JSX + Pulp host shim) consumed by WidgetBridge runtime-import dispatch.",
+      "runtime_requirements": {"sdk_min": "0.2.0", "surface_refs": ["framework/core/view", "framework/core/view/js", "packages/vellum-ui"]},
+      "parser": {"file": "framework/core/view/src/design_import.cpp", "runtime_file": "framework/core/view/src/claude_bundle.cpp", "runtime": "parse_jsx_react", "static": null},
+      "format_versions": [],
+      "validation": {
+        "tests": ["ctest:vellum.framework.design-import-jsx-runtime", "ctest:vellum.framework.react-materialization", "lane:cli/tests/test_import_backend.py"],
+        "fixtures": [],
+        "journey": null,
+        "render_reference": {"status": "pending", "path": null}
+      },
+      "pending": [
+        {"check": "journey", "item": "scripts/validate_installed_sdk.py::validate_installed_asset_imports[jsx]", "reason": "the installed asset journey is open", "pr": "https://github.com/Generous-Corp/vellum/pull/785"},
+        {"check": "render_reference", "item": "a synthetic public reference render", "reason": "Pulp's reference render lives in its private planning repository and is not published; a public synthetic one has not been made", "pr": null}
+      ],
+      "deferred": [
+        {"check": "fixtures", "reason": "Pulp's JSX fixtures live in its private planning repository; the Vellum tests build their JSX inline"},
+        {"check": "upstream", "reason": "one evidence link pointed at a document in Pulp's private planning repository, which is not published"}
+      ]
+    }
+  ]
+}

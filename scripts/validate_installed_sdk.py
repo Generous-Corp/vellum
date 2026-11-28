@@ -145,6 +145,55 @@ components:
 
 
 
+def validate_installed_source_detection(prefix: Path, root: Path, env: dict[str, str]) -> None:
+    """Detect a Stitch export and an unknown page with the installed manifest."""
+
+    def command(*args: str, status: str, code: int) -> dict:
+        result = subprocess.run(
+            [str(prefix / "bin/vellum"), "import", *args, "--json"], cwd=root, env=env,
+            text=True, capture_output=True, check=False,
+        )
+        payload = json.loads(result.stdout)
+        if payload.get("status") != status or result.returncode != code:
+            raise ValidationError(f"Expected {status} ({code}), got {result.returncode} "
+                                  f"{result.stdout}{result.stderr}")
+        return payload
+
+    export = root / "stitch-export"
+    export.mkdir()
+    (export / "code.html").write_text(
+        '<html><head><script src="https://cdn.tailwindcss.com?plugins=forms,container-queries">'
+        '</script><script>tailwind.config = {theme: {extend: {colors: '
+        '{"surface-container": "#f3edf7", "on-primary": "#ffffff"}}}}</script></head>'
+        '<body><div>Sample</div></body></html>', encoding="utf-8")
+    (export / "DESIGN.md").write_text("# Sample\n", encoding="utf-8")
+    (export / "screen.png").write_text("placeholder", encoding="utf-8")
+    detected = command("--detect-only", str(export), status="detected", code=0)["data"]
+    if (detected["source"], detected["format_version"], detected["confidence_pct"]) != (
+            "stitch", "2025.04", 100):
+        raise ValidationError(f"Stitch export was not detected: {detected}")
+    if not detected["compat"].endswith("share/vellum/source-detection.json"):
+        raise ValidationError(f"Detection did not use the installed manifest: {detected}")
+
+    unknown = root / "page.html"
+    unknown.write_text("<html><body><h1>Sample</h1></body></html>", encoding="utf-8")
+    command("--detect-only", str(unknown), status="no_detected_source", code=3)
+
+    newer = root / "stitch-newer"
+    newer.mkdir()
+    for name in ("code.html", "DESIGN.md", "screen.png"):
+        (newer / name).write_bytes((export / name).read_bytes())
+    (newer / "code.html").write_text(
+        (export / "code.html").read_text(encoding="utf-8").replace(
+            '"on-primary": "#ffffff"', '"on-primary": "#ffffff", "sample-glow": "#000000"'),
+        encoding="utf-8")
+    report = command("--report-new-format", str(newer), status="new_format_report", code=0)["data"]
+    added = [token for clause in report.get("fingerprint-additions", [])
+             for token in clause.get("any-of", [])]
+    if report.get("candidate-source") != "stitch" or "sample-glow" not in added:
+        raise ValidationError(f"New-format report did not name the new token: {report}")
+
+
 def validate_installed_stitch_import(prefix: Path, root: Path, env: dict[str, str]) -> None:
     """Import a recorded Stitch screen payload and a Stitch HTML export, then reimport both."""
 
@@ -1198,6 +1247,7 @@ def validate(
         if native_enabled:
             validate_installed_source_imports(prefix, root, journey_env)
             validate_installed_frame_import(prefix, root, journey_env, "v0")
+            validate_installed_source_detection(prefix, root, journey_env)
             validate_installed_stitch_import(prefix, root, journey_env)
             validate_installed_baked_emit(prefix, root, journey_env)
             for name, arguments in {
