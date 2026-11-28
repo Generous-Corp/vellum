@@ -100,6 +100,16 @@ HAS_MANIFEST = unittest.skipUnless(
 
 
 class CtestClassesTest(unittest.TestCase):
+    def test_design_tool_verbatim_move_is_registered(self) -> None:
+        cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        self.assertRegex(
+            cmake,
+            r'add_test\(NAME\s+vellum\.design-tool-verbatim-move\s+'
+            r'COMMAND\s+"\$\{Python3_EXECUTABLE\}"\s+'
+            r'apps/design-tool/test_verify_verbatim_move\.py\s+'
+            r'WORKING_DIRECTORY\s+"\$\{CMAKE_CURRENT_SOURCE_DIR\}"\)',
+        )
+
     @HAS_MANIFEST
     def test_manifest_lists_each_test_once(self) -> None:
         classes = load_manifest()
