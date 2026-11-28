@@ -8,6 +8,12 @@ on:
         required: false
         default: '0'
   pull_request:
+  # The nightly run is the reproducibility backstop: a pull request or queue
+  # run whose changed paths cannot alter the SDK link builds it once, and
+  # merge-queue proofs are reused by the push to main, so this run builds the
+  # SDK twice on main's tip when nothing else did.
+  schedule:
+    - cron: '23 9 * * *'
   # Merge-queue builds: the queue merges main's tip with the PR head on a
   # gh-readonly-queue/* ref and needs every required check on that commit.
   merge_group:
@@ -772,10 +778,40 @@ jobs:
       - name: Prove the installed SDK artifact is reproducible
         if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
         shell: bash
+        env:
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
         run: |
           set -euo pipefail
           first="$RUNNER_TEMP/sdk-first"
           second="$RUNNER_TEMP/sdk-second"
+          # Building the SDK twice and comparing the bytes is the
+          # reproducibility proof. A pull request or queue run builds it once
+          # unless a changed path can alter the link or toolchain inputs
+          # (scripts/sdk_repro_inputs.py, read from the base, never from the
+          # change). Pushes to main, release tags, the nightly run and
+          # dispatches always build twice, and so does any doubt: no base, an
+          # unreadable diff, an unexpected answer.
+          single_build=false
+          case "$GITHUB_EVENT_NAME" in
+            pull_request|merge_group)
+              base="${QUEUE_BASE:-$GITHUB_SHA^1}"
+              decider="$RUNNER_TEMP/base-sdk-repro-inputs.py"
+              repro_verdict=""
+              if { [ "$GITHUB_EVENT_NAME" != merge_group ] || [ -n "$QUEUE_BASE" ]; } &&
+                 git show "$base:scripts/sdk_repro_inputs.py" > "$decider" 2>/dev/null &&
+                 git diff --name-only -z --no-renames "$base" "$GITHUB_SHA" \
+                   > "$RUNNER_TEMP/sdk-repro-paths" &&
+                 repro_verdict="$(python3 -I "$decider" --files0-from "$RUNNER_TEMP/sdk-repro-paths")"; then
+                :
+              fi
+              if [ "$repro_verdict" = not-required ]; then
+                single_build=true
+                echo "::notice::No changed path can alter the SDK link inputs; building the SDK once"
+              else
+                echo "::notice::Building the SDK twice (verdict: ${repro_verdict:-unavailable})"
+              fi
+              ;;
+          esac
           node_binary="$(command -v node)"
           node_version="$(node -p 'process.versions.node')"
           node_platform="$(node -p 'process.platform')"
@@ -828,7 +864,10 @@ jobs:
           # building serially, minutes apart, so a wall-clock byte two
           # simultaneous builds would share still fails the comparison before
           # any release.
-          if [ "$VELLUM_BUILD_JOBS" -ge 4 ] && {
+          if [ "$single_build" = true ]; then
+            build_sdk first "$first" "$RUNNER_TEMP/sdk-first.json" \
+              "$VELLUM_MIRROR_DEPS_DIR" "$VELLUM_BUILD_JOBS"
+          elif [ "$VELLUM_BUILD_JOBS" -ge 4 ] && {
             [ "$GITHUB_EVENT_NAME" = pull_request ] ||
             [ "$GITHUB_EVENT_NAME" = merge_group ] ||
             [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]
@@ -872,8 +911,10 @@ jobs:
           archive="$VELLUM_RELEASE_ARCHIVE"
           test "$archive" = \
             "vellum-sdk-$VELLUM_RELEASE_VERSION-darwin-arm64.tar.gz"
-          python3 scripts/compare_sdk_archives.py "$first/$archive" "$second/$archive"
-          cmp "$first/SHA256SUMS" "$second/SHA256SUMS"
+          if [ "$single_build" != true ]; then
+            python3 scripts/compare_sdk_archives.py "$first/$archive" "$second/$archive"
+            cmp "$first/SHA256SUMS" "$second/SHA256SUMS"
+          fi
           (cd scripts && shasum -a 256 -c INSTALLER_SHA256SUMS)
           shasum -a 256 "$first/$archive" > "$RUNNER_TEMP/vellum-sdk.sha256"
           cp "$first/$archive" "$RUNNER_TEMP/$archive"

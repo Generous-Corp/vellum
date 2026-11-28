@@ -458,6 +458,10 @@
       {
         "script": "scripts/test_web_compat_packaging.py",
         "isolated": true
+      },
+      {
+        "script": "scripts/test_sdk_repro_inputs.py",
+        "isolated": true
       }
     ]
   },
