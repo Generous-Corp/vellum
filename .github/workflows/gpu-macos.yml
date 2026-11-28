@@ -704,71 +704,11 @@ jobs:
             --fixture phase3 \
             > "$RUNNER_TEMP/phase3-browser-evidence.json"
 
-      - name: Verify renderer provenance and byte identity
-        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
-        run: |
-          python3 -I tools/provenance/verify_renderer_dependency.py \
-            --archive "$VELLUM_SKIA_ARCHIVE" \
-            --require-macho
-
-      - name: Prove and install the gpu-runtime package for mirror consumers
-        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
-        shell: bash
-        run: |
-          set -euo pipefail
-          # The installed native-editor consumer uses the separately published
-          # runtime package, so prepare that exact prefix before ctest runs.
-          for build in first second; do
-            python3 scripts/build_gpu_runtime_artifact.py \
-              --renderer-archive "$VELLUM_SKIA_ARCHIVE" \
-              --source-commit "$GITHUB_SHA" \
-              --output-dir "$RUNNER_TEMP/gpu-runtime-$build" \
-              --json > "$RUNNER_TEMP/gpu-runtime-$build.json"
-          done
-          archive="vellum-gpu-runtime-$VELLUM_RELEASE_VERSION-darwin-arm64.tar.gz"
-          cmp "$RUNNER_TEMP/gpu-runtime-first/$archive" "$RUNNER_TEMP/gpu-runtime-second/$archive"
-          cp "$RUNNER_TEMP/gpu-runtime-first/$archive" "$RUNNER_TEMP/$archive"
-          runtime_prefix="$RUNNER_TEMP/gpu-runtime-prefix"
-          mkdir -p "$runtime_prefix"
-          tar -xzf "$RUNNER_TEMP/$archive" -C "$runtime_prefix"
-          test -f "$runtime_prefix/lib/cmake/VellumGpuRuntime/VellumGpuRuntimeConfig.cmake"
-          python3 scripts/verify_gpu_runtime_artifact.py \
-            --archive "$RUNNER_TEMP/$archive" \
-            --repo "$GITHUB_WORKSPACE" \
-            --renderer-archive "$VELLUM_SKIA_ARCHIVE" \
-            --consumer --require-adapter \
-            --output "$RUNNER_TEMP/gpu-runtime-verification.json"
-          (cd "$RUNNER_TEMP" && shasum -a 256 "$archive" > vellum-gpu-runtime.sha256)
-
-      - name: Run native, capture, and sterile-consumer tests
-        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
-        run: |
-          VELLUM_MIRROR_LIVE_GPU=1 \
-            ctest --test-dir build-gpu --output-on-failure
-          ./build-gpu/apps/gpu-native/vellum-gpu-native.app/Contents/MacOS/vellum-gpu-native \
-            --self-test --capture "$RUNNER_TEMP/vellum-gpu-proof.png" \
-            | tee "$RUNNER_TEMP/vellum-gpu-proof.txt"
-          file "$RUNNER_TEMP/vellum-gpu-proof.png"
-          shasum -a 256 "$RUNNER_TEMP/vellum-gpu-proof.png" \
-            > "$RUNNER_TEMP/vellum-gpu-proof.sha256"
-
-      - name: Execute every declared parity proof
-        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == '' && hashFiles('provenance/authority/expansions/full-design-import-render-v1/parity-completion-1.json') != ''
-        run: |
-          python3 scripts/run_parity_proofs.py \
-            --completion provenance/authority/expansions/full-design-import-render-v1/parity-completion-1.json \
-            --web-payload "$RUNNER_TEMP/web-payload" \
-            --output "$RUNNER_TEMP/vellum-parity-proof-execution.json"
-
-      - name: Upload parity proof execution receipt
-        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == '' && hashFiles('provenance/authority/expansions/full-design-import-render-v1/parity-completion-1.json') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: vellum-parity-proof-execution
-          path: ${{ runner.temp }}/vellum-parity-proof-execution.json
-          if-no-files-found: error
-          retention-days: 14
-
+      # Runs before the long ctest pass: it reads only the pinned Skia archive,
+      # the web payload above, and the mirror dependencies the GPU build fetched,
+      # and nothing ctest produces, so a reproducibility failure now ends the run
+      # before the serial test pass instead of after it. Later steps read the
+      # archive, checksums and installer copies it leaves in RUNNER_TEMP.
       - name: Prove the installed SDK artifact is reproducible
         if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
         shell: bash
@@ -895,6 +835,71 @@ jobs:
           python3 scripts/build_sterile_acceptance_bundle.py \
             --output "$RUNNER_TEMP/vellum-sterile-acceptance.tar.gz" \
             --json > "$RUNNER_TEMP/sterile-acceptance-bundle.json"
+
+      - name: Verify renderer provenance and byte identity
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
+        run: |
+          python3 -I tools/provenance/verify_renderer_dependency.py \
+            --archive "$VELLUM_SKIA_ARCHIVE" \
+            --require-macho
+
+      - name: Prove and install the gpu-runtime package for mirror consumers
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The installed native-editor consumer uses the separately published
+          # runtime package, so prepare that exact prefix before ctest runs.
+          for build in first second; do
+            python3 scripts/build_gpu_runtime_artifact.py \
+              --renderer-archive "$VELLUM_SKIA_ARCHIVE" \
+              --source-commit "$GITHUB_SHA" \
+              --output-dir "$RUNNER_TEMP/gpu-runtime-$build" \
+              --json > "$RUNNER_TEMP/gpu-runtime-$build.json"
+          done
+          archive="vellum-gpu-runtime-$VELLUM_RELEASE_VERSION-darwin-arm64.tar.gz"
+          cmp "$RUNNER_TEMP/gpu-runtime-first/$archive" "$RUNNER_TEMP/gpu-runtime-second/$archive"
+          cp "$RUNNER_TEMP/gpu-runtime-first/$archive" "$RUNNER_TEMP/$archive"
+          runtime_prefix="$RUNNER_TEMP/gpu-runtime-prefix"
+          mkdir -p "$runtime_prefix"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$runtime_prefix"
+          test -f "$runtime_prefix/lib/cmake/VellumGpuRuntime/VellumGpuRuntimeConfig.cmake"
+          python3 scripts/verify_gpu_runtime_artifact.py \
+            --archive "$RUNNER_TEMP/$archive" \
+            --repo "$GITHUB_WORKSPACE" \
+            --renderer-archive "$VELLUM_SKIA_ARCHIVE" \
+            --consumer --require-adapter \
+            --output "$RUNNER_TEMP/gpu-runtime-verification.json"
+          (cd "$RUNNER_TEMP" && shasum -a 256 "$archive" > vellum-gpu-runtime.sha256)
+
+      - name: Run native, capture, and sterile-consumer tests
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
+        run: |
+          VELLUM_MIRROR_LIVE_GPU=1 \
+            ctest --test-dir build-gpu --output-on-failure
+          ./build-gpu/apps/gpu-native/vellum-gpu-native.app/Contents/MacOS/vellum-gpu-native \
+            --self-test --capture "$RUNNER_TEMP/vellum-gpu-proof.png" \
+            | tee "$RUNNER_TEMP/vellum-gpu-proof.txt"
+          file "$RUNNER_TEMP/vellum-gpu-proof.png"
+          shasum -a 256 "$RUNNER_TEMP/vellum-gpu-proof.png" \
+            > "$RUNNER_TEMP/vellum-gpu-proof.sha256"
+
+      - name: Execute every declared parity proof
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == '' && hashFiles('provenance/authority/expansions/full-design-import-render-v1/parity-completion-1.json') != ''
+        run: |
+          python3 scripts/run_parity_proofs.py \
+            --completion provenance/authority/expansions/full-design-import-render-v1/parity-completion-1.json \
+            --web-payload "$RUNNER_TEMP/web-payload" \
+            --output "$RUNNER_TEMP/vellum-parity-proof-execution.json"
+
+      - name: Upload parity proof execution receipt
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == '' && hashFiles('provenance/authority/expansions/full-design-import-render-v1/parity-completion-1.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: vellum-parity-proof-execution
+          path: ${{ runner.temp }}/vellum-parity-proof-execution.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Prove the RmlUi SDK archive is reproducible and consumable
         if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
