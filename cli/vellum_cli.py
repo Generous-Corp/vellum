@@ -1802,6 +1802,11 @@ DESIGN_TOOL_VERBS = {
 }
 
 
+# The native verbs that define --json for themselves. The other verbs reject it,
+# so a global --json is handled here instead of being forwarded.
+DESIGN_TOOL_NATIVE_JSON_VERBS = frozenset({"compile", "record"})
+
+
 def design_tool_path() -> Path | None:
     """The native design tool: $VELLUM_DESIGN_TOOL, else the installed SDK's."""
     explicit = os.environ.get("VELLUM_DESIGN_TOOL")
@@ -1815,26 +1820,42 @@ def design_tool_path() -> Path | None:
     return path if path.is_file() else None
 
 
-def design_tool_command(verb: str, arguments: list[str]) -> int:
+def design_tool_command(verb: str, arguments: list[str], *, global_json: bool = False) -> int:
     """Run one offline design verb in the native tool and return its exit code.
 
-    Arguments pass through unchanged, including --json, which these verbs
-    define for themselves, so the verb's own output is the result.
+    Arguments pass through unchanged, so a verb's own --json output is the
+    result. A global --json is forwarded only to the verbs that define it; for
+    the others the tool's output becomes the data of one CLI result object.
     """
+    if global_json and verb in DESIGN_TOOL_NATIVE_JSON_VERBS and "--json" not in arguments:
+        arguments = [*arguments, "--json"]
+    wrap = global_json and verb not in DESIGN_TOOL_NATIVE_JSON_VERBS
     tool = design_tool_path()
     if tool is None:
         emit(result(
             "design", ok=False, status="capability_unavailable",
             message=f"This SDK does not provide 'design {verb}'.",
-        ), json_output="--json" in arguments)
+        ), json_output="--json" in arguments or global_json)
         return EXIT_UNAVAILABLE
     try:
-        return subprocess.run([str(tool), verb, *arguments], check=False).returncode
+        completed = subprocess.run([str(tool), verb, *arguments], check=False,
+                                   capture_output=wrap, text=True, encoding="utf-8",
+                                   errors="replace")
+        if not wrap:
+            return completed.returncode
+        ok = completed.returncode == 0
+        emit(result(
+            f"design {verb}", ok=ok, status="ok" if ok else "backend_failed",
+            message=f"design {verb} completed." if ok else f"design {verb} failed.",
+            data={"stdout": completed.stdout, "stderr": completed.stderr,
+                  "exit_code": completed.returncode},
+        ), json_output=True)
+        return completed.returncode
     except OSError as error:
         emit(result(
             "design", ok=False, status="capability_unavailable",
             message=f"Cannot run the design tool for 'design {verb}': {error}.",
-        ), json_output="--json" in arguments)
+        ), json_output="--json" in arguments or global_json)
         return EXIT_UNAVAILABLE
 
 
@@ -1957,7 +1978,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     if len(raw) >= 2 and raw[0] == "design" and raw[1] in DESIGN_TOOL_VERBS:
         return design_tool_command(raw[1], raw[2:])
     if len(raw) >= 3 and raw[:2] == ["--json", "design"] and raw[2] in DESIGN_TOOL_VERBS:
-        return design_tool_command(raw[2], [*raw[3:], "--json"])
+        return design_tool_command(raw[2], raw[3:], global_json=True)
     if raw[:1] == ["design-debug"]:
         return design_debug_command(raw[1:], json_output=False)
     if raw[:2] == ["--json", "design-debug"]:

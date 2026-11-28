@@ -217,6 +217,39 @@ class DesignToolDiscoveryTests(unittest.TestCase):
         self.assertNotIn("Traceback", completed.stderr)
         self.assertEqual(json.loads(completed.stdout)["status"], "capability_unavailable")
 
+    @unittest.skipIf(os.name == "nt", "POSIX file modes")
+    def test_global_json_forwards_only_supported_flags(self) -> None:
+        tmp = tempfile.TemporaryDirectory(prefix="vellum-fake-tool-")
+        self.addCleanup(tmp.cleanup)
+        tool = Path(tmp.name) / "fake-design-tool"
+        tool.write_text(
+            f"#!{sys.executable}\n"
+            "import sys\n"
+            "verb, rest = sys.argv[1], sys.argv[2:]\n"
+            "native = verb in ('compile', 'record')\n"
+            "if '--json' in rest and not native:\n"
+            "    sys.stderr.write('unknown option --json\\n'); sys.exit(2)\n"
+            "print('{\"native\": true}' if '--json' in rest else 'plain output')\n",
+            encoding="utf-8")
+        tool.chmod(0o755)
+        env = {k: v for k, v in os.environ.items() if k not in {"VELLUM_SDK_ROOT"}}
+        env["VELLUM_DESIGN_TOOL"] = str(tool)
+
+        def run(*args: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run([sys.executable, str(CLI), *args], env=env,
+                                  text=True, capture_output=True, check=False)
+
+        for verb in ("export-tokens", "lint-adherence", "md-lint", "md-diff"):
+            completed = run("--json", "design", verb, "--dry-run")
+            self.assertEqual(completed.returncode, 0, (verb, completed.stderr))
+            payload = json.loads(completed.stdout)
+            self.assertTrue(payload["ok"], verb)
+            self.assertEqual(payload["data"]["stdout"].strip(), "plain output")
+        for verb in ("compile", "record"):
+            completed = run("--json", "design", verb)
+            self.assertEqual(completed.returncode, 0, (verb, completed.stderr))
+            self.assertEqual(json.loads(completed.stdout), {"native": True})
+
     def test_help_lists_every_design_verb(self) -> None:
         completed = subprocess.run(
             [sys.executable, str(CLI), "design", "--help"],
