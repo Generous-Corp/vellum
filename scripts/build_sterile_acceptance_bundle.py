@@ -45,6 +45,8 @@ SUPPORT_FILES = (
     "fixtures/design-ir/revision-a.source.json",
     "fixtures/design-ir/revision-b.source.json",
     "fixtures/design-ir/pulp-emitter-generic.pulp.zip",
+    "fixtures/emitter-conformance/keyed-list-18.ir.json",
+    "fixtures/emitter-conformance/fidelity-scene-no-display.pulp.json",
     "fixtures/authoring-phase3/scenarios/phase3.json",
     "fixtures/authoring-phase3/src/App.tsx",
     "fixtures/authoring-phase3/src/imported-design.json",

@@ -40,6 +40,7 @@
 #include <string_view>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace vellum::view {
 
@@ -118,10 +119,115 @@ bool looks_like_hex_color(const std::string& s) {
 // the upstream spec prescribes — so acceptance is a syntactic predicate. The
 // goal is only to recognize a valid CSS color so we don't emit a spurious
 // `color-shape` warning for, e.g., `rgb(...)`, `oklch(...)`, or `cornflowerblue`.
+bool is_css_functional_color(const std::string& s);
+
+// Split `text` on commas that sit outside any parentheses.
+std::vector<std::string> split_top_level_commas(const std::string& text) {
+    std::vector<std::string> parts;
+    int depth = 0;
+    size_t start = 0;
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == '(') ++depth;
+        else if (text[i] == ')') --depth;
+        else if (text[i] == ',' && depth == 0) {
+            parts.push_back(text.substr(start, i - start));
+            start = i + 1;
+        }
+    }
+    parts.push_back(text.substr(start));
+    return parts;
+}
+
+bool is_css_color_text(const std::string& s);
+
+// Parse one weight token such as `30%`. Only an explicit percentage in
+// 0%..100% is valid; a bare number gives a wrong blend in a CSS engine.
+bool parse_color_mix_weight(const std::string& token, bool& is_weight) {
+    static const std::regex numeric(
+        R"(^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?(%?)$)");
+    std::smatch m;
+    is_weight = std::regex_match(token, m, numeric);
+    if (!is_weight) return false;
+    if (m[1].length() == 0) return false;
+    double pct = 0.0;
+    try { pct = std::stod(token.substr(0, token.size() - 1)); } catch (const std::exception&) { return false; }
+    return pct >= 0.0 && pct <= 100.0;
+}
+
+// `in <space>` with an optional `<method> hue` for the polar spaces.
+bool is_valid_color_mix_interpolation(const std::string& text) {
+    std::vector<std::string> words;
+    std::istringstream in(choc::text::toLowerCase(text));
+    for (std::string w; in >> w;) words.push_back(w);
+    if (words.size() < 2 || words[0] != "in") return false;
+    static const std::unordered_set<std::string> rectangular = {
+        "srgb", "srgb-linear", "display-p3", "display-p3-linear", "a98-rgb",
+        "prophoto-rgb", "rec2020", "lab", "oklab", "xyz", "xyz-d50", "xyz-d65"};
+    static const std::unordered_set<std::string> polar = {"hsl", "hwb", "lch", "oklch"};
+    static const std::unordered_set<std::string> methods = {
+        "shorter", "longer", "increasing", "decreasing"};
+    if (words.size() == 2) return rectangular.count(words[1]) || polar.count(words[1]);
+    return words.size() == 4 && polar.count(words[1]) && methods.count(words[2]) &&
+           words[3] == "hue";
+}
+
+// `color-mix(in <space>, <color> [<pct>], <color> [<pct>])`.
+bool is_valid_color_mix_argument_list(const std::string& inner) {
+    const auto parts = split_top_level_commas(inner);
+    if (parts.size() != 3) return false;
+    if (!is_valid_color_mix_interpolation(choc::text::trim(parts[0]))) return false;
+    for (size_t i = 1; i < 3; ++i) {
+        const std::string part = choc::text::trim(parts[i]);
+        // Split into top-level whitespace separated tokens.
+        std::vector<std::string> tokens;
+        std::string current;
+        int depth = 0;
+        for (char c : part) {
+            if (c == '(') ++depth;
+            else if (c == ')') --depth;
+            if (std::isspace(static_cast<unsigned char>(c)) && depth == 0) {
+                if (!current.empty()) tokens.push_back(current);
+                current.clear();
+            } else {
+                current += c;
+            }
+        }
+        if (!current.empty()) tokens.push_back(current);
+        if (tokens.empty()) return false;
+        bool is_weight = false;
+        auto take_weight = [&](size_t index) {
+            bool weight = false;
+            const bool ok = parse_color_mix_weight(tokens[index], weight);
+            is_weight = weight;
+            return ok;
+        };
+        size_t first = 0, last = tokens.size();
+        if (tokens.size() > 1) {
+            take_weight(tokens.size() - 1);
+            if (is_weight) {
+                if (!take_weight(tokens.size() - 1)) return false;
+                last = tokens.size() - 1;
+            } else {
+                take_weight(0);
+                if (is_weight) {
+                    if (!take_weight(0)) return false;
+                    first = 1;
+                }
+            }
+        }
+        std::string color;
+        for (size_t t = first; t < last; ++t) color += (color.empty() ? "" : " ") + tokens[t];
+        if (color.empty() || !is_css_color_text(color)) return false;
+    }
+    return true;
+}
+
 bool is_css_functional_color(const std::string& s) {
     auto paren = s.find('(');
     if (paren == std::string::npos || s.empty() || s.back() != ')') return false;
     std::string fn = choc::text::toLowerCase(choc::text::trim(s.substr(0, paren)));
+    if (fn == "color-mix")
+        return is_valid_color_mix_argument_list(s.substr(paren + 1, s.size() - paren - 2));
     static const std::unordered_set<std::string> fns = {
         "rgb", "rgba", "hsl", "hsla", "hwb",
         "lab", "lch", "oklab", "oklch",
@@ -173,6 +279,16 @@ bool looks_like_css_color(const std::string& s) {
     return looks_like_hex_color(s)
         || is_css_functional_color(s)
         || is_css_named_color(s);
+}
+
+// A color inside `color-mix()`. A `var(...)` or `env(...)` substitution
+// resolves in the browser, so it is accepted here.
+bool is_css_color_text(const std::string& s) {
+    const std::string lower = choc::text::toLowerCase(choc::text::trim(s));
+    if ((lower.compare(0, 4, "var(") == 0 || lower.compare(0, 4, "env(") == 0) &&
+        !lower.empty() && lower.back() == ')')
+        return true;
+    return looks_like_css_color(s);
 }
 
 bool is_token_reference(const std::string& s) {
@@ -1269,6 +1385,23 @@ std::string export_tailwind_v3_json(const DesignMdParseResult& parsed) {
     return o.str();
 }
 
+namespace {
+
+// A raw line break would end the declaration early. Write each one as the CSS
+// escape for a line feed (`\a `), which stays inside the value.
+std::string escape_css_line_breaks(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\r' && i + 1 < s.size() && s[i + 1] == '\n') continue;
+        if (s[i] == '\n' || s[i] == '\r') out += "\\a ";
+        else out += s[i];
+    }
+    return out;
+}
+
+} // namespace
+
 std::string export_tailwind_v4_css(const DesignMdParseResult& parsed) {
     const auto& t = parsed.ir.tokens;
     std::ostringstream o;
@@ -1297,9 +1430,102 @@ std::string export_tailwind_v4_css(const DesignMdParseResult& parsed) {
     for (const auto& [group, ns] : typo_namespaces) {
         auto it = typo.find(group);
         if (it == typo.end()) continue;
-        for (const auto& [level, value] : it->second) {
+        for (const auto& [level, raw] : it->second) {
+            const std::string value = group == "fontFamily" ? escape_css_line_breaks(raw) : raw;
             o << "  --" << ns << "-" << level << ": " << value << ";\n";
         }
+    }
+    o << "}\n";
+    return o.str();
+}
+
+namespace {
+
+// Reduce a token path to a CSS custom-property name segment.
+std::string css_ident(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        const auto u = static_cast<unsigned char>(c);
+        out += (std::isalnum(u) || c == '_' || c == '-') ? c : '-';
+    }
+    return out;
+}
+
+// A custom-property value must stay inside its own declaration: line breaks
+// become spaces, and a value with an unquoted `;`, `{` or `}`, a comment
+// delimiter, or an unbalanced quote or parenthesis is refused so it cannot
+// end the declaration or open a block. Returns false for a refused value.
+bool css_value(const std::string& raw, std::string& out) {
+    std::string text;
+    text.reserve(raw.size());
+    for (char c : raw) text += (c == '\n' || c == '\r') ? ' ' : c;
+    text = choc::text::trim(text);
+    if (text.empty()) return false;
+    char quote = 0;
+    int depth = 0;
+    for (size_t i = 0; i < text.size(); ++i) {
+        const char c = text[i];
+        if (c == '\\') { ++i; continue; }
+        if (quote) {
+            if (c == quote) quote = 0;
+            continue;
+        }
+        if (c == '"' || c == '\'') quote = c;
+        else if (c == '(') ++depth;
+        else if (c == ')') { if (--depth < 0) return false; }
+        else if (c == ';' || c == '{' || c == '}') return false;
+        else if (c == '/' && i + 1 < text.size() && text[i + 1] == '*') return false;
+        else if (c == '*' && i + 1 < text.size() && text[i + 1] == '/') return false;
+    }
+    if (quote || depth != 0) return false;
+    out = std::move(text);
+    return true;
+}
+
+} // namespace
+
+std::string export_css_vars(const DesignMdParseResult& parsed, const std::string& prefix) {
+    const auto& t = parsed.ir.tokens;
+    std::string lead = css_ident(prefix);
+    while (!lead.empty() && lead.front() == '-') lead.erase(lead.begin());
+    while (!lead.empty() && lead.back() == '-') lead.pop_back();
+    if (!lead.empty()) lead += "-";
+
+    std::vector<std::pair<std::string, std::string>> vars;
+    auto add = [&](std::string name, const std::string& raw) {
+        std::string value;
+        if (css_value(raw, value)) vars.emplace_back(std::move(name), std::move(value));
+    };
+    for (const auto& [name, value] : t.colors)
+        add("--" + lead + "color-" + css_ident(name), value);
+    for (const auto& [name, value] : t.dimensions) {
+        const std::string group = split_prefix_suffix(name).first;
+        if (group != "rounded" && group != "spacing") continue;
+        std::ostringstream v;
+        v << value << "px";
+        vars.emplace_back("--" + lead + css_ident(name), v.str());
+    }
+    constexpr std::string_view typo{"typography."};
+    for (const auto& [key, value] : t.strings) {
+        if (key.compare(0, typo.size(), typo) == 0) {
+            add("--" + lead + "typography-" + css_ident(key.substr(typo.size())), value);
+            continue;
+        }
+        // A spacing or rounded alias such as `{spacing.base}` resolves to a
+        // dimension string but stays in the string table.
+        if (key.compare(0, 8, "spacing-") == 0 || key.compare(0, 8, "rounded-") == 0)
+            add("--" + lead + css_ident(key), value);
+    }
+    std::sort(vars.begin(), vars.end());
+
+    std::ostringstream o;
+    o << ":root {\n";
+    const std::string* previous = nullptr;
+    for (const auto& var : vars) {
+        if (previous && *previous == var.first) continue;
+        o << "  " << var.first << ": " << var.second << ";\n";
+        previous = &var.first;
     }
     o << "}\n";
     return o.str();

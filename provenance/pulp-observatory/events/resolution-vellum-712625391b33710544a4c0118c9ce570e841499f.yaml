@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-712625391b33710544a4c0118c9ce570e841499f",
+  "kind": "resolution",
+  "created_at": "2026-11-28T05:43:00Z",
+  "resolves": "vellum-712625391b33710544a4c0118c9ce570e841499f",
+  "disposition": "not-applicable",
+  "rationale": "Vellum PR #804, the Vellum lead's own lane (PR body owner marker host=m5s client=claude-code), moves Pulp's design-tool JS into Vellum verbatim. Pulp already contains identical content, so nothing is owed to Pulp. Blob comparison (git rev-parse <commit>:<path>): apps/design-tool/design-tool-popup.js blob e60eb8a81a366a82318368635aa64f16900d4c6f = Pulp examples/design-tool/design-tool-popup.js blob e60eb8a81a366a82318368635aa64f16900d4c6f at source_commit 50c4eaa3fe02c9805c3b7dbae16d12072722eaeb; apps/design-tool/design-tool-toolbar.js blob 8d29c42f2550d2e71e41e894bfed33788523a1ca = Pulp examples/design-tool/design-tool-toolbar.js blob 8d29c42f2550d2e71e41e894bfed33788523a1ca at source_commit 50c4eaa3fe02c9805c3b7dbae16d12072722eaeb. The same Pulp blobs are also present, unchanged, at the frozen cursor aa630815630c and at Pulp main f6dc34e14e11. The remaining mapped paths in this event (the move manifest under apps/design-tool/moves/ and, where listed, the README and verifier tooling) are Vellum's own records of the move and have no Pulp counterpart. Classified not-applicable by the Vellum lead's lane for its own PR on the lead's ruling; any later resolution overrides it.",
+  "owner": "@vellum-lead",
+  "linked_commits": [
+    "712625391b33710544a4c0118c9ce570e841499f"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/vellum/pull/804"
+  ],
+  "contract_tests": [
+    "vellum.capture-stats",
+    "vellum.gpu-native"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 3
+}
