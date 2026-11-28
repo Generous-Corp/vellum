@@ -1190,25 +1190,6 @@
       "reason": "In-process WKWebView snapshot to PNG for headless capture of a WebView overlay. Ported from Pulp's core/view/platform/mac/web_view_snapshot_mac.mm by API change: the namespace and include paths respelled to vellum, comments edited, and the page-side bridge wire names kept so existing pages run unchanged."
     },
     {
-      "framework_path": "framework/core/view/src/text_accessibility.cpp",
-      "change": "added",
-      "target": "pulp-view-core",
-      "origin": "native",
-      "pulp_path": null,
-      "pulp_commits": [],
-      "framework_blob": null,
-      "platforms": [
-        "linux-arm64",
-        "windows-arm64",
-        "ios-device-arm64",
-        "ios-simulator-arm64",
-        "android-arm64-v8a",
-        "android-x86_64",
-        "wasm32"
-      ],
-      "reason": "Owner-aware default text accessibility registry for platforms without a native backend."
-    },
-    {
       "framework_path": "framework/core/view/platform/mac/accessibility_mac_geometry.hpp",
       "change": "added",
       "target": null,

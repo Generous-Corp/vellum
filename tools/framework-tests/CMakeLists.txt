@@ -82,26 +82,6 @@ add_test(NAME vellum.framework.font-container-route
 set_tests_properties(vellum.framework.font-container-route PROPERTIES LABELS framework)
 set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES font_container_route_test.cpp)
 
-# Link the default text accessibility backend directly so this contract is
-# covered even when the mirrored package selects a native platform backend.
-add_executable(vellum-framework-text-accessibility-default-test
-    text_accessibility_default_test.cpp
-    "${PROJECT_SOURCE_DIR}/framework/core/view/src/text_accessibility.cpp")
-target_include_directories(vellum-framework-text-accessibility-default-test PRIVATE
-    "${PROJECT_SOURCE_DIR}/framework/core/view/include")
-set_target_properties(vellum-framework-text-accessibility-default-test PROPERTIES
-    CXX_STANDARD 20
-    CXX_STANDARD_REQUIRED ON)
-add_test(NAME vellum.framework.text-accessibility-default
-    COMMAND vellum-framework-text-accessibility-default-test)
-set_tests_properties(vellum.framework.text-accessibility-default PROPERTIES LABELS framework)
-set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
-    text_accessibility_default_test.cpp)
-
-vellum_add_framework_test(text-accessibility-owner-link
-    SOURCES text_accessibility_owner_link_test.cpp
-    UNITS Vellum::MirrorView_core)
-
 vellum_add_framework_test(widget-bridge
     SOURCES widget_bridge_test.cpp
     UNITS Vellum::MirrorView_script)
@@ -163,6 +143,12 @@ vellum_add_framework_test(design-import-jsx-runtime
     SOURCES design_import_jsx_runtime_test.cpp
     UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import)
 
+vellum_add_framework_test(design-import-react-runtime
+    SOURCES design_import_react_runtime_test.cpp
+    UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import)
+target_compile_definitions(vellum-framework-design-import-react-runtime-test PRIVATE
+    VELLUM_REACT_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/fixtures/react-runtime")
+
 vellum_add_framework_test(runtime-import-parsers
     SOURCES runtime_import_parsers_test.cpp
     UNITS Vellum::MirrorView_script Vellum::MirrorDesign_import)
@@ -213,7 +199,16 @@ if(TARGET vellum-dawn-headers AND TARGET vellum-gpu)
     target_include_directories(vellum-framework-webgpu-error-scopes-test PRIVATE
         "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
     set_tests_properties(vellum.framework.webgpu-error-scopes PROPERTIES SKIP_RETURN_CODE 77)
+    # The device layer's offscreen surface on a real Dawn device.
+    vellum_add_framework_test(gpu-surface-device
+        SOURCES gpu_surface_device_test.cpp
+        UNITS Vellum::MirrorRender_2d Vellum::DawnHeaders Vellum::Gpu)
+    target_include_directories(vellum-framework-gpu-surface-device-test PRIVATE
+        "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
+    set_tests_properties(vellum.framework.gpu-surface-device PROPERTIES SKIP_RETURN_CODE 77)
 else()
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+        "gpu_surface_device_test.cpp")
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
         "webgpu_error_scopes_test.cpp")
 endif()
@@ -412,7 +407,44 @@ vellum_add_framework_test(host-param-surface-model
     SOURCES host_param_surface_model_test.cpp
     UNITS Vellum::MirrorView_core Vellum::Value)
 
+vellum_add_framework_test(js-bytecode-embed
+    SOURCES js_bytecode_embed_test.cpp
+    UNITS Vellum::MirrorView_script
+           js_bytecode_embed_fixture js_bytecode_embed_bridge_fixture)
+target_include_directories(vellum-framework-js-bytecode-embed-test PRIVATE
+    "${CMAKE_BINARY_DIR}")
+target_compile_definitions(vellum-framework-js-bytecode-embed-test PRIVATE
+    VELLUM_TEST_JS_BYTECODE_FIXTURE="${PROJECT_SOURCE_DIR}/fixtures/js-bytecode/bytecode_fixture.js")
+
+vellum_add_framework_test(jsx-lock
+    SOURCES jsx_lock_test.cpp
+    UNITS Vellum::MirrorView_script)
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    # NSAccessibility roles, the element tree the editor view hands to AppKit and
+    # the painted-text backend, queried in process on views that are never put
+    # in a window.
+    vellum_add_framework_test(macos-accessibility-roles
+        SOURCES macos_accessibility_roles_test.mm
+        UNITS Vellum::MirrorView_core)
+    target_compile_options(vellum-framework-macos-accessibility-roles-test PRIVATE -fobjc-arc)
+    target_link_libraries(vellum-framework-macos-accessibility-roles-test PRIVATE
+        "-framework AppKit")
+    vellum_add_framework_test(macos-text-accessibility
+        SOURCES macos_text_accessibility_test.mm
+        UNITS Vellum::MirrorView_core)
+    target_link_libraries(vellum-framework-macos-text-accessibility-test PRIVATE
+        "-framework AppKit")
+
+    # The standalone window host's content view in the accessibility tree; the
+    # window is created and never shown.
+    vellum_add_framework_test(macos-window-host-accessibility
+        SOURCES macos_window_host_accessibility_test.mm
+        UNITS Vellum::MirrorView_core)
+    target_compile_options(vellum-framework-macos-window-host-accessibility-test PRIVATE -fobjc-arc)
+    target_link_libraries(vellum-framework-macos-window-host-accessibility-test PRIVATE
+        "-framework AppKit")
+
     vellum_add_framework_test(main-thread-timer
         SOURCES main_thread_timer_test.mm
         UNITS Vellum::MirrorFoundation)
@@ -452,6 +484,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
 else()
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
         main_thread_timer_test.mm native_dialog_delivery_test.cpp
+        macos_accessibility_roles_test.mm macos_text_accessibility_test.mm
+        macos_window_host_accessibility_test.mm
         web_view_test.mm plugin_view_host_cursor_test.mm
         plugin_view_host_native_child_test.mm)
 endif()
@@ -460,7 +494,6 @@ endif()
 # SDK, never by this macOS tree. Naming it here keeps the guard below honest.
 set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
     ios_au_editor_controller_test.mm)
-
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     add_executable(vellum-framework-accessibility-geometry-test accessibility_geometry_test.mm)
