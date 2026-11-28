@@ -1,0 +1,17 @@
+{
+  "schema": "vellum.design-tool-verbatim-move.v1",
+  "source_repository": "Generous-Corp/pulp",
+  "source_commit": "50c4eaa3fe02c9805c3b7dbae16d12072722eaeb",
+  "files": [
+    {
+      "path": "apps/design-tool/design-tool-palette.js",
+      "source_path": "examples/design-tool/design-tool-palette.js",
+      "source_blob": "681209c644b0547c44093cdfc3ff89f80795e001"
+    },
+    {
+      "path": "apps/design-tool/test-harness.js",
+      "source_path": "examples/design-tool/test-harness.js",
+      "source_blob": "90c327d5259f52c36140083ad326b177fd2af7a4"
+    }
+  ]
+}
