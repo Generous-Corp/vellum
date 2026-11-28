@@ -228,6 +228,41 @@ def _validate_manifest(manifest: Any, source: Path, out: Path, files: list[Sourc
     return errors
 
 
+def _stale_owned_outputs(out: Path, source_paths: set[str]) -> list[Path]:
+    """Files a previous build wrote (per its manifest) that the source no longer has.
+
+    Ownership comes from the previous manifest, so a file the build never wrote
+    is never listed; those are reported by the caller instead.
+    """
+    try:
+        previous = json.loads(_manifest_path(out).read_text(encoding="utf-8"))
+        listed = [entry["path"] for entry in previous.get("files", [])]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return []
+    root = out.resolve()
+    stale = []
+    for rel in listed:
+        if not isinstance(rel, str) or rel in source_paths:
+            continue
+        target = (out / rel).resolve()
+        if target.is_relative_to(root) and target.is_file():
+            stale.append(target)
+    return stale
+
+
+def _remove_files_and_empty_dirs(out: Path, stale: list[Path]) -> None:
+    root = out.resolve()
+    for target in stale:
+        target.unlink()
+        parent = target.parent
+        while parent != root:
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+            parent = parent.parent
+
+
 def _reject_output_symlinks(out: Path) -> None:
     """Fail closed if anything under the output root is a symlink.
 
@@ -282,6 +317,17 @@ def run(command: str, source_arg: Path, out_arg: Path, *, json_output: bool = Fa
         _reject_output_symlinks(out)
     if command == "build":
         out.mkdir(parents=True, exist_ok=True)
+        source_paths = {f.relative for f in files}
+        stale = _stale_owned_outputs(out, source_paths)
+        owned = {p.relative_to(out.resolve()).as_posix() for p in stale}
+        untracked = sorted(
+            p.relative_to(out).as_posix() for p in out.rglob("*")
+            if p.is_file() and p.relative_to(out).as_posix() not in source_paths | owned
+            and p.relative_to(out).as_posix() != MANIFEST_NAME)
+        if untracked:
+            raise UiBuildError("output contains untracked file(s) the build does not own: "
+                               + ", ".join(untracked))
+        _remove_files_and_empty_dirs(out, stale)
         for f in files:
             destination = out / f.relative
             destination.parent.mkdir(parents=True, exist_ok=True)

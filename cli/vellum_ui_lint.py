@@ -26,7 +26,9 @@ GENERIC_NAME = re.compile(r"(?:div|span|section|node|element|component)[_-]?\d+$
 COMPONENT_DECL = re.compile(r"\b(?:function\s+|const\s+)([A-Z][A-Za-z0-9_]*)")
 FUNCTION_DECL = re.compile(r"\bfunction\s+([A-Za-z_$][\w$]*)\s*\(")
 STATIC_STYLE = re.compile(r"style\s*=\s*\{\s*\{(?P<body>[^{}]*)\}\s*\}")
-OPEN_TAG = re.compile(r"<([A-Za-z][\w.-]*)(?:\s+[^<>]*?)?\s*/?>")
+SAME_LINE_LEAF = re.compile(
+    r"<([A-Za-z][\w.-]*)(?:\s+[^<>]*?)?\s*/>"
+    r"|<([A-Za-z][\w.-]*)(?:\s+[^<>]*?)?>[^<>]*</\2\s*>")
 # This scanner is intentionally conservative: it only compares complete
 # non-self-closing JSX elements with balanced tag names. It is not a TSX
 # parser, so malformed/unbalanced markup produces no structural finding and
@@ -422,19 +424,19 @@ def lint_source(root: Path, *, enforce_size: bool = False, max_component_lines: 
         for match in RANDOMNESS.finditer(text):
             findings.append(Finding("nondeterministic-expression", rel, _line_for(text, match.start()),
                                     "runtime output depends on an unseeded clock or random source"))
-        # Keep the high-signal same-line control for repeated leaves, then use
-        # the balanced subtree scanner below for copied markup that spans lines.
+        # Keep the high-signal same-line control for repeated complete leaves
+        # (same tag, attributes and text), then use the balanced subtree
+        # scanner below for copied markup that spans lines. Repeated opening
+        # tags with different content are distinct elements and pass.
         for line_number, source_line in enumerate(text.splitlines(), 1):
-            tags = []
-            for match in OPEN_TAG.finditer(source_line):
-                tag = re.sub(r"\s+", " ", match.group(0)).strip()
-                if not tag.startswith(("<Fragment", "<React.Fragment", "<style", "<script")):
-                    tags.append(tag)
-            for tag in sorted(set(tags)):
-                count = tags.count(tag)
+            leaves = [re.sub(r"\s+", " ", match.group(0)).strip()
+                      for match in SAME_LINE_LEAF.finditer(source_line)
+                      if not match.group(0).startswith(("<Fragment", "<React.Fragment", "<style", "<script"))]
+            for leaf in sorted(set(leaves)):
+                count = leaves.count(leaf)
                 if count > 1:
                     findings.append(Finding("duplicate-markup", rel, line_number,
-                                            f"opening markup occurs {count} times on one line: {tag[:80]}"))
+                                            f"identical element occurs {count} times on one line: {leaf[:80]}"))
         for line_number, count, signature in _duplicate_subtree_findings(text):
             findings.append(Finding(
                 "duplicate-markup", rel, line_number,

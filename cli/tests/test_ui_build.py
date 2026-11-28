@@ -197,6 +197,25 @@ class UiBuildContractTests(unittest.TestCase):
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("untracked", completed.stdout + completed.stderr)
 
+    def test_rebuild_removes_outputs_the_source_no_longer_has(self):
+        extra = self.source / "Extra.tsx"
+        extra.write_text((self.source / "Editor.tsx").read_text(encoding="utf-8"), encoding="utf-8")
+        self.assertEqual(self.run_cli("build").returncode, 0)
+        self.assertTrue((self.out / "Extra.tsx").is_file())
+        extra.unlink()
+        self.assertEqual(self.run_cli("build").returncode, 0)
+        self.assertFalse((self.out / "Extra.tsx").exists())
+        self.assertEqual(self.run_cli("check").returncode, 0)
+
+    def test_rebuild_refuses_files_the_build_never_wrote(self):
+        self.assertEqual(self.run_cli("build").returncode, 0)
+        stray = self.out / "notes.txt"
+        stray.write_text("keep\n", encoding="utf-8")
+        completed = self.run_cli("build")
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("untracked", completed.stdout + completed.stderr)
+        self.assertTrue(stray.is_file())
+
     def test_lint_command_filters_explicit_generated_vendor_roles(self):
         vendor = self.source / "vendor" / "runtime.js"
         vendor.parent.mkdir()

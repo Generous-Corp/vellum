@@ -53,6 +53,16 @@ export function Other() {
                          "nonsemantic-click-target", "nondeterministic-expression",
                          "duplicate-markup"} <= codes, report)
 
+    def test_same_line_siblings_with_different_content_pass(self):
+        report = self._report(
+            """export function LabelRow() {
+  return <div className="row"><span>Frequency</span><span>Gain</span><button>On</button><button>Off</button></div>;
+}
+"""
+        )
+        codes = {finding["code"] for finding in report["findings"]}
+        self.assertNotIn("duplicate-markup", codes, report)
+
     def test_multiline_duplicate_subtree_fails(self):
         report = self._report(
             """export function Panel() {
