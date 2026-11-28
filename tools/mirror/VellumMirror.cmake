@@ -426,26 +426,6 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
     endforeach()
 endforeach()
 
-# Keep the public text accessibility API link-complete on platforms without a
-# native backend. macOS, Linux and Windows closures each provide their own
-# platform translation unit; the default unit supplies the same owner-aware
-# registry contract everywhere else.
-if(TARGET pulp-view-core)
-    get_target_property(_vellum_view_core_sources pulp-view-core SOURCES)
-    set(_vellum_has_text_accessibility_backend FALSE)
-    foreach(_vellum_view_source IN LISTS _vellum_view_core_sources)
-        if(_vellum_view_source MATCHES "text_accessibility_(macos|linux|windows)")
-            set(_vellum_has_text_accessibility_backend TRUE)
-        endif()
-    endforeach()
-    if(NOT _vellum_has_text_accessibility_backend)
-        target_sources(pulp-view-core PRIVATE
-            "${PROJECT_SOURCE_DIR}/framework/core/view/src/text_accessibility.cpp")
-    endif()
-    unset(_vellum_view_core_sources)
-    unset(_vellum_has_text_accessibility_backend)
-endif()
-
 # Vellum owns the installed GPU plug-in editor host.  It is deliberately an
 # addition to the mirrored view-core package, not a copied Pulp-kept source:
 # the public header is mirrored, while this implementation is authored here.

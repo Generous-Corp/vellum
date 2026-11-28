@@ -91,9 +91,9 @@ std::unique_ptr<View> add_named(View& parent, Role role, const char* label) {
     return nullptr;
 }
 
-// A tree with one named button, one nameless button, a checked checkbox, an
-// aria-hidden label and a disabled named slider, read back through the
-// elements the editor view hands to AppKit.
+// A tree with one named button, one nameless button, a checked checkbox, a
+// hidden label and a disabled named slider, read back through the elements the
+// provider hands to AppKit.
 FRAMEWORK_TEST(element_tree_exposes_roles_labels_and_state) {
     @autoreleasepool {
         View root;
@@ -111,11 +111,7 @@ FRAMEWORK_TEST(element_tree_exposes_roles_labels_and_state) {
         CHECK(host != nullptr);
         if (!host) return;
         NSArray* elements = [editor_view(*host) accessibilityChildren];
-        // The nameless button is not an element, and the editor view leaves
-        // the aria-hidden label out of the tree a screen reader reads.
-        CHECK(elements.count == 3U);
-        for (NSAccessibilityElement* el in elements)
-            CHECK(![el.accessibilityLabel isEqualToString:@"Secret"]);
+        CHECK(elements.count == 3U);  // the nameless button and hidden label are left out
         if (elements.count != 3U) return;
 
         NSAccessibilityElement* button = elements[0];
@@ -131,6 +127,55 @@ FRAMEWORK_TEST(element_tree_exposes_roles_labels_and_state) {
         CHECK([slider.accessibilityRole isEqualToString:NSAccessibilitySliderRole]);
         CHECK([slider.accessibilityValue isEqual:@"0.5"]);
         CHECK(![slider isAccessibilityEnabled]);
+    }
+}
+
+FRAMEWORK_TEST(native_child_accessibility_survives_host_override) {
+    @autoreleasepool {
+        [NSApplication sharedApplication];
+        View root;
+        add_named(root, Role::button, "Generated button");
+        auto host = PluginViewHost::create(root, {.size = {200, 100}});
+        CHECK(host != nullptr);
+        if (!host) return;
+        NSView* view = editor_view(*host);
+        NSTextField* field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 100, 20)];
+        id native_element = NSAccessibilityUnignoredDescendant(field);
+        CHECK(native_element != nil);
+        CHECK([[native_element accessibilityRole] isEqualToString:NSAccessibilityTextFieldRole]);
+        CHECK(host->attach_native_child_view((__bridge void*)field, 0, 0, 100, 20));
+        CHECK([[view accessibilityChildren] containsObject:native_element]);
+        CHECK([native_element accessibilityParent] == view);
+        CHECK([view accessibilityChildren].count == 2U);
+        field.hidden = YES;
+        CHECK(![[view accessibilityChildren] containsObject:native_element]);
+        field.hidden = NO;
+        CHECK([[view accessibilityChildren] containsObject:native_element]);
+        root.set_access_hidden("true");
+        CHECK([view accessibilityChildren].count == 0U);
+        root.set_access_hidden("false");
+        CHECK([[view accessibilityChildren] containsObject:native_element]);
+        host->detach_native_child_view((__bridge void*)field);
+        CHECK(![[view accessibilityChildren] containsObject:native_element]);
+        CHECK([view accessibilityChildren].count == 1U);
+    }
+}
+
+FRAMEWORK_TEST(accessibility_children_do_not_leak_elements) {
+    @autoreleasepool {
+        View root;
+        add_named(root, Role::button, "Save");
+        auto host = PluginViewHost::create(root, {.size = {50, 50}});
+        CHECK(host != nullptr);
+        if (!host) return;
+        __weak NSAccessibilityElement* weak_element = nil;
+        @autoreleasepool {
+            NSArray* elements = [editor_view(*host) accessibilityChildren];
+            CHECK(elements.count == 1U);
+            if (elements.count == 1U) weak_element = elements[0];
+            CHECK(weak_element != nil);
+        }
+        CHECK(weak_element == nil);
     }
 }
 

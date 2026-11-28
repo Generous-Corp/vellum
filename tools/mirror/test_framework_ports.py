@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -515,32 +514,6 @@ class PlatformScopeTest(unittest.TestCase):
                                                                                     [target, lib_b], added)))
         v1 = json.dumps({"schema": fp.UNITS_SCHEMA_V1, "targets": [target]})
         self.assertTrue(any("needs schema" in e for e in fp.parse_units(v1)[1]))
-
-    def test_the_default_text_accessibility_backend_skips_native_platforms(self) -> None:
-        # The default registry defines the same functions as each native
-        # backend, so a platform that compiles both fails to link with
-        # duplicate symbols (gpu-macos-arm64 did, when the row named no scope
-        # and so meant macOS).
-        repo = HERE.parents[1]
-        default = "framework/core/view/src/text_accessibility.cpp"
-        native = re.compile(r"text_accessibility_(macos|linux|windows)\.(cpp|mm)\Z")
-        rows, errors = fp.load(repo)
-        self.assertEqual(errors, [])
-        _, _, scopes, replay_errors = fp.replay_scoped(rows, set())
-        self.assertEqual(replay_errors, [])
-        self.assertIn(default, scopes)
-        backends: set[str] = set()
-        transfer = json.loads((repo / "provenance/framework/transfer.json").read_text(encoding="utf-8"))
-        if any(native.search(path) for path in json.dumps(transfer).split('"')):
-            backends.add(fp.RECEIPT_PLATFORM)
-        for path, scope in scopes.items():
-            if native.search(path):
-                backends |= scope
-        for closure in (repo / "provenance/framework/platforms").glob("*/view-core.json"):
-            if any(native.search(path) for path in closure.read_text(encoding="utf-8").split('"')):
-                backends.add(closure.parent.name)
-        self.assertTrue({"macos-arm64", "linux-x64", "windows-x64"} <= backends, backends)
-        self.assertEqual(scopes[default] & backends, frozenset())
 
 
 if __name__ == "__main__":

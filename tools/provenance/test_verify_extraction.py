@@ -657,6 +657,8 @@ class VerifyExtractionTests(unittest.TestCase):
             "tools/mirror/consumer/threejs_v8_main.cpp",
             "tools/mirror/consumer/v8_main.cpp",
             "tools/mirror/canvas_provider_anchor.cpp",
+            "cmake/vellum_js_bytecode_main.cpp",
+            "tools/mirror/js-bytecode-consumer/main.cpp",
             "tools/mirror/gpu_surface_guard.py",
             "scripts/install_core.py",
             "tools/provenance/content_scan_policy.py",

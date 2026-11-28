@@ -12,11 +12,8 @@
 
 #include <string>
 
-// Debug lookups the backend exports for tests. Each returns a +1 retained
-// element (or nil) that the caller must release.
+// Debug lookup the backend exports for tests.
 extern "C" void* vellum_text_accessibility_lookup_macos(const char* id_utf8);
-extern "C" void* vellum_text_accessibility_lookup_macos_for_owner(
-    const void* owner, const char* id_utf8);
 
 namespace {
 
@@ -27,17 +24,8 @@ void clear_registry() {
         unregister_text_accessibility_node(node.id);
 }
 
-// This file is built without ARC: balance the lookup's +1 retain with the
-// autorelease pool main() wraps around the tests.
 NSAccessibilityElement* lookup(const std::string& id) {
-    auto* el = (__bridge NSAccessibilityElement*)vellum_text_accessibility_lookup_macos(id.c_str());
-    return [el autorelease];
-}
-
-NSAccessibilityElement* lookup_for_owner(const void* owner, const std::string& id) {
-    auto* el = (__bridge NSAccessibilityElement*)
-        vellum_text_accessibility_lookup_macos_for_owner(owner, id.c_str());
-    return [el autorelease];
+    return (__bridge NSAccessibilityElement*)vellum_text_accessibility_lookup_macos(id.c_str());
 }
 
 bool host_lists_label(NSView* view, NSString* label) {
@@ -148,46 +136,6 @@ FRAMEWORK_TEST(unregister_drops_the_element_and_the_snapshot_entry) {
     CHECK(snapshot_accessibility_nodes().empty());
 }
 
-// The lookup hands back its own retain, so the element outlives the registry
-// entry it came from.
-FRAMEWORK_TEST(lookup_result_survives_unregister) {
-    clear_registry();
-    register_text_accessibility_node(make_node("held", "kept", TextAccessibilityRole::Label));
-    auto* el = (__bridge NSAccessibilityElement*)vellum_text_accessibility_lookup_macos("held");
-    CHECK(el != nil);
-    if (!el) return;
-    unregister_text_accessibility_node("held");
-    CHECK(lookup("held") == nil);
-    CHECK([el.accessibilityLabel isEqualToString:@"kept"]);
-    [el release];
-}
-
-// Owner-scoped registrations are keyed by owner, so the same id can exist for
-// two owners and the process-wide lookup does not see either.
-FRAMEWORK_TEST(owner_scoped_nodes_are_isolated_by_owner) {
-    clear_registry();
-    int owner_a = 0;
-    int owner_b = 0;
-    register_text_accessibility_node_for_owner(
-        &owner_a, make_node("shared", "from a", TextAccessibilityRole::Label));
-    register_text_accessibility_node_for_owner(
-        &owner_b, make_node("shared", "from b", TextAccessibilityRole::Label));
-    CHECK(lookup("shared") == nil);
-    auto* a = lookup_for_owner(&owner_a, "shared");
-    auto* b = lookup_for_owner(&owner_b, "shared");
-    CHECK(a != nil);
-    CHECK(b != nil);
-    if (!a || !b) return;
-    CHECK(a != b);
-    CHECK([a.accessibilityLabel isEqualToString:@"from a"]);
-    CHECK([b.accessibilityLabel isEqualToString:@"from b"]);
-    CHECK(snapshot_accessibility_nodes_for_owner(&owner_a).size() == 1U);
-    unregister_text_accessibility_node_for_owner(&owner_a, "shared");
-    CHECK(lookup_for_owner(&owner_a, "shared") == nil);
-    CHECK(lookup_for_owner(&owner_b, "shared") != nil);
-    clear_registry();
-}
-
 FRAMEWORK_TEST(reregistering_an_id_keeps_the_element_identity) {
     clear_registry();
     register_text_accessibility_node(make_node("same", "old", TextAccessibilityRole::Label));
@@ -216,47 +164,62 @@ FRAMEWORK_TEST(plugin_view_surfaces_registered_text_to_voiceover) {
         auto host = PluginViewHost::create(root, options);
         CHECK(host != nullptr);
         if (!host) return;
-        register_text_accessibility_node(
-            make_node("discoverable", "Hi VoiceOver", TextAccessibilityRole::Label));
         NSView* view = (__bridge NSView*)host->native_handle();
         CHECK(view != nil);
         if (!view) return;
-        CHECK(host_lists_label(view, @"Hi VoiceOver"));
+        auto node = make_node("discoverable", "Hi VoiceOver", TextAccessibilityRole::Label);
+        node.host_handle = (__bridge void*)view;
+        register_text_accessibility_node(node);
+        bool found = false;
+        for (id child in [view accessibilityChildren]) {
+            if ([child respondsToSelector:@selector(accessibilityLabel)] &&
+                [[child accessibilityLabel] isEqualToString:@"Hi VoiceOver"])
+                found = true;
+        }
+        CHECK(found);
+        clear_registry();
     }
-    clear_registry();
 }
 
-// Text registered for one editor's root is listed by that editor only; text
-// registered for another root stays out of its children.
-FRAMEWORK_TEST(plugin_view_lists_only_its_own_owner_scoped_text) {
+// Text registered for one editor view is listed by that view only; another
+// editor view in the same process does not expose it, and an unowned node is
+// listed by neither.
+FRAMEWORK_TEST(plugin_view_lists_only_text_registered_for_its_host) {
     clear_registry();
     @autoreleasepool {
         [NSApplication sharedApplication];
-        View root;
-        View other_root;
+        View root_a;
+        View root_b;
         PluginViewHost::Options options;
         options.size = {200, 100};
         options.use_gpu = false;
-        auto host = PluginViewHost::create(root, options);
-        CHECK(host != nullptr);
-        if (!host) return;
-        register_text_accessibility_node_for_owner(
-            &root, make_node("mine", "Own text", TextAccessibilityRole::Label));
-        register_text_accessibility_node_for_owner(
-            &other_root, make_node("theirs", "Other text", TextAccessibilityRole::Label));
-        NSView* view = (__bridge NSView*)host->native_handle();
-        CHECK(view != nil);
-        if (!view) return;
-        CHECK(host_lists_label(view, @"Own text"));
-        CHECK(!host_lists_label(view, @"Other text"));
+        auto host_a = PluginViewHost::create(root_a, options);
+        auto host_b = PluginViewHost::create(root_b, options);
+        CHECK(host_a != nullptr);
+        CHECK(host_b != nullptr);
+        if (!host_a || !host_b) return;
+        NSView* view_a = (__bridge NSView*)host_a->native_handle();
+        NSView* view_b = (__bridge NSView*)host_b->native_handle();
+        CHECK(view_a != nil);
+        CHECK(view_b != nil);
+        if (!view_a || !view_b) return;
+        auto mine = make_node("mine", "Own text", TextAccessibilityRole::Label);
+        mine.host_handle = (__bridge void*)view_a;
+        register_text_accessibility_node(mine);
+        auto theirs = make_node("theirs", "Other text", TextAccessibilityRole::Label);
+        theirs.host_handle = (__bridge void*)view_b;
+        register_text_accessibility_node(theirs);
+        register_text_accessibility_node(
+            make_node("unowned", "Nobody's text", TextAccessibilityRole::Label));
+        CHECK(host_lists_label(view_a, @"Own text"));
+        CHECK(!host_lists_label(view_a, @"Other text"));
+        CHECK(!host_lists_label(view_a, @"Nobody's text"));
+        CHECK(host_lists_label(view_b, @"Other text"));
+        CHECK(!host_lists_label(view_b, @"Own text"));
+        clear_registry();
     }
-    clear_registry();
 }
 
 } // namespace
 
-int main() {
-    @autoreleasepool {
-        return framework_test::run_all();
-    }
-}
+int main() { return framework_test::run_all(); }
