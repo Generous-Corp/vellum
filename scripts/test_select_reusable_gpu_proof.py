@@ -456,7 +456,65 @@ def assert_reuse_wiring(test: unittest.TestCase, text: str) -> None:
         )
 
 
+def assert_sdk_mismatch_wiring(test: unittest.TestCase, text: str) -> None:
+    job = text.split("\n  gpu-macos-arm64:\n", 1)[1].split("\n  sterile-consumer:\n", 1)[0]
+    blocks = re.split(r"^      - name: ", job, flags=re.M)[1:]
+    steps = {block.split("\n", 1)[0]: block for block in blocks}
+    proof_name = "Prove the installed SDK artifact is reproducible"
+    upload_name = "Keep both SDK builds when they differ"
+    test.assertIn(proof_name, steps)
+    test.assertIn(upload_name, steps)
+    proof, upload = steps[proof_name], steps[upload_name]
+    test.assertRegex(proof, r"(?m)^        id: sdk-reproducible$")
+    test.assertLess(list(steps).index(proof_name), list(steps).index(upload_name))
+    test.assertEqual(
+        dict(job_steps(text, "gpu-macos-arm64"))[upload_name],
+        f"{GPU_GATE} && failure() && steps.sdk-reproducible.outcome == 'failure'",
+    )
+    test.assertRegex(upload, r"(?m)^        uses: actions/upload-artifact@[0-9a-f]{40}$")
+    test.assertIn("          name: vellum-sdk-reproducibility-mismatch\n", upload)
+    paths = re.search(r"(?m)^          path: \|\n((?:            .+\n)+)", upload)
+    test.assertIsNotNone(paths)
+    test.assertEqual([line.strip() for line in paths.group(1).splitlines()], [
+        "${{ runner.temp }}/sdk-first/*.tar.gz",
+        "${{ runner.temp }}/sdk-second/*.tar.gz",
+    ])
+    for build in ("first", "second"):
+        test.assertIn(f'{build}="$RUNNER_TEMP/sdk-{build}"', proof)
+    test.assertIn("          retention-days: 7\n", upload)
+
+
 class WorkflowWiringTests(unittest.TestCase):
+    def test_sdk_mismatch_keeps_both_archives_only_after_a_failed_proof(self) -> None:
+        assert_sdk_mismatch_wiring(self, WORKFLOW.read_text(encoding="utf-8"))
+
+    def test_sdk_mismatch_wiring_mutations_fail(self) -> None:
+        text = WORKFLOW.read_text(encoding="utf-8")
+        upload = text.split("      - name: Keep both SDK builds when they differ\n", 1)[1]
+        upload = "      - name: Keep both SDK builds when they differ\n" + upload.split("\n      - name:", 1)[0]
+        mutations = {"removed upload": text.replace(upload, "", 1)}
+        for old, new in (
+            ("id: sdk-reproducible", "id: wrong-proof"),
+            ("failure()", "success()"),
+            ("steps.sdk-reproducible.outcome == 'failure'", "steps.sdk-reproducible.outcome == 'skipped'"),
+            ("steps.sdk-reproducible.outcome", "steps.other-proof.outcome"),
+            ("steps.classify.outputs.unaffected != 'true' && ", ""),
+            ("steps.depth.outputs.cheap != 'true' && ", ""),
+            ("steps.reuse.outputs.run_id == '' && ", ""),
+            ("${{ runner.temp }}/sdk-first/*.tar.gz", "${{ runner.temp }}/wrong-first/*.tar.gz"),
+            ("${{ runner.temp }}/sdk-second/*.tar.gz", "${{ runner.temp }}/wrong-second/*.tar.gz"),
+        ):
+            if old.startswith("id:"):
+                mutations[old] = text.replace(old, new, 1)
+            else:
+                self.assertIn(old, upload)
+                mutations[old] = text.replace(upload, upload.replace(old, new, 1), 1)
+        for name, mutated in mutations.items():
+            with self.subTest(mutation=name):
+                self.assertNotEqual(mutated, text)
+                with self.assertRaises(AssertionError):
+                    assert_sdk_mismatch_wiring(self, mutated)
+
     def test_every_proof_step_is_skipped_only_by_a_reuse_decision(self) -> None:
         assert_reuse_wiring(self, WORKFLOW.read_text(encoding="utf-8"))
 
