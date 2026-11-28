@@ -931,7 +931,10 @@ def header_tree_digest(root: Path) -> tuple[str, int]:
     if not root.is_dir() or root.is_symlink():
         raise PlanError(f"renderer header tree {root} is not a directory")
     paths: list[str] = []
-    for directory, subdirs, names in os.walk(root):
+    def refuse_walk_error(error: OSError) -> None:
+        raise PlanError(f"cannot enumerate renderer header tree {root}: {error}")
+
+    for directory, subdirs, names in os.walk(root, onerror=refuse_walk_error):
         for item in [*subdirs, *names]:
             candidate = Path(directory) / item
             if candidate.is_symlink() or not (candidate.is_dir() or candidate.is_file()):
@@ -1073,7 +1076,10 @@ def check_skia_include_roots(skia_dir: Path, header_root: str, allowed: dict[str
             raise PlanError(f"Skia include directory {relative or '.'} is a symlink")
         if not base.is_dir():
             continue
-        for directory, subdirs, names in os.walk(base):
+        def refuse_walk_error(error: OSError) -> None:
+            raise PlanError(f"cannot enumerate Skia include directory {relative or '.'}: {error}")
+
+        for directory, subdirs, names in os.walk(base, onerror=refuse_walk_error):
             for item in [*subdirs, *names]:
                 candidate = Path(directory) / item
                 if candidate.is_symlink() or not (candidate.is_dir() or candidate.is_file()):

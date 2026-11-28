@@ -2747,6 +2747,30 @@ class DependencyPreparationRefusalTest(unittest.TestCase):
             with self.assertRaisesRegex(mp.PlanError, "is not a plain file"):
                 mp.header_tree_digest(root)
 
+    def test_a_header_tree_walk_error_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "include"
+            root.mkdir()
+
+            def fail_walk(path, **kwargs):
+                kwargs["onerror"](PermissionError(13, "permission denied", str(path)))
+
+            with mock.patch.object(mp.os, "walk", side_effect=fail_walk), \
+                    self.assertRaisesRegex(mp.PlanError, "cannot enumerate renderer header tree"):
+                mp.header_tree_digest(root)
+
+    def test_a_skia_include_root_walk_error_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            skia_dir = Path(tmp) / "skia"
+            (skia_dir / "build").mkdir(parents=True)
+
+            def fail_walk(path, **kwargs):
+                kwargs["onerror"](PermissionError(13, "permission denied", str(path)))
+
+            with mock.patch.object(mp.os, "walk", side_effect=fail_walk), \
+                    self.assertRaisesRegex(mp.PlanError, "cannot enumerate Skia include directory build"):
+                mp.check_skia_include_roots(skia_dir, "build/include", {}, {"build"})
+
     def test_a_closure_is_accepted_by_content_against_an_attested_archive(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             entry, skia_dir, repo, tree = self.content_fixture(Path(tmp))
