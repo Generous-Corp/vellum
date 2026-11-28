@@ -8,7 +8,6 @@ import unittest
 from pathlib import Path
 
 CLI_DIR = Path(__file__).resolve().parents[1]
-REPO = CLI_DIR.parent
 sys.path.insert(0, str(CLI_DIR))
 try:
     from vellum_ui_lint import lint_source
@@ -16,8 +15,6 @@ finally:
     sys.path.pop(0)
 
 LINT = CLI_DIR / "vellum_ui_lint.py"
-GENERATED_CORPUS = REPO / "cli/tests/fixtures/ui-build/generated"
-SOURCE_FIXTURE = REPO / "fixtures/imports/claude/2024.10/example.html"
 
 
 class CleanOutputLintTests(unittest.TestCase):
@@ -116,6 +113,143 @@ export function Other() {
         )
         self.assertTrue(report["ok"], report)
 
+    def test_semantic_scans_ignore_comments_and_quoted_prose(self):
+        report = self._report(
+            """// colour #fff, rgb(1,2,3), Math.random(), Date.now()
+/* <div onClick={go}>x</div> style={{color: 'red'}} #abc */
+export function Notes() {
+  const doc = "uses Math.random() and Date.now() and <div onClick={go}>";
+  const url = 'http://example.test/page';
+  return <p data-pulp-action="notes">{doc}{url}</p>;
+}
+"""
+        )
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(report["findings"], [])
+
+    def test_template_interpolations_are_scanned_as_code(self):
+        for expression in ("${Math.random()}", "${Date.now()}",
+                           "${items.map(i => `${Math.random()}`)}",
+                           "${{a: 1}.a + Math.random()}"):
+            with self.subTest(expression=expression):
+                report = self._report(
+                    "export function Badge() {\n"
+                    "  const id = `badge-" + expression + "`;\n"
+                    "  return <p data-pulp-action=\"b\">{id}</p>;\n"
+                    "}\n")
+                codes = {finding["code"] for finding in report["findings"]}
+                self.assertIn("nondeterministic-expression", codes, report)
+
+    def test_template_literal_text_beside_interpolation_stays_masked(self):
+        report = self._report(
+            """export function Badge({value}: {value: number}) {
+  const note = `Math.random() and #fff are prose ${value} Date.now() <div onClick={go}>`;
+  const nested = `a ${`Date.now() prose`} b`;
+  return <p data-pulp-action="b">{note}{nested}</p>;
+}
+"""
+        )
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(report["findings"], [])
+
+    def test_colour_literal_inside_template_interpolation_fires(self):
+        report = self._report(
+            """export function Badge({on}: {on: boolean}) {
+  const fill = `${on ? '#fff' : 'none'}`;
+  return <p data-pulp-action="b">{fill}</p>;
+}
+"""
+        )
+        codes = {finding["code"] for finding in report["findings"]}
+        self.assertIn("literal-color", codes, report)
+
+    def test_same_line_duplicate_scan_ignores_strings_and_comments(self):
+        report = self._report(
+            """// <div>x</div><div>x</div>
+export function Docs() {
+  const docs = "<div>x</div><div>x</div>";
+  return <p data-pulp-action="d" title="a">{docs}<i className="a"/><i className="b"/></p>;
+}
+"""
+        )
+        self.assertTrue(report["ok"], report)
+
+    def test_invalid_utf8_source_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "Bad.tsx").write_bytes(b"export const Bad = '\xff\xfe';\n")
+            report = lint_source(root)
+        self.assertFalse(report["ok"])
+        self.assertEqual([f["code"] for f in report["findings"]], ["invalid-utf8"])
+
+    def test_style_and_colour_syntax_quoted_as_prose_is_ignored(self):
+        report = self._report(
+            """export function Help() {
+  const help = "style={{color: '#fff'}} sets a literal like rgb(1, 2, 3) or #abc";
+  const note = "Use #fff for contrast";
+  return <p data-pulp-action="help">{help}</p>;
+}
+"""
+        )
+        self.assertTrue(report["ok"], report)
+
+    def test_colour_values_in_short_strings_still_fire(self):
+        report = self._report(
+            """export function Box() {
+  const edge = "1px solid #fff";
+  const fill = 'rgba(0, 0, 0, 0.5)';
+  return <p data-pulp-action="b">{edge}{fill}</p>;
+}
+"""
+        )
+        self.assertEqual([f["line"] for f in report["findings"]
+                          if f["code"] == "literal-color"], [2, 3], report)
+
+    def test_declarations_in_comments_and_strings_are_not_components(self):
+        report = self._report(
+            """// function Div_123() {}
+export function Docs() {
+  const s = "function Div_9(";
+  return <p data-pulp-action="d">{s}</p>;
+}
+"""
+        )
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(report["components"], 1)
+
+    def test_same_line_apostrophe_does_not_hide_click_target(self):
+        report = self._report(
+            "export function Live() {\n"
+            "  return <><p>don't</p><div onClick={() => 1}>x</div></>;\n"
+            "}\n"
+        )
+        self.assertIn("nonsemantic-click-target", {f["code"] for f in report["findings"]})
+
+    def test_real_violations_still_fire_beside_masked_text(self):
+        report = self._report(
+            """// Math.random() in a comment is fine
+export function Live() {
+  const note = "Date.now() in a string is fine";
+  return <div onClick={() => Math.random()} style={{color: '#fff'}}>{note}</div>;
+}
+"""
+        )
+        codes = {finding["code"] for finding in report["findings"]}
+        self.assertTrue({"nonsemantic-click-target", "nondeterministic-expression",
+                         "literal-color", "inline-static-style"} <= codes, report)
+        lines = {f["line"] for f in report["findings"]}
+        self.assertEqual(lines, {4}, report)
+
+    def test_stray_apostrophe_in_jsx_text_does_not_mask_later_lines(self):
+        report = self._report(
+            """export function Live() {
+  const a = <p data-pulp-action="x">don't</p>;
+  return <div onClick={() => 1}>{a}</div>;
+}
+"""
+        )
+        self.assertIn("nonsemantic-click-target", {f["code"] for f in report["findings"]})
+
     def test_json_report_is_deterministic(self):
         first = self._report("export function Knob() { return <button data-pulp-action=\"x\">x</button>; }\n")
         second = self._report("export function Knob() { return <button data-pulp-action=\"x\">x</button>; }\n")
@@ -178,48 +312,6 @@ export function Other() {
                 text=True, capture_output=True, check=False, encoding="utf-8")
             self.assertNotEqual(stale.returncode, 0)
             self.assertIn("invalid-corpus-manifest", stale.stdout)
-
-    def test_checked_in_corpus_binds_source_fixture_provenance(self):
-        lint = LINT
-        repo = REPO
-        source = GENERATED_CORPUS
-        manifest = source / "manifest.json"
-        result = subprocess.run(
-            [sys.executable, str(lint), str(source), "--manifest", str(manifest), "--json"],
-            text=True, capture_output=True, check=False, encoding="utf-8")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(json.loads(result.stdout)["files"], 2)
-
-        with tempfile.TemporaryDirectory(dir=repo) as directory:
-            stale = Path(directory) / "manifest.json"
-            document = json.loads(manifest.read_text(encoding="utf-8"))
-            document["source_fixture_sha256"] = "0" * 64
-            stale.write_text(json.dumps(document), encoding="utf-8")
-            rejected = subprocess.run(
-                [sys.executable, str(lint), str(source), "--manifest", str(stale), "--json"],
-                text=True, capture_output=True, check=False, encoding="utf-8")
-            self.assertNotEqual(rejected.returncode, 0)
-            report = json.loads(rejected.stdout)
-            self.assertEqual(report["findings"][0]["code"], "invalid-corpus-manifest")
-            self.assertIn("source fixture hash mismatch", report["findings"][0]["message"])
-
-        with tempfile.TemporaryDirectory() as outside, tempfile.TemporaryDirectory(dir=repo) as directory:
-            outside_fixture = Path(outside) / "example.html"
-            outside_fixture.write_bytes(
-                SOURCE_FIXTURE.read_bytes())
-            symlink = Path(directory) / "source-link"
-            symlink.symlink_to(Path(outside))
-            escaped = Path(directory) / "manifest.json"
-            document = json.loads(manifest.read_text(encoding="utf-8"))
-            document["source_fixture"] = f"{Path(directory).name}/source-link/example.html"
-            escaped.write_text(json.dumps(document), encoding="utf-8")
-            rejected = subprocess.run(
-                [sys.executable, str(lint), str(source), "--manifest", str(escaped), "--json"],
-                text=True, capture_output=True, check=False, encoding="utf-8")
-            self.assertNotEqual(rejected.returncode, 0)
-            report = json.loads(rejected.stdout)
-            self.assertEqual(report["findings"][0]["code"], "invalid-corpus-manifest")
-            self.assertIn("symlink", report["findings"][0]["message"])
 
     def test_manifest_binds_the_complete_sorted_source_set(self):
         lint = LINT

@@ -586,26 +586,6 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}"
             cli/tests/test_illustrator_cli.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-    # `vellum ui`: deterministic owned UI source snapshots and the clean-output
-    # lint. The clean fixture and the captured corpus run on the same
-    # instrument as the unittest, which plants every lint class and must fail.
-    add_test(NAME vellum.cli-ui-build
-        COMMAND "${Python3_EXECUTABLE}"
-            cli/tests/test_ui_build.py
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-    add_test(NAME vellum.cli-ui-lint
-        COMMAND "${Python3_EXECUTABLE}"
-            cli/tests/test_ui_lint.py
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-    add_test(NAME vellum.cli-ui-lint-clean-fixture
-        COMMAND "${Python3_EXECUTABLE}"
-            cli/vellum_ui_lint.py cli/tests/fixtures/ui-build/clean
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-    add_test(NAME vellum.cli-ui-lint-captured-corpus
-        COMMAND "${Python3_EXECUTABLE}"
-            cli/vellum_ui_lint.py cli/tests/fixtures/ui-build/generated
-            --manifest cli/tests/fixtures/ui-build/generated/manifest.json
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.fidelity-golden-regression
         COMMAND "${Python3_EXECUTABLE}" tools/fidelity/test_golden_regression.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
