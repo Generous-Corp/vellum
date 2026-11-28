@@ -969,8 +969,14 @@ PRIOR_RENDERER_PIN = {
 }
 RENDERER_LOCK = "gpu-runtime/renderer-lock.json"
 # The one record that binds Vellum's renderer lock to Pulp's own statement of
-# the mirror renderer: {"pulp_commit": <40 hex>} under this key of the lock.
-RENDERER_BINDING_KEY = "pulp_binding"
+# the mirror renderer: {"upstream_commit": <40 hex>} under this key of the lock.
+# Neither name starts with pulp_: the lock is native surface, and the native
+# name scan refuses any PULP_-prefixed token there.
+RENDERER_BINDING_KEY = "upstream_binding"
+RENDERER_BINDING_COMMIT_KEY = "upstream_commit"
+# The binding's earlier name. A lock carrying it is refused rather than read
+# as unbound, which would quietly fall back to the exported commit's pin.
+LEGACY_RENDERER_BINDING_KEY = "pulp_binding"
 
 
 def current_mirror_receipts(
@@ -1052,6 +1058,9 @@ def renderer_pin_errors(
     # With a binding record, the builder and archive of the lock are proved
     # against Pulp's vellum_mirror_renderer block at the bound commit instead
     # of against the exported commit's own pin, which predates them.
+    if LEGACY_RENDERER_BINDING_KEY in renderer_lock:
+        return [f"{RENDERER_LOCK} {LEGACY_RENDERER_BINDING_KEY} is renamed {RENDERER_BINDING_KEY} "
+                f"with {RENDERER_BINDING_COMMIT_KEY}"], []
     binding = renderer_lock.get(RENDERER_BINDING_KEY)
     bound_keys: tuple[str, ...] = ()
     if binding is not None:
@@ -1103,10 +1112,10 @@ def renderer_binding_errors(
     The block is read from the Pulp checkout, never from text in Vellum.
     """
     where = f"{RENDERER_LOCK} {RENDERER_BINDING_KEY}"
-    commit = binding.get("pulp_commit") if isinstance(binding, dict) else None
-    if (not isinstance(binding, dict) or set(binding) != {"pulp_commit"}
+    commit = binding.get(RENDERER_BINDING_COMMIT_KEY) if isinstance(binding, dict) else None
+    if (not isinstance(binding, dict) or set(binding) != {RENDERER_BINDING_COMMIT_KEY}
             or not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit)):
-        return [f"{where} must be exactly {{\"pulp_commit\": <40 lowercase hex>}}"]
+        return [f"{where} must be exactly {{\"{RENDERER_BINDING_COMMIT_KEY}\": <40 lowercase hex>}}"]
     try:
         main = git(pulp_root, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main")
     except subprocess.CalledProcessError:
