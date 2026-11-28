@@ -1441,8 +1441,8 @@ def validate_baked_emit(args: argparse.Namespace) -> None:
     if args.source == "illustrator" or args.source_type not in BAKED_EMIT_SOURCES:
         hint = ""
         if args.source_type == "jsx":
-            hint = (" Import it with --mode baked --emit ir-json first, then emit that"
-                    " file with --source-type design-ir.")
+            hint = (" A JSX source is not lowered by the baked emitter: its --emit ir-json"
+                    " output is a source wrapper, not a DesignIR document.")
         raise CliFailure(
             f"--emit {args.emit} supports --source-type {', '.join(BAKED_EMIT_SOURCES)}.{hint}",
             status="invalid_arguments", exit_code=EXIT_USAGE,
@@ -1473,6 +1473,24 @@ def validate_baked_emit(args: argparse.Namespace) -> None:
         )
 
 
+def require_design_ir_document(source: Path) -> None:
+    """Refuse a JSON file that is not a DesignIR, which would bake an empty view."""
+    try:
+        document = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise CliFailure(
+            f"{source} is not a DesignIR document: {error}",
+            status="invalid_design_ir", exit_code=EXIT_USAGE,
+        ) from error
+    if not isinstance(document, dict) or not isinstance(document.get("root"), dict):
+        wrapper = document.get("schema") if isinstance(document, dict) else None
+        detail = f" (it is a {wrapper} document)" if isinstance(wrapper, str) else ""
+        raise CliFailure(
+            f"{source} is not a DesignIR document: it has no root node{detail}.",
+            status="invalid_design_ir", exit_code=EXIT_USAGE,
+        )
+
+
 def baked_emit_import(args: argparse.Namespace) -> dict[str, Any]:
     """Lower a design to a baked C++ or SwiftUI view without a project."""
     tool = design_emit_path()
@@ -1487,6 +1505,8 @@ def baked_emit_import(args: argparse.Namespace) -> dict[str, Any]:
             f"Import source does not exist: {source}",
             status="source_not_found", exit_code=EXIT_PROJECT,
         )
+    if args.source_type == "design-ir":
+        require_design_ir_document(source)
     command = [str(tool), "--source-type", args.source_type, "--input", str(source),
                "--emit", args.emit, "--json"]
     if args.output:
