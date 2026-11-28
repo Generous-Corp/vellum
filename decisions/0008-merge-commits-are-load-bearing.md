@@ -116,6 +116,36 @@ Reuse adds no trust beyond today's: a queue run already executes the pull
 request's own workflow definition, so the reviewed exact head is what decides
 both runs.
 
+### Proposed amendment: an earlier queue group's proof of the same tree
+
+Status: proposed; needs owner approval before it lands.
+
+When the queue rebuilds a group, after an entry leaves or the order changes,
+a later entry can carry exactly the combined tree an earlier group already
+proved. On 2026-11-28 the group for PR 825 (run 46122127881) rebuilt for 46
+minutes the tree that PR 769's group had proved four hours earlier
+(46104477453). A pull-request receipt can match only the first entry of a
+group, so batching makes this the more common case.
+
+A built proof in a `merge_group` run now writes the same tree receipt, and
+when no pull-request proof qualifies `scripts/select_reusable_gpu_proof.py`
+may name a `merge_group` run that:
+
+- is a run of `gpu-macos.yml`, from this repository, on a
+  `gh-readonly-queue/main/` ref;
+- succeeded, with both proof jobs `success` (not `skipped`) in its latest
+  attempt, on that run's commit;
+- uploaded, from that attempt, a receipt naming that run, attempt and commit
+  and exactly this tree;
+- started no more than six hours before.
+
+Only a run that built the proof writes the receipt; a reused, classifier-skipped
+or cheap run never does, so a reused result is never reused again, and the age
+bound is measured from the build. The same tree carries the same workflow,
+scripts and tests, so this adds no trust beyond the pull-request reuse above.
+The reused run re-checks external state exactly as above, and release tags,
+dry-run tags and dispatches still always run the full proof.
+
 ## Reusing the queue's proof on the push to main
 
 The merge queue fast-forwards `main` to the commit its `merge_group` run

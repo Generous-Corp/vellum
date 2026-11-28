@@ -291,7 +291,10 @@ jobs:
       # already covered would rebuild identical inputs. Report that proof
       # instead: the selector names it only when the earlier run is this
       # workflow, on this head, from this repository, succeeded in both proof
-      # jobs, and recorded exactly this tree. Any doubt runs the full proof.
+      # jobs, and recorded exactly this tree. Failing that, it names a
+      # successful merge-queue run of this workflow, from this repository,
+      # that built a proof of exactly this tree (a rebuilt group can repeat an
+      # earlier group's tree). Any doubt runs the full proof.
       #
       # A push to main lands the very commit its merge-queue run just proved
       # (the queue fast-forwards main to it), so the push reports that run in
@@ -1081,9 +1084,12 @@ jobs:
           PY
 
       # The receipt a later merge-queue run compares its own tree against.
-      # Written only after every proof step above has passed.
-      - name: Record the tree this pull-request proof covered
-        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == '' && github.event_name == 'pull_request'
+      # Written only after every proof step above has passed, and only by a
+      # run that built the proof (never a reused, skipped or cheap one), in a
+      # pull request or a merge-queue entry. A queue entry rebuilt with a tree
+      # an earlier group already proved reports that group's run.
+      - name: Record the tree this proof covered
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == '' && contains(fromJSON('["pull_request","merge_group"]'), github.event_name)
         shell: bash
         run: |
           set -euo pipefail
@@ -1112,7 +1118,7 @@ jobs:
           PY
 
       - name: Upload the proven-tree receipt
-        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == '' && github.event_name == 'pull_request'
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == '' && contains(fromJSON('["pull_request","merge_group"]'), github.event_name)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: vellum-gpu-proof-tree
