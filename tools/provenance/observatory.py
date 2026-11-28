@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timedelta, timezone
+from functools import cache
 import json
 from pathlib import Path
 import re
 import subprocess
 import sys
 import tempfile
+from typing import Callable, Iterable
 
 if __package__ in {None, ""}:
     sys.path.append(str(Path(__file__).resolve().parent))
@@ -59,9 +61,12 @@ if __package__:
     )
     from .observatory_git import (
         classify_paths,
+        commit_parents,
         commits_between,
         delta_paths,
+        existing_objects,
         is_ancestor,
+        load_range_diffs,
         mapped_change,
         observation_for_commit,
         parse_diff_entries,
@@ -69,6 +74,7 @@ if __package__:
         path_matches,
         require_ancestor,
         require_commit,
+        require_commits,
         transitive_match,
         tree_identical_scanned_parent,
         integration_merge_covered,
@@ -124,9 +130,12 @@ else:
     )
     from observatory_git import (
         classify_paths,
+        commit_parents,
         commits_between,
         delta_paths,
+        existing_objects,
         is_ancestor,
+        load_range_diffs,
         mapped_change,
         observation_for_commit,
         parse_diff_entries,
@@ -134,6 +143,7 @@ else:
         path_matches,
         require_ancestor,
         require_commit,
+        require_commits,
         transitive_match,
         tree_identical_scanned_parent,
         integration_merge_covered,
@@ -281,7 +291,9 @@ def expected_observations(
     discovered_at: str, mappings: list[dict[str, object]], transitive_rules: list[str]
 ) -> list[dict[str, object]]:
     result = []
-    for commit in commits_between(repo, start, target):
+    commits = commits_between(repo, start, target)
+    load_range_diffs(repo, commits)
+    for commit in commits:
         event = observation_for_commit(
             source=source, repository=repository, repo=repo, commit=commit,
             cursor_from=start, cursor_to=target, discovered_at=discovered_at,
@@ -355,6 +367,7 @@ def coverage_gaps(
     incremental_from: dict[str, str] | None = None,
     vellum_tail_policy: str = "reconciled",
     vellum_pr_main: str | None = None,
+    merge_covered: Callable[[Path, str], bool] | None = None,
 ) -> list[dict[str, str]]:
     if vellum_tail_policy not in VELLUM_TAIL_POLICIES:
         raise ObservatoryError(
@@ -368,6 +381,12 @@ def coverage_gaps(
     mappings = mapping["mappings"]
     rules = mapping.get("transitive_path_rules", [])
     assert isinstance(mappings, list) and isinstance(rules, list)
+
+    def covered(repo: Path, commit: str) -> bool:
+        if merge_covered is not None:
+            return merge_covered(repo, commit)
+        return integration_merge_covered(repo, commit, mappings, rules)
+
     for source, repo, requested_target in (
         ("pulp", pulp_repo, pulp_target), ("vellum", vellum_repo, vellum_target)
     ):
@@ -387,10 +406,13 @@ def coverage_gaps(
             else source_cursor["scan_base_commit"]
         )
         target = str(source_cursor["last_scanned_commit"])
-        require_commit(repo, start, f"cursor.{source}.scan_base_commit")
-        require_commit(repo, target, f"cursor.{source}.last_scanned_commit")
+        require_commits(
+            repo, (start, f"cursor.{source}.scan_base_commit"),
+            (target, f"cursor.{source}.last_scanned_commit"),
+        )
         require_ancestor(repo, start, target, f"cursor.{source}")
         scanned_commit_list = commits_between(repo, start, target)
+        load_range_diffs(repo, scanned_commit_list)
         scanned_commits = set(scanned_commit_list)
         for commit in scanned_commit_list:
             probe = observation_for_commit(
@@ -402,7 +424,7 @@ def coverage_gaps(
                 continue
             event = observations.get((repository, commit))
             if event is None:
-                if source == "vellum" and integration_merge_covered(repo, commit, mappings, rules):
+                if source == "vellum" and covered(repo, commit):
                     # An integration merge that adds nothing beyond its two
                     # sides is covered by their own events; reconcile records
                     # none for it (see reconcile).
@@ -474,12 +496,15 @@ def coverage_gaps(
                 imported_mirror_history(repo, tail_start, requested_target, pulp_repo)
                 if source == "vellum" else set()
             )
-            for commit in commits_between(repo, tail_start, requested_target):
-                if commit in imported:
-                    # Imported Pulp mirror history is not Vellum-authored; its
-                    # content reaches the mainline only through the join below.
-                    continue
-                parents = git(repo, "rev-list", "--parents", "-n", "1", commit).split()[1:]
+            # Imported Pulp mirror history reaches the mainline only through
+            # the join. Read first-parent diffs for the Vellum commits.
+            commits = [
+                commit for commit in commits_between(repo, tail_start, requested_target)
+                if commit not in imported
+            ]
+            load_range_diffs(repo, commits)
+            for commit in commits:
+                parents = commit_parents(repo, commit)
                 imported_parents = [parent for parent in parents if parent in imported]
                 if imported_parents:
                     # The join of an imported history has no merge base with
@@ -487,9 +512,7 @@ def coverage_gaps(
                     # and its first-parent diff, observed below, carries every
                     # path the import adds.
                     verify_mirror_join(repo, commit, parents, imported_parents)
-                elif require_event_coverage and integration_merge_covered(
-                    repo, commit, mappings, rules
-                ):
+                elif require_event_coverage and covered(repo, commit):
                     continue
                 probe = observation_for_commit(
                     source=source, repository=repository, repo=repo, commit=commit,
@@ -633,25 +656,23 @@ def is_event_file(path: str) -> bool:
 
 def verify_vellum_observatory_tail(repo: Path, cursor: str, target: str) -> None:
     """Prove that commits after the reconciled source cursor contain evidence only."""
-    require_commit(repo, cursor, "cursor.vellum.last_scanned_commit")
-    require_commit(repo, target, "requested vellum target")
+    require_commits(repo, (cursor, "cursor.vellum.last_scanned_commit"), (target, "requested vellum target"))
     require_ancestor(repo, cursor, target, "requested vellum target")
     previous = cursor
     for commit in commits_between(repo, cursor, target):
-        parents = git(repo, "rev-list", "--parents", "-n", "1", commit).split()
-        if (
-            len(parents) == 3
-            and previous in parents[1:]
-            and git(repo, "rev-parse", f"{commit}^{{tree}}")
-            == git(repo, "rev-parse", f"{previous}^{{tree}}")
-        ):
-            previous = commit
-            continue
-        if len(parents) != 2:
+        parents = commit_parents(repo, commit)
+        if len(parents) == 2 and previous in parents:
+            commit_tree, previous_tree = git(
+                repo, "rev-parse", f"{commit}^{{tree}}", f"{previous}^{{tree}}"
+            ).splitlines()
+            if commit_tree == previous_tree:
+                previous = commit
+                continue
+        if len(parents) != 1:
             raise ObservatoryError(
                 f"Vellum observatory evidence tail must be linear: {commit}"
             )
-        if parents[1] != previous:
+        if parents[0] != previous:
             raise ObservatoryError(
                 f"Vellum observatory evidence tail is discontinuous: {commit}"
             )
@@ -682,8 +703,7 @@ def verify_vellum_observatory_pr_tail(
     repo: Path, cursor: str, main_head: str, target: str
 ) -> None:
     """Check the observed main tail and require the PR target to contain main."""
-    require_commit(repo, main_head, "current main head")
-    require_commit(repo, target, "requested vellum target")
+    require_commits(repo, (main_head, "current main head"), (target, "requested vellum target"))
     require_ancestor(repo, main_head, target, "pull-request target contains current main")
     merge_base = git(repo, "merge-base", main_head, target)
     verify_vellum_observatory_tail(repo, cursor, merge_base)
@@ -779,7 +799,7 @@ def imported_mirror_commits(
                     f"imported mirror history commit {commit} holds paths other than "
                     f"mirror/: {'; '.join(entries) or '(empty tree)'}"
                 )
-            parents = git(root, "rev-list", "--parents", "-n", "1", commit).split()[1:]
+            parents = commit_parents(root, commit)
             outside = [
                 parent for parent in parents
                 if parent not in side_set and not in_landed_import(parent)
@@ -808,7 +828,8 @@ def imported_mirror_history(
         # no root of its own. Its commits carry no observatory cursor; only
         # then is the receipt verification worth running.
         commits = git(root, "rev-list", f"{start}..{target}").split()
-        cursorless = [commit for commit in commits if not has_cursor(root, commit)]
+        with_cursor = commits_with_cursor(root, commits)
+        cursorless = [commit for commit in commits if commit not in with_cursor]
         if not cursorless:
             return set()
         imported, errors = imported_mirror_commits(root, start, target, pulp_repo)
@@ -847,31 +868,31 @@ def lands_mirror_receipts(root: Path, commit: str) -> bool:
     return isinstance(index, dict) and bool(index.get("receipts"))
 
 
-def has_cursor(root: Path, commit: str) -> bool:
-    try:
-        git(root, "cat-file", "-e", f"{commit}:{CURSOR_PATH.as_posix()}")
-    except ObservatoryError:
-        return False
-    return True
+def commits_with_cursor(root: Path, commits: Iterable[str]) -> set[str]:
+    objects = existing_objects(root, (f"{commit}:{CURSOR_PATH.as_posix()}" for commit in commits))
+    return {obj.split(":", 1)[0] for obj in objects}
 
 
 def verify_mirror_join(
-    root: Path, commit: str, parents: list[str], imported_parents: list[str]
+    root: Path, commit: str, parents: tuple[str, ...], imported_parents: list[str]
 ) -> None:
     """A merge joining an imported mirror history must not touch the observatory."""
     mainline = [parent for parent in parents if parent not in imported_parents]
-    if len(parents) != 2 or mainline != parents[:1]:
+    if len(parents) != 2 or mainline != [parents[0]]:
         raise ObservatoryError(
             f"commit {commit} joins an imported mirror history but is not a "
             "two-parent merge whose first parent is the mainline"
         )
     observatory = OBSERVATORY.as_posix()
-    if not has_cursor(root, commit) or git(
-        root, "rev-parse", f"{mainline[0]}:{observatory}"
-    ) != git(root, "rev-parse", f"{commit}:{observatory}"):
-        raise ObservatoryError(
-            f"merge {commit} joining an imported mirror history changed {observatory}/"
-        )
+    if commits_with_cursor(root, (commit,)):
+        before, after = git(
+            root, "rev-parse", f"{mainline[0]}:{observatory}", f"{commit}:{observatory}"
+        ).splitlines()
+        if before == after:
+            return
+    raise ObservatoryError(
+        f"merge {commit} joining an imported mirror history changed {observatory}/"
+    )
 
 
 def verify_append_only(
@@ -899,20 +920,27 @@ def verify_append_only(
     imported_cache: list[set[str]] = []
     verification_errors: list[str] = []
 
-    def imported_for(commit: str, parents: list[str]) -> set[str]:
+    parents_by_commit = {commit: commit_parents(root, commit) for commit in commits}
+    with_cursor = (
+        commits_with_cursor(root, (
+            sha for commit, parents in parents_by_commit.items() for sha in (commit, *parents)
+        ))
+        if base_has_cursor else set()
+    )
+
+    def imported_for(commit: str, parents: tuple[str, ...]) -> set[str]:
         if not base_has_cursor:
             return set()
         if imported_cache:
             return imported_cache[0]
-        if all(has_cursor(root, sha) for sha in (commit, *parents)):
+        if all(sha in with_cursor for sha in (commit, *parents)):
             return set()
         imported, errors = imported_mirror_commits(root, git_base, head, pulp_repo)
         imported_cache.append(imported)
         verification_errors.extend(errors)
         return imported
 
-    for commit in commits:
-        parents = git(root, "rev-list", "--parents", "-n", "1", commit).split()[1:]
+    for commit, parents in parents_by_commit.items():
         imported = imported_for(commit, parents)
         if commit in imported:
             continue
@@ -1679,6 +1707,11 @@ def reconcile(
     }
     new_events: list[dict[str, object]] = []
     native = load_native_paths(root)
+
+    @cache
+    def merge_covered(repo: Path, commit: str) -> bool:
+        return integration_merge_covered(repo, commit, mappings, rules)
+
     for source, repo, target in (("pulp", pulp_repo, pulp_target), ("vellum", vellum_repo, vellum_target)):
         source_cursor = cursor[source]
         start = str(
@@ -1700,7 +1733,7 @@ def reconcile(
             key = (repository, str(event["source_commit"]))
             if (
                 source == "vellum" and key not in observations
-                and integration_merge_covered(repo, str(event["source_commit"]), mappings, rules)
+                and merge_covered(repo, str(event["source_commit"]))
             ):
                 # A Vellum integration merge that adds nothing beyond its two
                 # sides needs no event of its own: coverage_gaps accepts it on
@@ -1739,6 +1772,7 @@ def reconcile(
             vellum_repo=vellum_repo,
             pulp_target=pulp_target,
             vellum_target=vellum_target,
+            merge_covered=merge_covered,
             vellum_tail_policy="coverage",
         )
     else:

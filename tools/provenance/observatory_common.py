@@ -189,6 +189,10 @@ def load_budgets(path: Path) -> dict[str, int]:
 
 
 def git(repo: Path, *args: str, input_bytes: bytes | None = None) -> str:
+    return git_bytes(repo, *args, input_bytes=input_bytes).decode("utf-8", errors="strict").strip()
+
+
+def git_bytes(repo: Path, *args: str, input_bytes: bytes | None = None) -> bytes:
     try:
         completed = subprocess.run(
             ["git", *args], cwd=repo, input=input_bytes, capture_output=True, check=True
@@ -196,4 +200,4 @@ def git(repo: Path, *args: str, input_bytes: bytes | None = None) -> str:
     except subprocess.CalledProcessError as error:
         detail = error.stderr.decode("utf-8", errors="replace").strip()
         raise ObservatoryError(f"git {' '.join(args)} failed in {repo}: {detail}") from error
-    return completed.stdout.decode("utf-8", errors="strict").strip()
+    return completed.stdout

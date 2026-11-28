@@ -853,6 +853,113 @@ class ObservatoryTests(unittest.TestCase):
         evil = commit_all(vellum, "merge second with a change of its own")
         return pulp, vellum, root, pulp_head, feature, covered, second, evil
 
+    def test_events_only_batch_matches_per_path_tree_lookups(self) -> None:
+        def legacy_tree_entry(repo: Path, commit: str, path: str) -> tuple[str, str] | None:
+            line = run(repo, "git", "ls-tree", commit, "--", path)
+            if not line:
+                return None
+            mode, _kind, rest = line.split(None, 2)
+            return mode, rest.split("\t", 1)[0]
+
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, feature, covered, second, evil = self._main_with_merges(Path(temporary))
+            fixed_files = {
+                name: (root / name).read_bytes()
+                for name in (observatory.CURSOR_PATH, observatory.REPORT_JSON_PATH, observatory.REPORT_MD_PATH)
+            }
+            reconcile_args = dict(
+                root=root, pulp_repo=pulp, vellum_repo=vellum, pulp_target=pulp_head,
+                vellum_target=evil, now_text="2026-10-11T00:05:00Z", write=True, events_only=True,
+            )
+            verify_args = dict(
+                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                allow_no_git_base=True, pulp_target=pulp_head, vellum_target=evil,
+                vellum_tail_policy="coverage",
+            )
+            events = root / observatory.EVENTS_PATH
+            existing_names = {path.name for path in events.glob("*.yaml")}
+            git_module = sys.modules[observatory.integration_merge_covered.__module__]
+            with mock.patch.object(git_module, "tree_entry_at", legacy_tree_entry), mock.patch.object(
+                observatory, "load_range_diffs"
+            ):
+                legacy = observatory.reconcile(**reconcile_args)
+                legacy_bytes = {path.name: path.read_bytes() for path in events.glob("*.yaml")}
+                legacy_report = observatory.verify(**verify_args)
+            for name in legacy_bytes.keys() - existing_names:
+                (events / name).unlink()
+
+            git_module._diffs_by_commit.cache_clear()
+            batched = observatory.reconcile(**reconcile_args)
+            self.assertEqual(batched, legacy)
+            self.assertEqual({path.name: path.read_bytes() for path in events.glob("*.yaml")}, legacy_bytes)
+            self.assertEqual(observatory.verify(**verify_args), legacy_report)
+            self.assertEqual(legacy_report["coverage_gaps"], [])
+            self.assertIn(f"vellum-{feature}", batched["new_events"])
+            self.assertIn(f"vellum-{second}", batched["new_events"])
+            self.assertIn(f"vellum-{evil}", batched["new_events"])
+            self.assertNotIn(f"vellum-{covered}", batched["new_events"])
+            for name, before in fixed_files.items():
+                self.assertEqual((root / name).read_bytes(), before)
+
+    def test_batched_first_parent_diffs_match_individual_diffs(self) -> None:
+        git_module = sys.modules[observatory.integration_merge_covered.__module__]
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary) / "repo"
+            base, second = init_repo(repo, "graphics/render.cpp")
+            run(repo, "git", "mv", "graphics/render.cpp", "graphics/rename.cpp")
+            renamed = commit_all(repo, "rename a mapped path")
+            write(repo / "graphics/z trailing space ", "int value = 3;\n")
+            added = commit_all(repo, "add a path with a trailing space")
+            run(repo, "git", "commit", "--allow-empty", "-m", "empty")
+            empty = run(repo, "git", "rev-parse", "HEAD")
+            commits = [base, second, renamed, added, empty]
+            expected = [git_module.parse_diff_entries(repo, commit) for commit in commits]
+            git_module._diffs_by_commit.cache_clear()
+            git_module.load_range_diffs(repo, commits)
+            self.assertEqual([git_module.parse_diff_entries(repo, commit) for commit in commits], expected)
+            self.assertEqual(expected[2][0]["old_path"], "graphics/render.cpp")
+            self.assertEqual(expected[-1], [])
+
+    def test_events_only_batches_tree_ref_and_cursor_lookups(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, main, _ = self._coverage_state(Path(temporary))
+            run(vellum, "git", "checkout", "-q", "feature")
+            for index in range(32):
+                write(vellum / f"graphics/feature-{index}.cpp", f"int value = {index};\n")
+            feature = commit_all(vellum, "add many mapped paths")
+            run(vellum, "git", "checkout", "-q", "main")
+            for index in range(32):
+                write(vellum / f"graphics/main-{index}.cpp", f"int value = {index};\n")
+            main_later = commit_all(vellum, "add different mapped paths")
+            run(vellum, "git", "checkout", "-q", "feature")
+            run(vellum, "git", "merge", "--no-edit", "main")
+            head = run(vellum, "git", "rev-parse", "HEAD")
+
+            with mock.patch.object(subprocess, "run", wraps=subprocess.run) as git_run:
+                result = observatory.reconcile(
+                    root=root, pulp_repo=pulp, vellum_repo=vellum, pulp_target=pulp_head,
+                    vellum_target=head, vellum_main=main, now_text="2026-10-11T00:05:00Z",
+                    write=True, events_only=True,
+                )
+            commands = [call.args[0] for call in git_run.call_args_list if call.args[0][0] == "git"]
+            tree_calls = [cmd for cmd in commands if cmd[1] == "ls-tree" and "--" in cmd]
+            self.assertEqual(tree_calls, [])
+            self.assertFalse(any(cmd[1:5] == ["rev-list", "--parents", "-n", "1"] for cmd in commands))
+            self.assertEqual(sum(cmd[1:3] == ["diff-tree", "--stdin"] for cmd in commands), 1)
+            self.assertFalse(any(cmd[1:3] == ["diff-tree", "--no-commit-id"] for cmd in commands))
+            trees = [cmd[-1] for cmd in commands if cmd[1] == "ls-tree" and "-z" in cmd]
+            self.assertCountEqual(trees, [feature, main_later, head])
+            self.assertFalse(any(cmd[1:3] == ["cat-file", "-e"] for cmd in commands))
+            batches = [
+                call.kwargs["input"] for call in git_run.call_args_list
+                if call.args[0][0:2] == ["git", "cat-file"] and call.args[0][2].startswith("--batch-check")
+            ]
+            self.assertEqual(len(batches), 1)
+            self.assertGreater(len(batches[0].splitlines()), 2)
+            self.assertIn(["git", "rev-parse", f"{head}^{{tree}}", f"{feature}^{{tree}}", f"{main_later}^{{tree}}"],
+                          commands)
+            self.assertNotIn(f"vellum-{head}", result["new_events"])
+
     def test_the_receiver_records_no_event_for_a_covered_integration_merge(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             pulp, vellum, root, pulp_head, feature, covered, second, evil = self._main_with_merges(Path(temporary))

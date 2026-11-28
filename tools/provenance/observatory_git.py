@@ -10,17 +10,51 @@ import tempfile
 from typing import Iterable
 
 if __package__:
-    from .observatory_common import ObservatoryError, SHA_RE, git
+    from .observatory_common import ObservatoryError, SHA_RE, git, git_bytes
 else:
-    from observatory_common import ObservatoryError, SHA_RE, git
+    from observatory_common import ObservatoryError, SHA_RE, git, git_bytes
 
 
 def require_commit(repo: Path, commit: str, field: str) -> None:
-    if not isinstance(commit, str) or not SHA_RE.fullmatch(commit):
-        raise ObservatoryError(f"{field} must be an exact 40-character commit SHA")
-    resolved = git(repo, "rev-parse", f"{commit}^{{commit}}")
-    if resolved != commit:
-        raise ObservatoryError(f"{field} did not resolve exactly: {commit}")
+    require_commits(repo, (commit, field))
+
+
+def require_commits(repo: Path, *commits: tuple[str, str]) -> None:
+    for commit, field in commits:
+        if not isinstance(commit, str) or not SHA_RE.fullmatch(commit):
+            raise ObservatoryError(f"{field} must be an exact 40-character commit SHA")
+    resolved = git(repo, "rev-parse", *(f"{commit}^{{commit}}" for commit, _ in commits)).splitlines()
+    if len(resolved) != len(commits):
+        raise ObservatoryError(f"git rev-parse returned an incomplete commit batch in {repo}")
+    for (commit, field), oid in zip(commits, resolved):
+        if oid != commit:
+            raise ObservatoryError(f"{field} did not resolve exactly: {commit}")
+
+
+def existing_objects(repo: Path, expressions: Iterable[str]) -> set[str]:
+    """Return the object expressions Git can resolve and read."""
+    queries = list(dict.fromkeys(expressions))
+    if not queries:
+        return set()
+    answers = git(
+        repo, "cat-file", "--batch-check=%(objectname)",
+        input_bytes=("".join(f"{query}\n" for query in queries)).encode("utf-8"),
+    ).splitlines()
+    if len(answers) != len(queries):
+        raise ObservatoryError(f"git cat-file returned an incomplete object batch in {repo}")
+    return {query for query, answer in zip(queries, answers) if SHA_RE.fullmatch(answer)}
+
+
+@lru_cache(maxsize=4)
+def _parents_by_commit(repo: Path) -> dict[str, tuple[str, ...]]:
+    return {}
+
+
+def commit_parents(repo: Path, commit: str) -> tuple[str, ...]:
+    parents = _parents_by_commit(repo)
+    if commit not in parents:
+        parents[commit] = tuple(git(repo, "rev-list", "--parents", "-n", "1", commit).split()[1:])
+    return parents[commit]
 
 
 def require_ancestor(repo: Path, ancestor: str, descendant: str, field: str) -> None:
@@ -50,44 +84,35 @@ def tree_identical_scanned_parent(
     repo: Path, commit: str, cursor_from: str
 ) -> str | None:
     """Return a scanned parent when a merge adds no tree beyond that parent."""
-    row = git(repo, "rev-list", "--parents", "-n", "1", commit).split()
-    if len(row) < 3:
+    parents = commit_parents(repo, commit)
+    if len(parents) < 2:
         return None
-    commit_tree = git(repo, "rev-parse", f"{commit}^{{tree}}")
-    for parent in row[1:]:
-        if (
-            is_ancestor(repo, cursor_from, parent)
-            and git(repo, "rev-parse", f"{parent}^{{tree}}") == commit_tree
-        ):
+    commit_tree, *parent_trees = git(
+        repo, "rev-parse", *(f"{rev}^{{tree}}" for rev in (commit, *parents))
+    ).splitlines()
+    if len(parent_trees) != len(parents):
+        raise ObservatoryError(f"git rev-parse returned an incomplete tree batch in {repo}")
+    for parent, tree in zip(parents, parent_trees):
+        if is_ancestor(repo, cursor_from, parent) and tree == commit_tree:
             return parent
     return None
 
 
-def blob_at(repo: Path, commit: str, path: str) -> str | None:
-    """The blob id of `path` at `commit`, or None when the path is absent."""
-    completed = subprocess.run(
-        ["git", "rev-parse", "--verify", "--quiet", f"{commit}:{path}"],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-    )
-    if completed.returncode != 0:
-        return None
-    return completed.stdout.strip() or None
+@lru_cache(maxsize=16)
+def tree_entries(repo: Path, commit: str) -> dict[str, tuple[str, str]]:
+    """Read modes and object IDs without opening blobs in a partial clone."""
+    entries = {}
+    output = git_bytes(repo, "ls-tree", "-r", "-t", "-z", commit)
+    for row in output.split(b"\0")[:-1]:
+        metadata, path = row.split(b"\t", 1)
+        mode, _kind, oid = metadata.decode("ascii").split()
+        entries[path.decode("utf-8", errors="surrogateescape")] = (mode, oid)
+    return entries
 
 
 def tree_entry_at(repo: Path, commit: str, path: str) -> tuple[str, str] | None:
-    """The (mode, object id) of `path` at `commit`, or None when absent.
-
-    The mode is part of the entry on purpose: a merge that keeps a file's
-    content but drops its executable bit changes what lands on main just as a
-    content edit does, and a blob-only comparison cannot see it.
-    """
-    line = git(repo, "ls-tree", commit, "--", path)
-    if not line:
-        return None
-    mode, _kind, rest = line.split(None, 2)
-    return mode, rest.split("\t", 1)[0]
+    """The (mode, object id) of a path, including mode-only changes."""
+    return tree_entries(repo, commit).get(path)
 
 
 def integration_merge_covered(
@@ -234,10 +259,10 @@ def _merge_sides(
     mappings: list[dict[str, object]] | None,
     transitive_rules: list[str] | None,
 ) -> tuple[str | None, str, str, set[str], set[str], set[str]] | None:
-    row = git(repo, "rev-list", "--parents", "-n", "1", commit).split()
-    if len(row) != 3:
+    parents = commit_parents(repo, commit)
+    if len(parents) != 2:
         return None
-    first, second = row[1], row[2]
+    first, second = parents
     bases = git(repo, "merge-base", "--all", first, second).split()
     if not bases:
         return None
@@ -292,18 +317,56 @@ def transitive_match(path: str, rules: Iterable[str]) -> bool:
     )
 
 
-@lru_cache(maxsize=16384)
+@lru_cache(maxsize=4)
+def _diffs_by_commit(repo: Path) -> dict[str, list[dict[str, object]]]:
+    return {}
+
+
+_DIFF_ARGS = ("--name-status", "-r", "-M")
+
+
+def load_range_diffs(repo: Path, commits: list[str]) -> None:
+    """Read first-parent diffs in batches and reuse them across the scan."""
+    cached = _diffs_by_commit(repo)
+    missing = [commit for commit in commits if commit not in cached]
+    for offset in range(0, len(missing), 512):
+        batch = missing[offset:offset + 512]
+        requests = []
+        for commit in batch:
+            parents = commit_parents(repo, commit)
+            requests.append(" ".join((commit, *parents[:1])))
+        output = git(
+            repo, "diff-tree", "--stdin", "--always", "--root", *_DIFF_ARGS,
+            input_bytes=("\n".join(requests) + "\n").encode("ascii"),
+        )
+        rows: dict[str, list[str]] = {}
+        lines: list[str] | None = None
+        for line in output.splitlines():
+            if SHA_RE.fullmatch(line):
+                lines = rows[line] = []
+            elif line:
+                if lines is None:
+                    raise ObservatoryError(f"git diff-tree returned data before its first commit in {repo}")
+                lines.append(line)
+        if list(rows) != batch:
+            raise ObservatoryError(f"git diff-tree returned an incomplete commit batch in {repo}")
+        for commit, changes in rows.items():
+            cached[commit] = _parse_diff_entries(commit, "\n".join(changes).strip().splitlines())
+
+
 def parse_diff_entries(repo: Path, commit: str) -> list[dict[str, object]]:
-    parents = git(repo, "rev-list", "--parents", "-n", "1", commit).split()
-    arguments = ["diff-tree", "--no-commit-id", "--name-status", "-r", "-M"]
-    if len(parents) == 1:
-        arguments.append("--root")
-        arguments.append(commit)
-    else:
-        arguments.extend([parents[1], commit])
-    output = git(repo, *arguments)
+    cached = _diffs_by_commit(repo)
+    if commit not in cached:
+        parents = commit_parents(repo, commit)
+        revisions = (parents[0], commit) if parents else ("--root", commit)
+        output = git(repo, "diff-tree", "--no-commit-id", *_DIFF_ARGS, *revisions)
+        cached[commit] = _parse_diff_entries(commit, output.splitlines())
+    return cached[commit]
+
+
+def _parse_diff_entries(commit: str, lines: Iterable[str]) -> list[dict[str, object]]:
     entries: list[dict[str, object]] = []
-    for line in output.splitlines():
+    for line in lines:
         pieces = line.split("\t")
         status = pieces[0]
         if status.startswith(("R", "C")):
@@ -488,11 +551,16 @@ def delta_paths(paths: list[str]) -> tuple[list[str], list[str]]:
 
 
 def commits_between(repo: Path, start: str, target: str) -> list[str]:
-    require_commit(repo, start, "scan start")
-    require_commit(repo, target, "scan target")
+    require_commits(repo, (start, "scan start"), (target, "scan target"))
     require_ancestor(repo, start, target, "scan cursor")
-    output = git(repo, "rev-list", "--reverse", "--topo-order", f"{start}..{target}")
-    return output.splitlines() if output else []
+    output = git(repo, "rev-list", "--parents", "--reverse", "--topo-order", f"{start}..{target}")
+    parents_by_commit = _parents_by_commit(repo)
+    commits = []
+    for row in output.splitlines():
+        commit, *parents = row.split()
+        commits.append(commit)
+        parents_by_commit[commit] = tuple(parents)
+    return commits
 
 
 def observation_for_commit(
