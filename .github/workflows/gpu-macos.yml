@@ -789,7 +789,12 @@ jobs:
             ctest --test-dir build-gpu --output-on-failure
           else
             # Each process keeps its own log: both would otherwise write
-            # build-gpu/Testing/Temporary/LastTest.log.
+            # build-gpu/Testing/Temporary/LastTest.log. ctest has no option to
+            # move its other bookkeeping (LastTestsFailed.log, CTestCostData.txt)
+            # out of the shared build tree; nothing in this workflow reads
+            # them, and ctest ignores a cost file it cannot parse, so the
+            # processes can overwrite each other's copies without changing a
+            # result. The trial run checks the logs for ctest errors.
             ctest --test-dir build-gpu -L "$gpu_label" --no-tests=error --output-on-failure \
               --output-log "$RUNNER_TEMP/ctest-gpu.log" > "$RUNNER_TEMP/ctest-gpu.out" 2>&1 &
             gpu_pid=$!
