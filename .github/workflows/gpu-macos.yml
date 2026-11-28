@@ -491,7 +491,11 @@ jobs:
       - name: Verify the exact release source contract
         if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
         run: |
-          python3 -I scripts/run_ci_lane.py --lane release-source
+          # A pull request or merge group skips the entries a required Linux
+          # check (product-quality, provenance-verify) runs on the same event
+          # (`linux_covered` in scripts/ci_lanes.json, proved by
+          # scripts/test_ci_lanes.py). Pushes, tags and dispatches run them all.
+          python3 -I scripts/run_ci_lane.py --lane release-source --event "$GITHUB_EVENT_NAME"
           npm run check --prefix packages/vellum-design-ir
 
       - name: Build the installed TypeScript and JSX Phase 3 fixture
