@@ -901,7 +901,7 @@ jobs:
       # build when they differed, so an intermittent difference in one member
       # (the Skia/Dawn provider dylib) could not be examined afterwards.
       - name: Keep both SDK builds when they differ
-        if: always() && steps.sdk-reproducible.outcome == 'failure'
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == '' && failure() && steps.sdk-reproducible.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: vellum-sdk-reproducibility-mismatch
