@@ -43,6 +43,28 @@ def import_owners(path: Path) -> dict[str, str]:
     return owners
 
 
+def duplicate_got_binds(path: Path) -> list[str]:
+    """Imports bound by more than one GOT slot.
+
+    The linker orders duplicate slots for one import differently from link to
+    link, so an image that has them does not link to the same bytes twice.
+    """
+
+    output = subprocess.run(
+        ["dyld_info", "-fixups", str(path)], check=True, capture_output=True, text=True
+    ).stdout
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) == 5 and fields[1].endswith("got") and fields[3] == "bind":
+            key = f"{fields[1]} {fields[4]}"
+            if key in seen:
+                duplicates.add(key)
+            seen.add(key)
+    return sorted(duplicates)
+
+
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise SystemExit(message)
@@ -75,6 +97,9 @@ def main() -> int:
         if symbol in CORESERVICES_LIBM_REEXPORTS:
             require(owner == "libSystem",
                     f"{provider.name} binds {symbol} to {owner}, not libSystem")
+    duplicates = duplicate_got_binds(provider)
+    require(not duplicates,
+            f"{provider.name} binds one import from several GOT slots: " + ", ".join(duplicates))
     return 0
 
 

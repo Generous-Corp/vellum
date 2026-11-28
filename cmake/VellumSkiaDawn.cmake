@@ -339,6 +339,28 @@ if(_vellum_coreservices_reexports_libm)
     endif()
 endif()
 
+# The provider reaches objc_msgSend both through an ordinary stub and through
+# the linker-synthesized objc_msgSend$<selector> stubs. With the
+# default fast stubs, ld-prime gives the selector stubs their own GOT slot for
+# _objc_msgSend beside the ordinary one, and its parallel stub/GOT pass orders
+# the two slots differently from one link to the next: identical inputs
+# produced two outputs that differ only in which slot __objc_stubs and
+# __stubs load (ld-27106, macOS 27.2 SDK; 7 of 24 relinks took the other
+# order). Small stubs branch to the one _objc_msgSend stub instead, so the
+# image has a single GOT slot for it and links to the same bytes every time.
+# The cost is one extra branch per message send through a selector stub.
+if(APPLE)
+    include(CheckLinkerFlag)
+    check_linker_flag(CXX "LINKER:-objc_stubs_small" VELLUM_LINKER_ACCEPTS_OBJC_STUBS_SMALL)
+    if(VELLUM_LINKER_ACCEPTS_OBJC_STUBS_SMALL)
+        target_link_options(vellum-skia-dawn-provider PRIVATE "LINKER:-objc_stubs_small")
+    else()
+        message(WARNING
+            "Vellum: the linker does not accept -objc_stubs_small; the Skia/Dawn "
+            "provider dylib may not link reproducibly")
+    endif()
+endif()
+
 set(VELLUM_HAS_SKIA_DAWN ON)
 message(STATUS
     "Vellum: locked Skia Graphite + Dawn found at ${VELLUM_SKIA_DIR} "
