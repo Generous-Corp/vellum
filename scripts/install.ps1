@@ -41,6 +41,13 @@ function Install-Payload([string]$Payload) {
     if (Test-Path (Join-Path $Payload "vellum_html_source.py")) {
         Copy-Item (Join-Path $Payload "vellum_html_source.py") (Join-Path $library "vellum_html_source.py") -Force
     }
+    foreach ($uiModule in @("vellum_ui_build.py", "vellum_ui_lint.py")) {
+        if (Test-Path (Join-Path $Payload $uiModule)) {
+            Copy-Item (Join-Path $Payload $uiModule) (Join-Path $library $uiModule) -Force
+        } else {
+            Remove-Item (Join-Path $library $uiModule) -Force -ErrorAction SilentlyContinue
+        }
+    }
     Copy-Item (Join-Path $Payload "metadata.json") (Join-Path $library "metadata.json") -Force
     Copy-Item (Join-Path $Payload "install-manifest.json") (Join-Path $library "install-manifest.json") -Force
     $agentDestination = Join-Path $library ".agents"
@@ -159,11 +166,13 @@ if ($LocalRoot) {
     $browserModule = Join-Path $LocalRoot "cli\vellum_browser.py"
     $interactionModule = Join-Path $LocalRoot "cli\vellum_interaction.py"
     $htmlSourceModule = Join-Path $LocalRoot "cli\vellum_html_source.py"
+    $uiBuildModule = Join-Path $LocalRoot "cli\vellum_ui_build.py"
+    $uiLintModule = Join-Path $LocalRoot "cli\vellum_ui_lint.py"
     $agentSkill = Join-Path $LocalRoot ".agents\skills\vellum-app-authoring\SKILL.md"
     $agentManifest = Join-Path $LocalRoot ".agents\skills\vellum-app-authoring\manifest.v1.json"
     $templates = Join-Path $LocalRoot "templates\basic"
     $designIrPackage = Join-Path $LocalRoot "packages\vellum-design-ir"
-    if (!(Test-Path $cli) -or !(Test-Path $illustrator) -or !(Test-Path $importAssets) -or !(Test-Path $dispatcher) -or !(Test-Path $manifestReader) -or !(Test-Path $pngTools) -or !(Test-Path $imageCompare) -or !(Test-Path $cdpAdmission) -or !(Test-Path $cdpClient) -or !(Test-Path $browserModule) -or !(Test-Path $interactionModule) -or !(Test-Path $agentSkill) -or
+    if (!(Test-Path $cli) -or !(Test-Path $illustrator) -or !(Test-Path $importAssets) -or !(Test-Path $dispatcher) -or !(Test-Path $manifestReader) -or !(Test-Path $pngTools) -or !(Test-Path $imageCompare) -or !(Test-Path $cdpAdmission) -or !(Test-Path $cdpClient) -or !(Test-Path $browserModule) -or !(Test-Path $interactionModule) -or !(Test-Path $uiBuildModule) -or !(Test-Path $uiLintModule) -or !(Test-Path $agentSkill) -or
         !(Test-Path $agentManifest) -or !(Test-Path $htmlSourceModule) -or !(Test-Path $templates) -or !(Test-Path $designIrPackage)) {
         throw "Local root lacks the CLI, dispatcher, agent instructions, templates, or DesignIR package."
     }
@@ -184,6 +193,8 @@ if ($LocalRoot) {
         Copy-Item $cdpClient (Join-Path $temporary "vellum_cdp_client.py")
         Copy-Item $browserModule (Join-Path $temporary "vellum_browser.py")
         Copy-Item $interactionModule (Join-Path $temporary "vellum_interaction.py")
+        Copy-Item $uiBuildModule (Join-Path $temporary "vellum_ui_build.py")
+        Copy-Item $uiLintModule (Join-Path $temporary "vellum_ui_lint.py")
         $temporaryAgentSkills = Join-Path $temporary ".agents\skills"
         New-Item -ItemType Directory -Force -Path $temporaryAgentSkills | Out-Null
         Copy-Item `

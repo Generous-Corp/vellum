@@ -28,6 +28,20 @@ set_target_properties(vellum-source-adapter PROPERTIES
     INSTALL_RPATH "@loader_path/../mirror/${CMAKE_INSTALL_LIBDIR};@loader_path/../${CMAKE_INSTALL_LIBDIR}")
 install(TARGETS vellum-source-adapter RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
+# The offline `vellum design` verbs (DESIGN.md lint and diff, manifest compile,
+# adherence lint, ledger, token export). The CLI runs the installed binary with the verb's arguments.
+add_executable(vellum-design-tool src/design_tool_main.cpp src/design_tool_verbs.cpp)
+target_compile_features(vellum-design-tool PRIVATE cxx_std_20)
+target_include_directories(vellum-design-tool PRIVATE
+    ${_vellum_mirror_public_includes}
+    "${VELLUM_MIRROR_BUILD_INFO_DIR}"
+    "${VELLUM_MIRROR_CHOC_ROOT}")
+target_link_libraries(vellum-design-tool PRIVATE Vellum::MirrorDesign_import)
+set_target_properties(vellum-design-tool PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+    INSTALL_RPATH "@loader_path/../mirror/${CMAKE_INSTALL_LIBDIR};@loader_path/../${CMAKE_INSTALL_LIBDIR}")
+install(TARGETS vellum-design-tool RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 # Scores a rendered panel against the design it was meant to realize. Kept a
 # tool rather than a test: it is pointed at whichever pair is being compared.
 add_executable(vellum-design-ab src/design_ab_main.cpp)
@@ -51,6 +65,14 @@ if(VELLUM_BUILD_TESTS)
         BUILD_RPATH "$<TARGET_FILE_DIR:vellum-skia-dawn-provider>")
     add_test(NAME vellum.design-pipeline COMMAND vellum-design-pipeline-test)
 
+    # One CLI test per offline design verb, through the checkout CLI and the
+    # built design tool.
+    find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME vellum.design-tool-cli
+        COMMAND "${Python3_EXECUTABLE}" cli/tests/test_design_tool.py
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    set_tests_properties(vellum.design-tool-cli PROPERTIES
+        ENVIRONMENT "VELLUM_DESIGN_TOOL=$<TARGET_FILE:vellum-design-tool>")
     # The tweak sidecar store needs only CHOC, so its test links the library
     # without the design importer's runtime.
     add_executable(vellum-tweak-store-test tests/tweak_store_test.cpp)

@@ -33,6 +33,7 @@
       "vellum.design-debug-contracts",
       "vellum.design-emit-compile",
       "vellum.design-pipeline",
+      "vellum.design-tool-cli",
       "vellum.design-tool-verbatim-move",
       "vellum.downstream-consumer-registry",
       "vellum.downstream-consumer-registry-unit",

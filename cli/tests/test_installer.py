@@ -427,6 +427,52 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(installed.returncode, 0, installed.stderr)
             self._assert_installed_illustrator(root, prefix)
 
+    def _assert_installed_ui_snapshot(self, root: Path, prefix: Path) -> None:
+        source = root / "app" / "native-ui" / "src"
+        source.mkdir(parents=True)
+        (source / "Panel.tsx").write_text(
+            "export function Panel({value}: {value: number}) {\n"
+            "  return <button data-action=\"value\">{value}</button>;\n"
+            "}\n", encoding="utf-8")
+        for action in ("build", "check", "lint"):
+            completed = subprocess.run(
+                [str(prefix / "bin/vellum"), "--json", "ui", action],
+                cwd=root / "app", text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            self.assertEqual(json.loads(completed.stdout)["status"], f"ui_{action}_ok")
+        self.assertTrue((root / "app/build/native-ui/ui-build-manifest.json").is_file())
+
+    def test_local_install_includes_ui_snapshot_tool(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prefix = root / "prefix"
+            installed = _run_installer(prefix, "--local", str(REPO))
+            self.assertEqual(installed.returncode, 0, installed.stderr)
+            self._assert_installed_ui_snapshot(root, prefix)
+
+    def test_built_artifact_installs_ui_snapshot_tool(self) -> None:
+        sys.path.insert(0, str(REPO / "scripts"))
+        try:
+            import build_sdk_artifact as builder
+        finally:
+            sys.path.pop(0)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            payload = root / "payload"
+            payload.mkdir()
+            sdk = root / "sdk"
+            sdk.mkdir()
+            builder.copy_payload(REPO, sdk, payload, "a" * 40, True, "test", include_ui=False)
+            archive = root / "vellum-test.tar.gz"
+            _write_fixture_archive(payload, archive)
+            sums = root / "SHA256SUMS"
+            sums.write_text(f"{_sha256(archive)}  {archive.name}\n", encoding="utf-8")
+            prefix = root / "prefix"
+            installed = _run_installer(prefix, "--archive", str(archive), "--checksums", str(sums))
+            self.assertEqual(installed.returncode, 0, installed.stderr)
+            self._assert_installed_ui_snapshot(root, prefix)
+
     def test_local_install_runs_and_creates_project_outside_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

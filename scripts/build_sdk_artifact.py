@@ -526,7 +526,7 @@ def canonicalize_macho_temp_root(path: Path) -> None:
 # Executables every native SDK installs, and those a configuration may leave
 # out (vellum-design-debug needs the mirrored script unit, and its CMake skips
 # it without one).
-REQUIRED_NATIVE_EXECUTABLES = ("vellum-app-host", "vellum-source-adapter", "vellum-design-emit")
+REQUIRED_NATIVE_EXECUTABLES = ("vellum-app-host", "vellum-source-adapter", "vellum-design-emit", "vellum-design-tool")
 OPTIONAL_NATIVE_EXECUTABLES = ("vellum-design-debug",)
 
 
@@ -715,6 +715,8 @@ def copy_payload(
     shutil.copy2(repo / "cli/vellum_cdp_client.py", payload / "vellum_cdp_client.py")
     shutil.copy2(repo / "cli/vellum_browser.py", payload / "vellum_browser.py")
     shutil.copy2(repo / "cli/vellum_interaction.py", payload / "vellum_interaction.py")
+    shutil.copy2(repo / "cli/vellum_ui_build.py", payload / "vellum_ui_build.py")
+    shutil.copy2(repo / "cli/vellum_ui_lint.py", payload / "vellum_ui_lint.py")
     shutil.copytree(
         repo / ".agents/skills/vellum-app-authoring",
         payload / ".agents/skills/vellum-app-authoring",

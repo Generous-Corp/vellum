@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import hashlib
+import io
 import json
 import math
 import os
@@ -1705,6 +1707,23 @@ def parser() -> argparse.ArgumentParser:
         )
         action.add_argument("--project")
         action.add_argument("--as", dest="source_key", default="main")
+    for name, summary in DESIGN_TOOL_VERBS.items():
+        action = design_actions.add_parser(name, help=summary, add_help=False)
+        action.add_argument("tool_arguments", nargs=argparse.REMAINDER)
+
+    ui = commands.add_parser(
+        "ui",
+        help="build, check, or lint a deterministic owned UI source snapshot",
+        description=(
+            "build: emit source files and ui-build-manifest.json; "
+            "check: verify source and output bytes against the manifest; "
+            "lint: check semantic source and a captured corpus"
+        ),
+    )
+    ui.add_argument(
+        "ui_arguments", nargs=argparse.REMAINDER,
+        help="build|check|lint [--source DIR] [--out DIR] [--manifest FILE] [--enforce-size]",
+    )
 
     compare = commands.add_parser(
         "compare", help="compare two PNG captures with deterministic pixel metrics",
@@ -1769,6 +1788,118 @@ def parser() -> argparse.ArgumentParser:
         for argument, options in arguments:
             command.add_argument(argument, **options)
     return root
+
+
+UI_ACTIONS = ("build", "check", "lint")
+DESIGN_TOOL_NAME = "vellum-design-tool.exe" if os.name == "nt" else "vellum-design-tool"
+DESIGN_TOOL_VERBS = {
+    "md-lint": "lint a DESIGN.md file",
+    "md-diff": "diff the tokens of two DESIGN.md files",
+    "compile": "compile the design manifest and binding prompt",
+    "lint-adherence": "lint UI JS against the design contract",
+    "record": "maintain the project design ledger",
+    "export-tokens": "export a theme as design tokens",
+}
+
+
+# The native verbs that define --json for themselves. The other verbs reject it,
+# so a global --json is handled here instead of being forwarded.
+DESIGN_TOOL_NATIVE_JSON_VERBS = frozenset({"compile", "record"})
+
+
+def design_tool_path() -> Path | None:
+    """The native design tool: $VELLUM_DESIGN_TOOL, else the installed SDK's."""
+    explicit = os.environ.get("VELLUM_DESIGN_TOOL")
+    if explicit:
+        path = Path(explicit).expanduser()
+        return path if path.is_file() else None
+    sdk_root = os.environ.get("VELLUM_SDK_ROOT")
+    if not sdk_root:
+        return None
+    path = Path(sdk_root).expanduser() / "sdk" / "bin" / DESIGN_TOOL_NAME
+    return path if path.is_file() else None
+
+
+def design_tool_command(verb: str, arguments: list[str], *, global_json: bool = False) -> int:
+    """Run one offline design verb in the native tool and return its exit code.
+
+    Arguments pass through unchanged, so a verb's own --json output is the
+    result. A global --json is forwarded only to the verbs that define it; for
+    the others the tool's output becomes the data of one CLI result object.
+    """
+    if global_json and verb in DESIGN_TOOL_NATIVE_JSON_VERBS and "--json" not in arguments:
+        arguments = [*arguments, "--json"]
+    wrap = global_json and verb not in DESIGN_TOOL_NATIVE_JSON_VERBS
+    tool = design_tool_path()
+    if tool is None:
+        emit(result(
+            "design", ok=False, status="capability_unavailable",
+            message=f"This SDK does not provide 'design {verb}'.",
+        ), json_output="--json" in arguments or global_json)
+        return EXIT_UNAVAILABLE
+    try:
+        completed = subprocess.run([str(tool), verb, *arguments], check=False,
+                                   capture_output=wrap, text=True, encoding="utf-8",
+                                   errors="replace")
+        if not wrap:
+            return completed.returncode
+        ok = completed.returncode == 0
+        emit(result(
+            f"design {verb}", ok=ok, status="ok" if ok else "backend_failed",
+            message=f"design {verb} completed." if ok else f"design {verb} failed.",
+            data={"stdout": completed.stdout, "stderr": completed.stderr,
+                  "exit_code": completed.returncode},
+        ), json_output=True)
+        return completed.returncode
+    except OSError as error:
+        emit(result(
+            "design", ok=False, status="capability_unavailable",
+            message=f"Cannot run the design tool for 'design {verb}': {error}.",
+        ), json_output="--json" in arguments or global_json)
+        return EXIT_UNAVAILABLE
+
+
+def ui_command(arguments: list[str], *, json_output: bool) -> int:
+    """Run the owned UI source snapshot tool and return its exit code.
+
+    The tool prints its own receipt. With --json the receipt becomes the
+    data of one CLI result object, so callers parse one schema.
+    """
+    if not arguments or arguments[0] not in UI_ACTIONS:
+        raise CliFailure(
+            "ui requires one of: " + ", ".join(UI_ACTIONS) + ".",
+            status="invalid_arguments", exit_code=EXIT_USAGE,
+        )
+    try:
+        import vellum_ui_build
+    except ImportError as error:
+        raise CliFailure(
+            "This SDK does not provide the UI source snapshot tool.",
+            status="capability_unavailable", exit_code=EXIT_UNAVAILABLE,
+        ) from error
+    if not json_output:
+        try:
+            return vellum_ui_build.main(arguments)
+        except SystemExit as error:
+            return error.code if isinstance(error.code, int) else EXIT_USAGE
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        try:
+            code = vellum_ui_build.main([*arguments, "--json"])
+        except SystemExit as error:
+            code = error.code if isinstance(error.code, int) else EXIT_USAGE
+    try:
+        receipt = json.loads(stdout.getvalue())
+    except json.JSONDecodeError:
+        receipt = None
+    action = arguments[0]
+    message = stderr.getvalue().strip() or f"ui {action} completed."
+    emit(result(
+        "ui", ok=code == 0,
+        status=f"ui_{action}_ok" if code == 0 else f"ui_{action}_failed",
+        message=message, data=receipt if isinstance(receipt, dict) else None,
+    ), json_output=True)
+    return code
 
 
 def forwarded_arguments(args: argparse.Namespace) -> list[str]:
@@ -1844,6 +1975,10 @@ def design_debug_command(arguments: list[str], *, json_output: bool) -> int:
 
 def main(argv: Iterable[str] | None = None) -> int:
     raw = list(argv if argv is not None else sys.argv[1:])
+    if len(raw) >= 2 and raw[0] == "design" and raw[1] in DESIGN_TOOL_VERBS:
+        return design_tool_command(raw[1], raw[2:])
+    if len(raw) >= 3 and raw[:2] == ["--json", "design"] and raw[2] in DESIGN_TOOL_VERBS:
+        return design_tool_command(raw[2], raw[3:], global_json=True)
     if raw[:1] == ["design-debug"]:
         return design_debug_command(raw[1:], json_output=False)
     if raw[:2] == ["--json", "design-debug"]:
@@ -1942,6 +2077,8 @@ def main(argv: Iterable[str] | None = None) -> int:
                     "--page requires a local Figma .fig frame selector or an Illustrator input.",
                     status="invalid_arguments", exit_code=EXIT_USAGE,
                 )
+        if args.command == "ui":
+            return ui_command(list(args.ui_arguments), json_output=args.json)
         if args.command == "create":
             payload = create_project(args)
         elif args.command == "doctor":
