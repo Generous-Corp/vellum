@@ -56,9 +56,36 @@ def load(path: Path = MANIFEST) -> dict[str, Any]:
     return manifest
 
 
+def linux_covered(entry: dict[str, Any]) -> dict[str, Any] | None:
+    """The entry's `linux_covered` claim, validated, or None when it has none.
+
+    The claim says a required Linux check runs this same test on `events`, so a
+    slower runner may skip the entry there. scripts/test_ci_lanes.py proves the
+    claim; this only refuses a malformed one.
+    """
+    if "linux_covered" not in entry:
+        return None
+    claim = entry["linux_covered"]
+    events = claim.get("events") if isinstance(claim, dict) else None
+    if (not isinstance(events, list) or not events
+            or not all(isinstance(event, str) and event for event in events)):
+        raise LaneError(f"{entry}: linux_covered needs a non-empty `events` list of strings")
+    named = {"lane"} if "lane" in claim else {"workflow", "job"}
+    if set(claim) != {"events"} | named or not all(isinstance(claim[key], str) and claim[key] for key in named):
+        raise LaneError(f"{entry}: linux_covered names either a `lane` or a `workflow` and `job`")
+    return claim
+
+
+def skipped_on(entry: dict[str, Any], event: str | None) -> bool:
+    """True when `event` is one a required Linux check already covers for this entry."""
+    claim = linux_covered(entry)
+    return claim is not None and event is not None and event in claim["events"]
+
+
 def command(entry: dict[str, Any]) -> list[str]:
     """The argv one manifest entry runs, with $VARS in its args expanded."""
-    keys = set(entry)
+    linux_covered(entry)
+    keys = set(entry) - {"linux_covered"}
     if keys == {"discover", "pattern"}:
         return [sys.executable, "-m", "unittest", "discover", "-s", entry["discover"], "-p", entry["pattern"]]
     if keys == {"module"}:
@@ -75,11 +102,15 @@ def command(entry: dict[str, Any]) -> list[str]:
     raise LaneError(f"unrecognised lane entry {entry}")
 
 
-def run(lane: str, manifest: dict[str, Any]) -> int:
+def run(lane: str, manifest: dict[str, Any], event: str | None = None) -> int:
     entries = manifest["lanes"].get(lane)
     if not isinstance(entries, list) or not entries:
         raise LaneError(f"no lane named {lane!r}")
     commands = [command(entry) for entry in entries]
+    skipped = [argv for entry, argv in zip(entries, commands) if skipped_on(entry, event)]
+    if skipped:
+        print(f"run-ci-lane: {lane}: skipping {len(skipped)} entries a required Linux check runs on {event}", flush=True)
+    commands = [argv for entry, argv in zip(entries, commands) if not skipped_on(entry, event)]
     for argv in commands:
         print(f"::group::{' '.join(argv[1:])}", flush=True)
         result = subprocess.Popen(
@@ -111,9 +142,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lane", required=True)
     parser.add_argument("--manifest", type=Path, default=MANIFEST)
+    parser.add_argument(
+        "--event",
+        help="the workflow event; entries marked linux_covered for it are skipped. "
+             "Omit it to run every entry (tags, pushes, local runs).",
+    )
     args = parser.parse_args(argv)
     try:
-        return run(args.lane, load(args.manifest))
+        return run(args.lane, load(args.manifest), args.event)
     except LaneError as error:
         print(f"run-ci-lane: {error}", file=sys.stderr)
         return 2

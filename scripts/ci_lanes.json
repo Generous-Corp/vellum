@@ -74,54 +74,145 @@
     "release-source": [
       {
         "script": "scripts/test_gha_annotate.py",
-        "isolated": true
+        "isolated": true,
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
         "discover": "cli/tests",
-        "pattern": "test_*.py"
+        "pattern": "test_*.py",
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
         "script": "cli/tests/test_illustrator_cli.py"
       },
       {
-        "module": "tools.agent_instructions.test_verify"
+        "module": "tools.agent_instructions.test_verify",
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
-        "script": "scripts/test_readme_exec.py"
+        "script": "scripts/test_readme_exec.py",
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
         "script": "scripts/readme_exec.py",
         "args": [
           "--lint"
-        ]
+        ],
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
-        "script": "scripts/test_readme_lint.py"
+        "script": "scripts/test_readme_lint.py",
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
-        "script": "scripts/readme_lint.py"
+        "script": "scripts/readme_lint.py",
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
-        "script": "scripts/test_docs_sync.py"
+        "script": "scripts/test_docs_sync.py",
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
         "script": "scripts/docs_sync.py",
         "args": [
           "--check"
-        ]
+        ],
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
         "script": "scripts/check_react_runtime.py",
-        "isolated": true
+        "isolated": true,
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
-        "script": "scripts/template_guard.py"
+        "script": "scripts/template_guard.py",
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
-        "script": "scripts/test_templates_smoke.py"
+        "script": "scripts/test_templates_smoke.py",
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
-        "script": "scripts/test_sterile_acceptance_bundle.py"
+        "script": "scripts/test_sterile_acceptance_bundle.py",
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
         "script": "scripts/test_compare_sdk_archives.py"
@@ -132,39 +223,102 @@
       },
       {
         "script": "scripts/test_check_renderer_lock.py",
-        "isolated": true
+        "isolated": true,
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
         "script": "scripts/test_renderer_platform_evidence.py",
-        "isolated": true
+        "isolated": true,
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
         "script": "scripts/check_renderer_lock.py",
-        "isolated": true
+        "isolated": true,
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
         "script": "scripts/test_check_threejs_payload.py",
-        "isolated": true
+        "isolated": true,
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
         "script": "scripts/check_threejs_payload.py",
-        "isolated": true
+        "isolated": true,
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
         "script": "scripts/test_verify_gpu_runtime_artifact.py",
-        "isolated": true
+        "isolated": true,
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
         "script": "scripts/test_pinned_cmake.py",
-        "isolated": true
+        "isolated": true,
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
         "script": "scripts/test_build_sdk_artifact.py",
-        "isolated": true
+        "isolated": true,
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
         "script": "scripts/test_verify_rmlui_sdk_artifact.py",
-        "isolated": true
+        "isolated": true,
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
         "script": "scripts/test_rmlui_metal_ios_contract.py",
@@ -176,7 +330,14 @@
       },
       {
         "script": "scripts/test_verify_gpu_runtime_release.py",
-        "isolated": true
+        "isolated": true,
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
         "script": "scripts/test_select_exact_provenance_run.py"
@@ -188,22 +349,65 @@
         "script": "scripts/test_run_parity_proofs.py"
       },
       {
-        "script": "scripts/test_verify_budget_ratification.py"
+        "script": "scripts/test_verify_budget_ratification.py",
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
-        "script": "scripts/verify_budget_ratification.py"
+        "script": "scripts/verify_budget_ratification.py",
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
-        "script": "tools/provenance/test_verify_downstream_consumers.py"
+        "script": "tools/provenance/test_verify_downstream_consumers.py",
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
-        "script": "tools/provenance/verify_downstream_consumers.py"
+        "script": "tools/provenance/verify_downstream_consumers.py",
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
-        "script": "tools/provenance/test_verify_extraction.py"
+        "script": "tools/provenance/test_verify_extraction.py",
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "workflow": ".github/workflows/provenance.yml",
+          "job": "provenance-verify"
+        }
       },
       {
-        "script": "tools/provenance/test_framework_trusted_verify.py"
+        "script": "tools/provenance/test_framework_trusted_verify.py",
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       },
       {
         "script": "tools/provenance/verify_extraction.py",
@@ -211,7 +415,14 @@
           "--defer-mirror-identity",
           "--output",
           "$RUNNER_TEMP/provenance-report.json"
-        ]
+        ],
+        "linux_covered": {
+          "events": [
+            "pull_request",
+            "merge_group"
+          ],
+          "lane": "product-quality"
+        }
       }
     ],
     "product-quality": [
@@ -435,6 +646,9 @@
       },
       {
         "script": "tools/provenance/test_pulp_main_drift_annotations.py"
+      },
+      {
+        "script": "tools/provenance/test_framework_trusted_verify.py"
       },
       {
         "script": "tools/provenance/verify_downstream_consumers.py"
