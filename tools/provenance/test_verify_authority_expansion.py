@@ -36,7 +36,33 @@ SPEC.loader.exec_module(verifier)
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def _is_partial_clone(root: Path) -> bool:
+    for key in ("extensions.partialclone", "remote.origin.promisor"):
+        done = subprocess.run(
+            ["git", "-C", str(root), "config", "--get", key],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if done.returncode == 0 and done.stdout.strip() not in ("", "false"):
+            return True
+    return False
+
+
 class Tests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        # Several tests clone this checkout and walk commit trees. In a
+        # partial (blob-filtered) clone those trees are missing, so the
+        # verifier reports "cannot resolve commit tree" and the assertions
+        # fail with a misleading message. Fail once, with the cause.
+        if _is_partial_clone(ROOT):
+            raise AssertionError(
+                f"{ROOT} is a partial (filtered) clone; these tests need every "
+                "tree and blob. Use a full clone, or run "
+                "'git fetch --refetch --no-filter origin' first."
+            )
+
     def exact_boundary_acknowledgement(
         self,
         *,
