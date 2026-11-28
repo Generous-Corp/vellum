@@ -315,6 +315,30 @@ class ParallelSplitTest(unittest.TestCase):
         self.assertEqual(union, set(classes_by_test(classes)))
         self.assertEqual(sum(len(classes[name]) for name in CLASSES), len(union))
 
+    @HAS_MANIFEST
+    def test_fixture_setups_share_the_class_of_the_tests_that_require_them(self) -> None:
+        # CTest adds a required fixture's setup test to any -L selection, so a
+        # setup in another class lands in both halves of the split.
+        owners = {test: name for test, names in classes_by_test(load_manifest()).items() for name in names}
+        setups: dict[str, set[str]] = {}
+        required: dict[str, set[str]] = {}
+        listing = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z", "--", "*CMakeLists.txt", "*.cmake"],
+                                 check=True, capture_output=True, text=True).stdout
+        for relative in filter(None, listing.split("\0")):
+            text = re.sub(r"(?m)^\s*#.*$", "", (ROOT / relative).read_text(encoding="utf-8", errors="replace"))
+            for test, body in re.findall(r"set_tests_properties\(\s*(\S+)\s+PROPERTIES([^)]*)\)", text):
+                for kind, table in (("FIXTURES_SETUP", setups), ("FIXTURES_REQUIRED", required)):
+                    for value in re.findall(kind + r"\s+([^\s)]+)", body):
+                        for fixture in value.split(";"):
+                            table.setdefault(fixture, set()).add(test)
+        self.assertIn("vellum-swift-host-sdk", setups)  # control: the scan sees fixtures
+        crossing = {}
+        for fixture, users in required.items():
+            classes = {owners.get(t) for t in users | setups.get(fixture, set()) if t in owners}
+            if len(classes) > 1:
+                crossing[fixture] = sorted(classes)
+        self.assertEqual(crossing, {})
+
     def test_a_label_expression_that_misses_or_doubles_a_class_is_caught(self) -> None:
         # Negative control: the same property check, on a split that leaves
         # slow out, and on one that counts pr-fast twice.
@@ -337,7 +361,7 @@ class ParallelSplitTest(unittest.TestCase):
         counter = iter(range(1000))
 
         def run(setting: str, classes: dict[str, list[str]], tests: list[str],
-                failing: str = "") -> tuple[int, str, str]:
+                failing: str = "", fixture: tuple[str, str] | None = None) -> tuple[int, str, str]:
             source = tmp / f"src-{next(counter)}"
             (source / "scripts").mkdir(parents=True)
             (source / "cmake").mkdir()
@@ -350,6 +374,8 @@ class ParallelSplitTest(unittest.TestCase):
                     f"add_test(NAME {t} COMMAND ${{CMAKE_COMMAND}} -E "
                     + ("false" if t == failing else f"echo ran-{t}") + ")\n"
                     for t in tests)
+                + (f"set_tests_properties({fixture[0]} PROPERTIES FIXTURES_SETUP fx)\n"
+                   f"set_tests_properties({fixture[1]} PROPERTIES FIXTURES_REQUIRED fx)\n" if fixture else "")
                 + "include(cmake/VellumTestClasses.cmake)\n"
                 'vellum_apply_test_classes("${CMAKE_CURRENT_SOURCE_DIR}/scripts/ctest_classes.json")\n')
             work = tmp / f"work-{source.name}"
@@ -384,6 +410,17 @@ class ParallelSplitTest(unittest.TestCase):
         self.assertEqual(code, 0, out + err)
         self.assertIn("running them serially", out + err)
         self.assertTrue(passed(out), out)
+        # A setup fixture in another class than its user lands in both halves: serial fallback.
+        crossing = {"pr-fast": ["t.a", "t.b", "t.e"], "gpu": ["t.c", "t.d"], "slow": []}
+        code, out, err = run("split", crossing, tests, fixture=("t.a", "t.c"))
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("running them serially", out + err)
+        # Closed classes keep the split live with the same fixture shape.
+        closed = {"pr-fast": ["t.b", "t.e"], "gpu": ["t.a", "t.c", "t.d"], "slow": []}
+        code, out, err = run("split", closed, tests, fixture=("t.a", "t.c"))
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn("running them serially", out + err)
+        self.assertIn("ctest gpu tests", out)
         # A failing test in either process fails the step.
         for victim in ("t.c", "t.e"):
             code, out, err = run("split", classes, tests, failing=victim)
