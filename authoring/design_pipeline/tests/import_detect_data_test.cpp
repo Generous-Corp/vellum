@@ -126,6 +126,33 @@ TEST_CASE("detect picks the highest-confidence format", "[import-detect]") {
     }
 }
 
+TEST_CASE("detect reads the Claude bundler tag as HTML does", "[import-detect]") {
+    auto manifest = det::parse_compat_json(slurp(locate_compat_json()));
+    REQUIRE(manifest.has_value());
+    auto dir = fs::temp_directory_path() / "vellum-import-detect-claude-markup";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    auto detect_page = [&](const char* name, const std::string& html) {
+        std::ofstream(dir / name) << html;
+        return det::detect(*manifest, det::snapshot_input(dir / name));
+    };
+
+    // Positive control: the active tag in its plain form is detected.
+    CHECK(detect_page("plain.html",
+                      "<script type=\"__bundler/template\"></script>\n").source == "claude");
+    // HTML allows whitespace around the equals sign.
+    CHECK(detect_page("spaced.html",
+                      "<script type = \"__bundler/template\"></script>\n").source == "claude");
+    CHECK(detect_page("spaced-after.html",
+                      "<script type= \"__bundler/template\"></script>\n").source == "claude");
+    // A commented-out tag is not a fingerprint.
+    CHECK(detect_page("commented.html",
+                      "<!-- <script type=\"__bundler/template\"></script> -->\n"
+                      "<p>unrelated</p>\n").source.empty());
+
+    fs::remove_all(dir);
+}
+
 TEST_CASE("clause matcher covers frontmatter any-of keys",
           "[import-detect]") {
     det::InputSnapshot snap;
