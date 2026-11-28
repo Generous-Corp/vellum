@@ -125,7 +125,8 @@ a later entry can carry exactly the combined tree an earlier group already
 proved. On 2026-11-28 the group for PR 825 (run 46122127881) rebuilt for 46
 minutes the tree that PR 769's group had proved four hours earlier
 (46104477453). A pull-request receipt can match only the first entry of a
-group, so batching makes this the more common case.
+group, so for every later entry an earlier group's proof is the only exact-tree
+source there is.
 
 A built proof in a `merge_group` run now writes the same tree receipt, and
 when no pull-request proof qualifies `scripts/select_reusable_gpu_proof.py`
