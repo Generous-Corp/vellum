@@ -206,13 +206,11 @@ class SdkArtifactTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             bin_dir = Path(temporary)
             names = [path.name for path in select(bin_dir)]
-            self.assertEqual(names, ["vellum-app-host", "vellum-source-adapter", "vellum-design-tool"])
+            required = ["vellum-app-host", "vellum-source-adapter", "vellum-design-emit", "vellum-design-tool"]
+            self.assertEqual(names, required)
             (bin_dir / "vellum-design-debug").write_bytes(b"")
             names = [path.name for path in select(bin_dir)]
-            self.assertEqual(
-                names,
-                ["vellum-app-host", "vellum-source-adapter", "vellum-design-tool", "vellum-design-debug"],
-            )
+            self.assertEqual(names, required + ["vellum-design-debug"])
 
     def test_macho_temp_root_normalization_makes_archives_equal(self) -> None:
         module = runpy.run_path(str(BUILDER))

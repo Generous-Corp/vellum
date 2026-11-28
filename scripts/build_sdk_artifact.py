@@ -526,7 +526,7 @@ def canonicalize_macho_temp_root(path: Path) -> None:
 # Executables every native SDK installs, and those a configuration may leave
 # out (vellum-design-debug needs the mirrored script unit, and its CMake skips
 # it without one).
-REQUIRED_NATIVE_EXECUTABLES = ("vellum-app-host", "vellum-source-adapter", "vellum-design-tool")
+REQUIRED_NATIVE_EXECUTABLES = ("vellum-app-host", "vellum-source-adapter", "vellum-design-emit", "vellum-design-tool")
 OPTIONAL_NATIVE_EXECUTABLES = ("vellum-design-debug",)
 
 
