@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import fnmatch
 import datetime as _dt
 import json
 import os
@@ -43,6 +44,11 @@ OPEN_CHECKS = {"tests", "fixtures", "journey", "render_reference", "upstream", "
 SURFACE_OWNERS = ("framework/", "packages/", "product/")
 VERSION = re.compile(r"\d+\.\d+\.\d+")
 PULL_REQUEST = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+")
+DESIGN_IMPORT = "framework/core/view/src/design_import.cpp"
+SOURCE_SUPPORT = "product/source-support.yaml"
+CI_LANES = "scripts/ci_lanes.json"
+JOURNEY = re.compile(r"(?P<path>[^:\s]+)::(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?:\[(?P<lane>[a-z0-9-]+)\])?")
+TEST_KINDS = ("ctest:", "lane:", "package:")
 REQUIRED_FIELDS = (
     "source", "display_name", "kind", "trust", "compat", "dispatch", "upstream",
     "detected_artifact_shape", "runtime_export_shape", "runtime_requirements", "parser",
@@ -314,6 +320,228 @@ def _check_cadence(findings: list[Finding], entry: dict[str, Any], today: _dt.da
              severity="info")
 
 
+def _read(root: Path, rel_path: str) -> str:
+    """A file's text, or empty when the path escapes the checkout or is unreadable."""
+    path = contained_path(root, rel_path)
+    if path is None:
+        return ""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _design_source_labels(root: Path) -> set[str]:
+    match = re.search(r"parse_design_source\s*\([^)]*\)\s*\{(?P<body>.*?)\n\}",
+                      _read(root, DESIGN_IMPORT), flags=re.S)
+    return set(re.findall(r'name\s*==\s*"([^"]+)"', match.group("body"))) if match else set()
+
+
+def _symbol_exists(root: Path, rel_file: str, symbol: str) -> bool:
+    return re.search(rf"\b{re.escape(symbol)}\b", _read(root, rel_file)) is not None
+
+
+def cmake_graph(root: Path) -> list[Path]:
+    """The CMakeLists.txt files the root build reaches through add_subdirectory().
+
+    Only literal relative subdirectories are followed, so a CMakeLists.txt that
+    no add_subdirectory() names is not part of the graph.
+    """
+    seen: list[Path] = []
+    pending = [root.resolve()]
+    while pending:
+        directory = pending.pop()
+        cmake = directory / "CMakeLists.txt"
+        if not cmake.is_file() or cmake in seen:
+            continue
+        seen.append(cmake)
+        text = cmake.read_text(encoding="utf-8", errors="replace")
+        for name in re.findall(r"(?m)^\s*add_subdirectory\(\s*\"?([A-Za-z0-9_./-]+)\"?", text):
+            child = (directory / name).resolve()
+            try:
+                child.relative_to(root.resolve())
+            except ValueError:
+                continue
+            pending.append(child)
+    return seen
+
+
+def ctest_names(root: Path) -> set[str]:
+    """Every test name the configured CMake graph registers."""
+    names: set[str] = set()
+    for path in cmake_graph(root):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        names |= set(re.findall(r"add_test\(\s*NAME\s+\"?([A-Za-z0-9_.-]+)", text))
+        names |= {f"vellum.framework.{name}"
+                  for name in re.findall(r"vellum_add_framework_test\(\s*([A-Za-z0-9_-]+)", text)}
+    return names
+
+
+def _lane_covered(root: Path, rel_path: str) -> bool:
+    try:
+        manifest = json.loads(_read(root, CI_LANES))
+    except json.JSONDecodeError:
+        return False
+    if rel_path in (manifest.get("elsewhere") or {}):
+        return True
+    for lane in (manifest.get("lanes") or {}).values():
+        for entry in lane:
+            if entry.get("script") == rel_path:
+                return True
+            if entry.get("module") == rel_path.removesuffix(".py").replace("/", "."):
+                return True
+            discover = entry.get("discover")
+            if discover and str(PurePosixPath(rel_path).parent) == discover.rstrip("/") and \
+                    fnmatch.fnmatch(PurePosixPath(rel_path).name, entry.get("pattern", "")):
+                return True
+    return False
+
+
+def _package_covered(root: Path, rel_path: str) -> bool:
+    parts = PurePosixPath(rel_path).parts
+    if len(parts) < 4 or parts[0] != "packages":
+        return False
+    try:
+        script = json.loads(_read(root, f"packages/{parts[1]}/package.json"))["scripts"]["test"]
+    except (KeyError, TypeError, json.JSONDecodeError):
+        return False
+    local = str(PurePosixPath(*parts[2:]))
+    return any(fnmatch.fnmatch(local, pattern) for pattern in script.split() if "*" in pattern)
+
+
+def test_resolves(root: Path, reference: str, ctests: set[str]) -> bool:
+    kind, _, name = reference.partition(":")
+    if kind == "ctest":
+        return name in ctests
+    path = contained_path(root, name)
+    if kind == "lane":
+        return path is not None and path.is_file() and _lane_covered(root, name)
+    if kind == "package":
+        return path is not None and path.is_file() and _package_covered(root, name)
+    return False
+
+
+def journey_resolves(root: Path, reference: str) -> bool:
+    match = JOURNEY.fullmatch(reference)
+    if not match or contained_path(root, match["path"]) is None:
+        return False
+    text = _read(root, match["path"])
+    function = match["name"]
+    if not re.search(rf"(?m)^\s*def {function}\(", text):
+        return False
+    if function != "validate" and len(re.findall(rf"\b{function}\(", text)) < 2:
+        return False
+    return not match["lane"] or f'"{match["lane"]}"' in text
+
+
+def _manifest_journeys(root: Path) -> dict[str, str]:
+    journeys: dict[str, str] = {}
+    current = None
+    for line in _read(root, SOURCE_SUPPORT).splitlines():
+        entry = re.fullmatch(r"  ([a-z0-9-]+):", line)
+        if entry:
+            current = entry.group(1)
+            continue
+        field = re.fullmatch(r"    journey: (.+)", line)
+        if field and current:
+            journeys[current] = field.group(1).strip().strip('"')
+    return journeys
+
+
+def _check_references(findings: list[Finding], root: Path, entry: dict[str, Any],
+                      labels: set[str], ctests: set[str], journeys: dict[str, str]) -> None:
+    source = _source(entry)
+    parser = entry.get("parser") or {}
+    parser_file = parser.get("file")
+    runtime_file = parser.get("runtime_file", parser_file)
+    for label, rel in (("parser.file", parser_file), ("parser.runtime_file", runtime_file)):
+        path = contained_path(root, rel)
+        if path is None or not path.is_file():
+            _add(findings, "missing-parser-file", source, f"{label} does not exist: {rel!r}", path=rel)
+    dispatch = entry.get("dispatch") or {}
+    if dispatch.get("kind") == "design-source-label" and dispatch.get("label") not in labels:
+        _add(findings, "missing-design-source-label", source,
+             f"dispatch label is not present in parse_design_source(): {dispatch.get('label')!r}")
+    if dispatch.get("kind") == "explicit-runtime-parser" and (
+            not isinstance(runtime_file, str) or not isinstance(dispatch.get("parser"), str)
+            or not _symbol_exists(root, runtime_file, dispatch["parser"])):
+        _add(findings, "missing-explicit-runtime-parser", source,
+             f"explicit runtime parser symbol is missing: {dispatch.get('parser')!r}")
+    for role, role_file in (("runtime", runtime_file), ("static", parser_file)):
+        symbol = parser.get(role)
+        if symbol is None:
+            continue
+        if not isinstance(symbol, str) or not isinstance(role_file, str) or \
+                not _symbol_exists(root, role_file, symbol):
+            _add(findings, "missing-parser-symbol", source,
+                 f"parser.{role} symbol is missing from {role_file}: {symbol!r}", path=role_file)
+
+    validation = entry.get("validation") or {}
+    paths = [("fixture", p) for p in _as_list(validation.get("fixtures"))]
+    for version in _as_list(entry.get("format_versions")):
+        if isinstance(version, dict):
+            paths += [("fixture", p) for p in _as_list(version.get("fixture_paths"))]
+            paths += [("expected file", p) for p in _as_list(version.get("expected_paths"))]
+    paths += [("evidence", item.get("url")) for item in _as_list(entry.get("upstream"))
+              if isinstance(item, dict) and isinstance(item.get("url"), str)
+              and not item["url"].startswith("https://")]
+    for label, rel in paths:
+        path = contained_path(root, rel)
+        if path is None or not path.exists():
+            _add(findings, f"missing-{label.replace(' ', '-')}", source,
+                 f"{label} does not exist: {rel!r}", path=rel if isinstance(rel, str) else None)
+    ref = validation.get("render_reference") or {}
+    ref_path = contained_path(root, ref.get("path"))
+    if ref.get("status") == "present" and not (ref_path is not None and ref_path.is_file()):
+        _add(findings, "missing-reference-screenshot", source,
+             f"render reference does not exist: {ref.get('path')!r}")
+
+    open_checks = {item.get("check") for key in ("pending", "deferred")
+                   for item in _as_list(entry.get(key)) if isinstance(item, dict)}
+    tests = [t for t in _as_list(validation.get("tests")) if isinstance(t, str)]
+    if not tests and "tests" not in open_checks:
+        _add(findings, "missing-tests", source,
+             "validation.tests is empty and no tests item is pending or deferred")
+    for reference in tests:
+        if not reference.startswith(TEST_KINDS) or not test_resolves(root, reference, ctests):
+            _add(findings, "missing-test", source, f"test reference does not resolve: {reference}")
+    if "journey_required" in validation and not isinstance(validation["journey_required"], bool):
+        _add(findings, "invalid-field", source, "contract.validation.journey_required must be true or false")
+    journey = validation.get("journey")
+    if journey is None:
+        required = validation.get("journey_required") is True or source in journeys
+        if required and "journey" not in open_checks:
+            _add(findings, "missing-journey", source,
+                 "a journey is required but validation.journey is null and no journey item "
+                 "is pending or deferred")
+    elif not isinstance(journey, str) or not journey_resolves(root, journey):
+        _add(findings, "missing-journey", source, f"journey does not resolve: {journey!r}")
+    elif source in journeys and journeys[source] != journey:
+        _add(findings, "journey-drift", source,
+             f"journey {journey} differs from {SOURCE_SUPPORT}: {journeys[source]}")
+
+    for item in _as_list(entry.get("pending")):
+        if not isinstance(item, dict) or not isinstance(item.get("item"), str):
+            continue
+        target = item["item"]
+        landed = (item.get("check") == "tests" and target.startswith(TEST_KINDS)
+                  and test_resolves(root, target, ctests)) or \
+                 (item.get("check") == "journey" and journey_resolves(root, target)) or \
+                 (item.get("check") == "fixtures" and contained_path(root, target) is not None
+                  and contained_path(root, target).exists())
+        if landed:
+            _add(findings, "pending-item-landed", source,
+                 f"pending {item.get('check')} item now exists; move it into the contract: {target}",
+                 severity="info")
+
+
+def _check_coverage(findings: list[Finding], entries: list[dict[str, Any]], labels: set[str]) -> None:
+    sources = {_source(entry) for entry in entries}
+    for label in sorted(labels - sources):
+        _add(findings, "missing-source-row", label,
+             f"parse_design_source() label has no source-contract row: {label}")
+
+
 def open_items(registry: dict[str, Any]) -> tuple[list[tuple[str, dict]], list[tuple[str, dict]]]:
     """Every (source, item) under pending and under deferred."""
     pending: list[tuple[str, dict]] = []
@@ -343,6 +571,9 @@ def compute_findings(root: Path = REPO_ROOT, registry_path: Path = DEFAULT_REGIS
     if len(entries) != len(contracts):
         _add(findings, "invalid-contract-entry", "<registry>", "all contracts entries must be objects")
     imports = _detection_imports(root)
+    labels = _design_source_labels(root)
+    ctests = ctest_names(root)
+    journeys = _manifest_journeys(root)
     for entry in entries:
         _check_entry_shape(findings, entry)
         _check_nested_shape(findings, entry)
@@ -350,6 +581,8 @@ def compute_findings(root: Path = REPO_ROOT, registry_path: Path = DEFAULT_REGIS
         _check_compat(findings, imports, entry)
         _check_surface_refs(findings, root, entry)
         _check_cadence(findings, entry, today, warn_days)
+        _check_references(findings, root, entry, labels, ctests, journeys)
+    _check_coverage(findings, entries, labels)
     return findings
 
 
