@@ -499,6 +499,21 @@ endif()
 set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
     ios_au_editor_controller_test.mm)
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    add_executable(vellum-framework-accessibility-geometry-test accessibility_geometry_test.mm)
+    target_include_directories(vellum-framework-accessibility-geometry-test PRIVATE
+        "${PROJECT_SOURCE_DIR}/framework/core/view/include"
+        "${PROJECT_SOURCE_DIR}/framework/core/view/platform/mac"
+        "${PROJECT_SOURCE_DIR}/framework/core/canvas/include")
+    target_link_libraries(vellum-framework-accessibility-geometry-test PRIVATE "-framework AppKit")
+    set_target_properties(vellum-framework-accessibility-geometry-test PROPERTIES
+        OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED ON)
+    add_test(NAME vellum.framework.accessibility-geometry
+        COMMAND vellum-framework-accessibility-geometry-test)
+    set_tests_properties(vellum.framework.accessibility-geometry PROPERTIES LABELS framework)
+endif()
+set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES accessibility_geometry_test.mm)
+
 # Every test file here must be registered above. A test file that no
 # vellum_add_framework_test() names would build nothing and run nothing while
 # the lane stays green, so configure refuses it.

@@ -28,6 +28,15 @@ NSAccessibilityElement* lookup(const std::string& id) {
     return (__bridge NSAccessibilityElement*)vellum_text_accessibility_lookup_macos(id.c_str());
 }
 
+bool host_lists_label(NSView* view, NSString* label) {
+    for (id child in [view accessibilityChildren]) {
+        if ([child respondsToSelector:@selector(accessibilityLabel)] &&
+            [[child accessibilityLabel] isEqualToString:label])
+            return true;
+    }
+    return false;
+}
+
 TextAccessibilityNode make_node(const char* id, const char* text, TextAccessibilityRole role) {
     TextAccessibilityNode node;
     node.id = id;
@@ -168,6 +177,45 @@ FRAMEWORK_TEST(plugin_view_surfaces_registered_text_to_voiceover) {
                 found = true;
         }
         CHECK(found);
+        clear_registry();
+    }
+}
+
+// Text registered for one editor view is listed by that view only; another
+// editor view in the same process does not expose it, and an unowned node is
+// listed by neither.
+FRAMEWORK_TEST(plugin_view_lists_only_text_registered_for_its_host) {
+    clear_registry();
+    @autoreleasepool {
+        [NSApplication sharedApplication];
+        View root_a;
+        View root_b;
+        PluginViewHost::Options options;
+        options.size = {200, 100};
+        options.use_gpu = false;
+        auto host_a = PluginViewHost::create(root_a, options);
+        auto host_b = PluginViewHost::create(root_b, options);
+        CHECK(host_a != nullptr);
+        CHECK(host_b != nullptr);
+        if (!host_a || !host_b) return;
+        NSView* view_a = (__bridge NSView*)host_a->native_handle();
+        NSView* view_b = (__bridge NSView*)host_b->native_handle();
+        CHECK(view_a != nil);
+        CHECK(view_b != nil);
+        if (!view_a || !view_b) return;
+        auto mine = make_node("mine", "Own text", TextAccessibilityRole::Label);
+        mine.host_handle = (__bridge void*)view_a;
+        register_text_accessibility_node(mine);
+        auto theirs = make_node("theirs", "Other text", TextAccessibilityRole::Label);
+        theirs.host_handle = (__bridge void*)view_b;
+        register_text_accessibility_node(theirs);
+        register_text_accessibility_node(
+            make_node("unowned", "Nobody's text", TextAccessibilityRole::Label));
+        CHECK(host_lists_label(view_a, @"Own text"));
+        CHECK(!host_lists_label(view_a, @"Other text"));
+        CHECK(!host_lists_label(view_a, @"Nobody's text"));
+        CHECK(host_lists_label(view_b, @"Other text"));
+        CHECK(!host_lists_label(view_b, @"Own text"));
         clear_registry();
     }
 }

@@ -1188,6 +1188,16 @@
       "pulp_commits": [],
       "framework_blob": null,
       "reason": "In-process WKWebView snapshot to PNG for headless capture of a WebView overlay. Ported from Pulp's core/view/platform/mac/web_view_snapshot_mac.mm by API change: the namespace and include paths respelled to vellum, comments edited, and the page-side bridge wire names kept so existing pages run unchanged."
+    },
+    {
+      "framework_path": "framework/core/view/platform/mac/accessibility_mac_geometry.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Convert editor accessibility bounds with the live host viewport map."
     }
   ]
 }
