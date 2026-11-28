@@ -1,0 +1,12 @@
+{
+  "schema": "vellum.design-tool-verbatim-move.v1",
+  "source_repository": "Generous-Corp/pulp",
+  "source_commit": "50c4eaa3fe02c9805c3b7dbae16d12072722eaeb",
+  "files": [
+    {
+      "path": "apps/design-tool/design-tool-chat.js",
+      "source_path": "examples/design-tool/design-tool-chat.js",
+      "source_blob": "17da90c2915cbec6aa4fd0964bbf1a9a0b318d22"
+    }
+  ]
+}

@@ -1,4 +1,23 @@
 {
   "schema": "vellum.design-tool-respell.v1",
-  "entries": []
+  "entries": [
+    {
+      "path": "apps/design-tool/design-tool-chat.js",
+      "old": "pulp::",
+      "new": "vellum::",
+      "count": 3
+    },
+    {
+      "path": "apps/design-tool/design-tool-chat.js",
+      "old": "pulp_theme",
+      "new": "vellum_theme",
+      "count": 2
+    },
+    {
+      "path": "apps/design-tool/design-tool-chat.js",
+      "old": "PULP_THEME_COLOR",
+      "new": "VELLUM_THEME_COLOR",
+      "count": 2
+    }
+  ]
 }
