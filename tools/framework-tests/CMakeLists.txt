@@ -205,10 +205,47 @@ if(TARGET vellum-dawn-headers AND TARGET vellum-gpu)
         UNITS Vellum::MirrorRender_2d Vellum::DawnHeaders Vellum::Gpu)
     target_include_directories(vellum-framework-gpu-surface-device-test PRIVATE
         "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
-    set_tests_properties(vellum.framework.gpu-surface-device PROPERTIES SKIP_RETURN_CODE 77)
+    # In the GPU lane (VELLUM_REQUIRE_GPU=ON) a missing or broken device is a
+    # failure, not a skip: the probe exits 1 instead of 77.
+    if(VELLUM_REQUIRE_GPU)
+        target_compile_definitions(vellum-framework-gpu-surface-device-test PRIVATE VELLUM_REQUIRE_GPU_DEVICE=1)
+        add_test(NAME vellum.framework.gpu-surface-device-required-failure
+            COMMAND "${CMAKE_COMMAND}"
+                -DTEST_EXECUTABLE=$<TARGET_FILE:vellum-framework-gpu-surface-device-test>
+                -DTEST_ENVIRONMENT=VELLUM_TEST_FORCE_DAWN_BOOTSTRAP_FAILURE=1
+                -DEXPECTED_OUTPUT=FAIL
+                -P "${PROJECT_SOURCE_DIR}/cmake/CheckRequiredGpuFailure.cmake")
+        set_tests_properties(vellum.framework.gpu-surface-device-required-failure
+            PROPERTIES LABELS framework)
+    else()
+        set_tests_properties(vellum.framework.gpu-surface-device PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
+    # HeadlessSurface renders on a real device and reads the pixels back.
+    vellum_add_framework_test(headless-surface-gpu
+        SOURCES headless_surface_gpu_test.cpp
+        UNITS Vellum::MirrorRender_2d Vellum::DawnHeaders Vellum::Gpu)
+    target_include_directories(vellum-framework-headless-surface-gpu-test PRIVATE
+        "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
+    # In the GPU lane (VELLUM_REQUIRE_GPU=ON) a missing or broken device is a
+    # failure, not a skip: the probe exits 1 instead of 77.
+    if(VELLUM_REQUIRE_GPU)
+        target_compile_definitions(vellum-framework-headless-surface-gpu-test PRIVATE VELLUM_REQUIRE_GPU_DEVICE=1)
+        add_test(NAME vellum.framework.headless-surface-gpu-required-failure
+            COMMAND "${CMAKE_COMMAND}"
+                -DTEST_EXECUTABLE=$<TARGET_FILE:vellum-framework-headless-surface-gpu-test>
+                -DTEST_ENVIRONMENT=VELLUM_TEST_FORCE_HEADLESS_SURFACE_FAILURE=1
+                -DEXPECTED_OUTPUT=FAIL
+                -P "${PROJECT_SOURCE_DIR}/cmake/CheckRequiredGpuFailure.cmake")
+        set_tests_properties(vellum.framework.headless-surface-gpu-required-failure
+            PROPERTIES LABELS framework)
+    else()
+        set_tests_properties(vellum.framework.headless-surface-gpu PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
 else()
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
         "gpu_surface_device_test.cpp")
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+        "headless_surface_gpu_test.cpp")
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
         "webgpu_error_scopes_test.cpp")
 endif()
