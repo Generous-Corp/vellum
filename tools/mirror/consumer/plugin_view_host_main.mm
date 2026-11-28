@@ -93,6 +93,11 @@ int main(int argc, char** argv) {
             c.set_fill_color(vellum::canvas::Color::rgba8(40, 120, 220, 255));
             c.fill_rect(0, 0, 32, 32);
         }
+        void layout_children() override {
+            // This fixture paints in fixed design coordinates. Keep the button
+            // there when a viewport change repaints and lays out the tree.
+            if (child_count() != 0) child_at(0)->set_bounds({10, 20, 30, 40});
+        }
         bool on_key_event(const vellum::view::KeyEvent&) override { ++keys; return true; }
         void on_mouse_event(const vellum::view::MouseEvent& event) override {
             if (event.phase == vellum::view::MousePhase::press) {
@@ -187,6 +192,40 @@ int main(int argc, char** argv) {
         return fail("root did not keep its design bounds");
     if (gpu->window_to_root_point({80, 140}) != Point{40, 20})
         return fail("viewport inverse did not account for the scale and letterbox");
+    // Exercise the actual AppKit screen conversion without showing a window.
+    NSWindow* accessibility_window = [[NSWindow alloc]
+        initWithContentRect:NSMakeRect(100, 150, 400, 400)
+        styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];
+    [accessibility_window setReleasedWhenClosed:NO];
+    [accessibility_window.contentView addSubview:parent];
+    auto verify_frame = [&](NSRect root_rect) {
+        NSRect expected = [host_view convertRect:root_rect toView:nil];
+        expected = [accessibility_window convertRectToScreen:expected];
+        const NSRect actual = [host_view.accessibilityChildren.firstObject accessibilityFrame];
+        if (!NSEqualRects(actual, expected)) {
+            std::fprintf(stderr, "accessibility frame: actual %s expected %s\n",
+                NSStringFromRect(actual).UTF8String, NSStringFromRect(expected).UTF8String);
+            return false;
+        }
+        return true;
+    };
+    if (!verify_frame(NSMakeRect(20, 180, 60, 80)))
+        return fail("accessibility frame ignores viewport scale or vertical letterbox");
+    gpu->set_design_viewport_top_align(true);
+    if (!verify_frame(NSMakeRect(20, 280, 60, 80)))
+        return fail("accessibility frame did not follow top alignment");
+    gpu->set_size(600, 200);
+    if (!verify_frame(NSMakeRect(120, 80, 60, 80)))
+        return fail("accessibility frame did not follow resize and horizontal letterbox");
+    gpu->set_design_viewport(0, 0);
+    if (!verify_frame(NSMakeRect(10, 140, 30, 40)))
+        return fail("accessibility frame did not return to identity");
+    [parent removeFromSuperview];
+    [accessibility_window close];
+    [accessibility_window release];
+    gpu->set_size(400, 400);
+    gpu->set_design_viewport(200, 100);
+    gpu->set_design_viewport_top_align(false);
 
     // AppKit points count up from the bottom edge.
     for (auto type : {NSEventTypeLeftMouseDown, NSEventTypeLeftMouseUp}) {
