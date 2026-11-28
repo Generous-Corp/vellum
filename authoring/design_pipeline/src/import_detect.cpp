@@ -183,23 +183,89 @@ std::vector<std::string> scrape_script_attr(const std::string& html, const std::
     return out;
 }
 
-// Greedy scrape of identifiers from a tailwind.config inline script.
-// We grep for sequences inside theme.extend.colors / .spacing / similar
-// keys. The detector matches against any-of clauses, so this just needs
-// to surface representative tokens; we don't reconstruct a real tree.
+// Remove `//` and `/* */` comments from script text, leaving string and
+// template literals intact so a value such as "https://..." does not hide
+// the keys that follow it on the same line.
+std::string strip_js_comments(const std::string& code) {
+    std::string out;
+    out.reserve(code.size());
+    for (size_t i = 0; i < code.size();) {
+        char c = code[i];
+        if (c == '"' || c == '\'' || c == '`') {
+            size_t j = i + 1;
+            while (j < code.size() && code[j] != c) {
+                if (code[j] == '\\' && j + 1 < code.size()) ++j;
+                ++j;
+            }
+            j = std::min(j + 1, code.size());
+            out.append(code, i, j - i);
+            i = j;
+        } else if (c == '/' && i + 1 < code.size() && code[i + 1] == '/') {
+            i = code.find('\n', i);
+            if (i == std::string::npos) break;
+        } else if (c == '/' && i + 1 < code.size() && code[i + 1] == '*') {
+            auto close = code.find("*/", i + 2);
+            if (close == std::string::npos) break;
+            out.push_back(' ');
+            i = close + 2;
+        } else {
+            out.push_back(c);
+            ++i;
+        }
+    }
+    return out;
+}
+
+// Scrape identifiers from the inline scripts that assign a Tailwind config
+// (`tailwind.config = {...}` or `window.tailwind = {...}`). Only those
+// script bodies count, with HTML and JS comments removed: plain JSON,
+// unrelated scripts and commented-out configs carry the same key shape but
+// are not a Tailwind fingerprint. The detector matches against any-of
+// clauses, so this surfaces representative keys; it does not rebuild a tree.
 std::vector<std::string> scrape_tailwind_tokens(const std::string& html) {
     std::set<std::string> seen;
-    // Match identifier-like keys "<ident>": before a colon or comma in
-    // a JS/JSON-ish context. Strict enough to skip noise but loose
-    // enough to handle Material 3 hyphenated tokens like
-    // "surface-container".
+    // Match identifier-like keys "<ident>": before a colon, loose enough to
+    // handle Material 3 hyphenated tokens like "surface-container".
     static const std::regex token_re(
         R"REX("([a-zA-Z][a-zA-Z0-9_-]{1,40})"\s*:)REX",
         std::regex::ECMAScript);
-    auto begin = std::sregex_iterator(html.begin(), html.end(), token_re);
-    auto end = std::sregex_iterator{};
-    for (auto it = begin; it != end; ++it)
-        seen.insert((*it)[1].str());
+    static const std::regex config_re(
+        R"REX((^|[^A-Za-z0-9_$])tailwind(\.config)?\s*=[^=])REX",
+        std::regex::ECMAScript);
+
+    std::string text = html;
+    for (size_t open = text.find("<!--"); open != std::string::npos;
+         open = text.find("<!--", open)) {
+        auto close = text.find("-->", open + 4);
+        text.erase(open, close == std::string::npos ? std::string::npos
+                                                    : close + 3 - open);
+    }
+    std::string lower = text;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+
+    for (size_t i = 0;;) {
+        auto open = lower.find("<script", i);
+        if (open == std::string::npos) break;
+        auto after = open + 7;
+        if (after < lower.size() && lower[after] != '>' &&
+            !std::isspace(static_cast<unsigned char>(lower[after]))) {
+            i = after;
+            continue;
+        }
+        auto body_start = lower.find('>', after);
+        if (body_start == std::string::npos) break;
+        ++body_start;
+        auto body_end = lower.find("</script", body_start);
+        if (body_end == std::string::npos) body_end = lower.size();
+        auto body = strip_js_comments(text.substr(body_start, body_end - body_start));
+        if (std::regex_search(body, config_re)) {
+            auto begin = std::sregex_iterator(body.begin(), body.end(), token_re);
+            for (auto it = begin; it != std::sregex_iterator{}; ++it)
+                seen.insert((*it)[1].str());
+        }
+        i = body_end;
+    }
     return {seen.begin(), seen.end()};
 }
 

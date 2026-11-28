@@ -484,4 +484,45 @@ TEST_CASE("json-key-equals follows dotted paths like the figma-plugin clauses",
     CHECK_FALSE(det::match_clause(empty, snap));
 }
 
+TEST_CASE("tailwind tokens come only from a live Tailwind config script",
+          "[import-detect]") {
+    ScratchDir scratch("tailwind-scope");
+    auto has = [](const det::InputSnapshot& snap, const char* token) {
+        return std::find(snap.tailwind_tokens.begin(), snap.tailwind_tokens.end(),
+                         token) != snap.tailwind_tokens.end();
+    };
+
+    // Plain JSON carries the same key shape but is not a Tailwind config.
+    write_text(scratch.path / "plain.json", R"JSON({"on-primary": "#fff"})JSON");
+    REQUIRE(det::snapshot_input(scratch.path / "plain.json").tailwind_tokens.empty());
+
+    // Keys in an unrelated script, an HTML comment or a commented-out
+    // config are not configuration either.
+    write_text(scratch.path / "inert.html", R"HTML(
+<!-- tailwind.config = { "surface-container": "#fff" } -->
+<script>const data = { "on-primary": 1 };</script>
+<script>
+  // tailwind.config = { theme: { colors: { "primary": "#000" } } };
+  /* tailwind.config = { "surface": "#111" }; */
+</script>
+)HTML");
+    REQUIRE(det::snapshot_input(scratch.path / "inert.html").tailwind_tokens.empty());
+
+    // A live config still yields its keys, a string value holding "//" does
+    // not hide the keys after it, and comments inside it are skipped.
+    write_text(scratch.path / "live.html", R"HTML(
+<script id="tailwind-config">
+  tailwind.config = { theme: { extend: { colors: {
+    "logo": "https://example.com/a.svg", "on-primary": "#fff",
+    // "commented-token": "#000",
+    "surface-container": "#eee"
+  }}}};
+</script>
+)HTML");
+    auto live = det::snapshot_input(scratch.path / "live.html");
+    REQUIRE(has(live, "on-primary"));
+    REQUIRE(has(live, "surface-container"));
+    REQUIRE_FALSE(has(live, "commented-token"));
+}
+
 int main() { return import_detect_test::run_all(); }
