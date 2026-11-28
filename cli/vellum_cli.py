@@ -1413,6 +1413,80 @@ def illustrator_command(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def source_adapter_path() -> Path | None:
+    override = os.environ.get("VELLUM_SOURCE_ADAPTER")
+    if override:
+        return Path(override).expanduser()
+    sdk_root = os.environ.get("VELLUM_SDK_ROOT")
+    if sdk_root:
+        candidate = Path(sdk_root).expanduser() / "sdk/bin/vellum-source-adapter"
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def detect_command(args: argparse.Namespace) -> dict[str, Any]:
+    """Report the source of an export without importing it."""
+    adapter = source_adapter_path()
+    if adapter is None:
+        raise CliFailure(
+            "--detect-only requires the native SDK source adapter.",
+            status="capability_unavailable", exit_code=EXIT_UNAVAILABLE,
+        )
+    source = Path(args.source).expanduser()
+    arguments = [str(adapter), "detect"]
+    if args.compat:
+        arguments += ["--compat", str(Path(args.compat).expanduser())]
+    sdk_root = os.environ.get("VELLUM_SDK_ROOT")
+    if sdk_root:
+        default = Path(sdk_root).expanduser() / "sdk/share/vellum/source-detection.json"
+        if default.is_file():
+            arguments += ["--default-compat", str(default)]
+    if args.report_new_format:
+        arguments.append("--report-new-format")
+    elif args.json:
+        arguments.append("--json")
+    arguments.append(str(source))
+    try:
+        completed = subprocess.run(arguments, text=True, capture_output=True, check=False)
+    except OSError as error:
+        raise CliFailure(
+            f"The source adapter could not start: {error}",
+            status="capability_unavailable", exit_code=EXIT_UNAVAILABLE,
+        ) from error
+    if completed.returncode not in (0, 2):
+        raise CliFailure(
+            completed.stderr.strip() or "Source detection failed.",
+            status="detect_failed", exit_code=EXIT_PROJECT,
+        )
+    text = completed.stdout
+    if args.report_new_format:
+        try:
+            report = json.loads(text)
+        except json.JSONDecodeError as error:
+            raise CliFailure("The source adapter wrote a malformed report.",
+                             status="detect_failed", exit_code=EXIT_PROJECT) from error
+        return result("import", ok=True, status="new_format_report", message=text.rstrip(),
+                      data=report)
+    detected = completed.returncode == 0
+    data: dict[str, Any] = {}
+    message = text.rstrip()
+    if args.json:
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError as error:
+            raise CliFailure("The source adapter wrote a malformed detection result.",
+                             status="detect_failed", exit_code=EXIT_PROJECT) from error
+        if not isinstance(payload, dict) or not isinstance(payload.get("source"), str):
+            raise CliFailure("The source adapter wrote a malformed detection result.",
+                             status="detect_failed", exit_code=EXIT_PROJECT)
+        data = payload
+        message = (f"detected source: {data['source']}" if detected
+                   else f"no detected source for {source}")
+    return result("import", ok=detected,
+                  status="detected" if detected else "no_detected_source",
+                  message=message, data=data)
+
 BAKED_EMITS = ("cpp", "swiftui")
 BAKED_EMIT_SOURCES = ("design-ir", "figma", "figma-plugin", "pencil", "v0", "designmd")
 DESIGN_EMIT_NAME = "vellum-design-emit.exe" if os.name == "nt" else "vellum-design-emit"
@@ -1722,6 +1796,9 @@ def parser() -> argparse.ArgumentParser:
         "import": [
             ("source", {"nargs": "*"}),
             ("--file", {"action": "append", "help": "add an ordered Figma plugin JSON export"}),
+            ("--detect-only", {"action": "store_true", "help": "report the detected source without importing"}),
+            ("--report-new-format", {"action": "store_true", "help": "print a draft detection entry for an unrecognized export"}),
+            ("--compat", {"help": "detection manifest for --detect-only"}),
             ("--source-type", {"choices": ["fig", "figma", "figma-plugin", "design-ir", "html", "claude-design", "pencil", "designmd", "v0", "stitch", "jsx", "preconverted-svg"], "default": "figma"}),
             ("--as", {"dest": "source_key", "default": "main"}),
             ("--interaction-plan", {}),
@@ -1776,7 +1853,7 @@ def forwarded_arguments(args: argparse.Namespace) -> list[str]:
     if args.command == "import":
         ignored.update({"output", "provenance", "timeout", "illustrator_input", "manifest",
                         "validate_only", "emit", "mode", "source_out", "dry_run",
-                        "strict_fidelity"})
+                        "strict_fidelity", "detect_only", "report_new_format", "compat"})
     forwarded: list[str] = []
     for key, value in vars(args).items():
         if key in ignored or value is None or value is False:
@@ -1870,12 +1947,38 @@ def main(argv: Iterable[str] | None = None) -> int:
                     status="invalid_arguments", exit_code=EXIT_USAGE,
                 )
         if args.command == "import":
-            if args.emit not in BAKED_EMITS and (args.dry_run or args.strict_fidelity):
+            detecting = args.detect_only or args.report_new_format
+            if args.compat is not None and not detecting:
+                raise CliFailure(
+                    "--compat applies only to --detect-only or --report-new-format.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
+            if detecting:
+                detection_forbidden = {
+                    "--as", "--emit", "--file", "--frame", "--interaction-plan",
+                    "--manifest", "--mode", "--out", "--output", "--page",
+                    "--project", "--provenance", "--source-out", "--source-type",
+                    "--strict-fidelity", "--timeout", "--validate-only", "--dry-run",
+                }
+                explicit_forbidden = [
+                    token for token in raw
+                    if token in detection_forbidden or any(
+                        token.startswith(option + "=") for option in detection_forbidden
+                    )
+                ]
+                if (not isinstance(args.source, str) or args.file or args.frame
+                        or args.outline or args.page is not None or explicit_forbidden
+                        or args.project is not None):
+                    raise CliFailure(
+                        "--detect-only takes one file or directory and no import options.",
+                        status="invalid_arguments", exit_code=EXIT_USAGE,
+                    )
+            elif args.emit not in BAKED_EMITS and (args.dry_run or args.strict_fidelity):
                 raise CliFailure(
                     "--dry-run and --strict-fidelity apply only to --emit cpp or swiftui.",
                     status="invalid_arguments", exit_code=EXIT_USAGE,
                 )
-            if args.emit in BAKED_EMITS:
+            elif args.emit in BAKED_EMITS:
                 validate_baked_emit(args)
             elif args.source_type in {"jsx", "preconverted-svg"}:
                 if args.source_type == "preconverted-svg" and args.validate_only is False:
@@ -1979,6 +2082,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             payload = design_command(args)
         elif args.command == "compare":
             payload = compare_command(args)
+        elif args.command == "import" and (args.detect_only or args.report_new_format):
+            payload = detect_command(args)
         elif args.command == "import" and args.emit in BAKED_EMITS:
             payload = baked_emit_import(args)
         elif args.command == "import" and args.source_type in {"jsx", "preconverted-svg"}:
@@ -2012,6 +2117,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             return 0
         if payload["status"] == "capability_unavailable":
             return EXIT_UNAVAILABLE
+        if payload["status"] == "no_detected_source":
+            return EXIT_PROJECT
         return EXIT_PROJECT if args.command == "doctor" else EXIT_BACKEND
     except CliFailure as error:
         emit(result(command, ok=False, status=error.status, message=str(error), diagnostics=error.diagnostics), json_output=json_output)

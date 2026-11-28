@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-4f6a983967e7d53c8a4ffdb98727138ba2197df9",
+  "kind": "resolution",
+  "created_at": "2026-11-28T12:23:42Z",
+  "resolves": "vellum-4f6a983967e7d53c8a4ffdb98727138ba2197df9",
+  "disposition": "superseded",
+  "rationale": "Integration merge of origin/main into the source-detection branch. It carries no independent source-detection contract beyond the side commits and the main changes it integrates; those substantive observations are classified separately, so this merge envelope is superseded.",
+  "owner": "@repair-lane",
+  "linked_commits": [
+    "4f6a983967e7d53c8a4ffdb98727138ba2197df9"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native"
+  ],
+  "effort_minutes": 5,
+  "shared_contract_release_blocker": false
+}

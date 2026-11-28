@@ -543,6 +543,105 @@ class CliTests(unittest.TestCase):
                 ],
             )
 
+    def stub_adapter(self, root: Path, code: int, stdout: str) -> Path:
+        """A source adapter that records its argv and answers with `stdout`."""
+        adapter = root / "vellum-source-adapter"
+        adapter.write_text(
+            f"#!{sys.executable}\n"
+            "import json, pathlib, sys\n"
+            f"pathlib.Path({str(root / 'argv.json')!r}).write_text(json.dumps(sys.argv[1:]))\n"
+            f"sys.stdout.write({stdout!r})\n"
+            f"sys.exit({code})\n",
+            encoding="utf-8",
+        )
+        adapter.chmod(0o755)
+        return adapter
+
+    def test_detect_only_reports_the_detected_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "export"
+            source.mkdir()
+            report = {"source": "stitch", "format_version": "2025.04", "confidence_pct": 100}
+            adapter = self.stub_adapter(root, 0, json.dumps(report))
+            completed = invoke("import", "--detect-only", str(source), "--compat",
+                               str(root / "compat.json"), "--json", cwd=root,
+                               env={"VELLUM_SOURCE_ADAPTER": str(adapter)})
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["status"], "detected")
+            self.assertEqual(payload["data"], report)
+            self.assertEqual(json.loads((root / "argv.json").read_text()), [
+                "detect", "--compat", str(root / "compat.json"), "--json", str(source)])
+
+    def test_detect_only_without_a_match_is_not_ok(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            page = root / "page.html"
+            page.write_text("<html></html>", encoding="utf-8")
+            adapter = self.stub_adapter(root, 2, json.dumps({"source": ""}))
+            completed = invoke("import", "--detect-only", str(page), "--json", cwd=root,
+                               env={"VELLUM_SOURCE_ADAPTER": str(adapter)})
+            self.assertEqual(completed.returncode, 3, completed.stdout)
+            self.assertEqual(json.loads(completed.stdout)["status"], "no_detected_source")
+            text = invoke("import", "--detect-only", str(page), cwd=root,
+                          env={"VELLUM_SOURCE_ADAPTER": str(adapter)})
+            self.assertEqual(text.returncode, 3)
+            self.assertNotIn("--json", json.loads((root / "argv.json").read_text()))
+
+    def test_detect_only_rejects_malformed_json_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "export"
+            source.mkdir()
+            adapter = self.stub_adapter(root, 0, "{}")
+            completed = invoke("import", "--detect-only", str(source), "--json", cwd=root,
+                               env={"VELLUM_SOURCE_ADAPTER": str(adapter)})
+            self.assertEqual(completed.returncode, 3, completed.stdout)
+            self.assertEqual(json.loads(completed.stdout)["status"], "detect_failed")
+
+    def test_report_new_format_implies_detection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report = {"candidate-source": "stitch", "fingerprint-additions": []}
+            adapter = self.stub_adapter(root, 0, json.dumps(report))
+            completed = invoke("import", "--report-new-format", str(root), "--json", cwd=root,
+                               env={"VELLUM_SOURCE_ADAPTER": str(adapter)})
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual((payload["status"], payload["data"]), ("new_format_report", report))
+            self.assertEqual(json.loads((root / "argv.json").read_text()),
+                             ["detect", "--report-new-format", str(root)])
+
+    def test_detect_only_refuses_misuse_and_a_missing_adapter(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            compat_alone = invoke("import", str(root), "--compat", "x.json", "--json", cwd=root)
+            self.assertEqual(compat_alone.returncode, 2)
+            self.assertEqual(json.loads(compat_alone.stdout)["status"], "invalid_arguments")
+            with_frame = invoke("import", "--detect-only", str(root), "--frame", "A", "--json",
+                                cwd=root)
+            self.assertEqual(with_frame.returncode, 2)
+            for option in (("--emit", "cpp"), ("--source-type", "figma"),
+                           ("--project", "project"), ("--output", "out"),
+                           ("--as", "alternate")):
+                with self.subTest(option=option[0]):
+                    with_import_option = invoke(
+                        "import", "--detect-only", str(root), *option, "--json", cwd=root,
+                    )
+                    self.assertEqual(with_import_option.returncode, 2)
+                    self.assertEqual(
+                        json.loads(with_import_option.stdout)["status"], "invalid_arguments",
+                    )
+            env = {"VELLUM_SOURCE_ADAPTER": "", "VELLUM_SDK_ROOT": ""}
+            missing = invoke("import", "--detect-only", str(root), "--json", cwd=root, env=env)
+            self.assertEqual(missing.returncode, 4)
+            self.assertEqual(json.loads(missing.stdout)["status"], "capability_unavailable")
+            failing = self.stub_adapter(root, 1, "")
+            failed = invoke("import", "--detect-only", str(root), "--json", cwd=root,
+                            env={"VELLUM_SOURCE_ADAPTER": str(failing)})
+            self.assertEqual(failed.returncode, 3)
+            self.assertEqual(json.loads(failed.stdout)["status"], "detect_failed")
     def recording_backend(self, root: Path) -> Path:
         backend = root / "vellum-backend"
         backend.write_text(
