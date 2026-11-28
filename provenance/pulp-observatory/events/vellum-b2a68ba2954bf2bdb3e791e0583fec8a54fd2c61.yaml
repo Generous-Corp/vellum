@@ -1,0 +1,48 @@
+{
+  "class": "test",
+  "contract_keys": [
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-27T11:10:03Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-b2a68ba2954bf2bdb3e791e0583fec8a54fd2c61",
+  "include_dependency_deltas": [
+    "authoring/design_pipeline/CMakeLists.txt",
+    "authoring/design_pipeline/design_debug/CMakeLists.txt",
+    "authoring/design_pipeline/include/vellum/authoring/tweak_store.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "authoring/design_pipeline/CMakeLists.txt",
+    "authoring/design_pipeline/design_debug/CMakeLists.txt",
+    "authoring/design_pipeline/include/vellum/authoring/tweak_store.hpp",
+    "authoring/design_pipeline/src/tweak_store.cpp",
+    "authoring/design_pipeline/tests/tweak_store_test.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "fceca68ef95e39b284de2a6d34ff875f0c95baed",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "4bc0a996a9b9c5e28a34e3a05fe0f02d954a0907",
+    "to_commit": "80e08d8c9a78e113e79b27ae921ceb2ed500d15c"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "b2a68ba2954bf2bdb3e791e0583fec8a54fd2c61",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}
