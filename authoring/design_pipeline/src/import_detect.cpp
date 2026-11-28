@@ -100,86 +100,116 @@ std::string lower_trim(std::string s) {
     return s;
 }
 
-// Extract all <script ...> attribute values for `attr` from `html`.
-// Hand-rolled to avoid pulling a full HTML parser into the CLI build.
-std::vector<std::string> scrape_script_attr(const std::string& html, const std::string& attr) {
-    std::vector<std::string> out;
-    std::string html_lower = html;
-    for (auto& c : html_lower)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    std::string needle = attr;
-    for (auto& c : needle)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+// The attributes of one opening tag, read with HTML's quoting rules so text
+// inside one attribute's quoted value never counts as another attribute.
+// `name_end` is the index just past the tag name. `end` is the index just
+// past the closing '>', or npos when the tag never closes.
+struct OpenTag {
+    std::vector<std::pair<std::string, std::string>> attrs;  // lowercase name, raw value
+    size_t end = std::string::npos;
+};
 
+OpenTag parse_open_tag(const std::string& html, size_t name_end) {
+    OpenTag tag;
+    auto is_space = [](char c) {
+        return std::isspace(static_cast<unsigned char>(c)) != 0;
+    };
+    size_t i = name_end;
+    while (i < html.size()) {
+        while (i < html.size() && (is_space(html[i]) || html[i] == '/')) ++i;
+        if (i >= html.size()) break;
+        if (html[i] == '>') {
+            tag.end = i + 1;
+            return tag;
+        }
+        size_t name_start = i;
+        while (i < html.size() && !is_space(html[i]) && html[i] != '=' &&
+               html[i] != '>' && html[i] != '/')
+            ++i;
+        if (i == name_start) {  // a stray '=' with no name
+            ++i;
+            continue;
+        }
+        std::string name = lower_trim(html.substr(name_start, i - name_start));
+        size_t after_name = i;
+        while (i < html.size() && is_space(html[i])) ++i;
+        if (i >= html.size() || html[i] != '=') {
+            i = after_name;  // a bare attribute has no value
+            continue;
+        }
+        ++i;
+        while (i < html.size() && is_space(html[i])) ++i;
+        if (i >= html.size()) break;
+        std::string value;
+        if (html[i] == '"' || html[i] == '\'') {
+            char q = html[i++];
+            auto close = html.find(q, i);
+            if (close == std::string::npos) return tag;  // unterminated value
+            value = html.substr(i, close - i);
+            i = close + 1;
+        } else {
+            size_t v = i;
+            while (i < html.size() && !is_space(html[i]) && html[i] != '>') ++i;
+            value = html.substr(v, i - v);
+        }
+        tag.attrs.emplace_back(std::move(name), std::move(value));
+    }
+    return tag;
+}
+
+// Visit each <script> element outside HTML comments, passing its opening
+// tag and its body. Hand-rolled to keep a full HTML parser out of the CLI.
+template <typename Visit>
+void for_each_script(const std::string& html, Visit&& visit) {
+    std::string lower = html;
+    for (auto& c : lower)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     size_t i = 0;
     while (i < html.size()) {
         // A commented example is not a script element. Skip the whole comment
         // whenever it appears before the next candidate tag.
-        auto comment = html_lower.find("<!--", i);
-        // Find next "<script" (case-insensitive) opening.
-        auto open = html_lower.find("<script", i);
+        auto comment = lower.find("<!--", i);
+        auto open = lower.find("<script", i);
         if (comment != std::string::npos &&
             (open == std::string::npos || comment < open)) {
-            auto comment_end = html_lower.find("-->", comment + 4);
+            auto comment_end = lower.find("-->", comment + 4);
             if (comment_end == std::string::npos) break;
             i = comment_end + 3;
             continue;
         }
         if (open == std::string::npos) break;
-        const auto tag_name_end = open + 7;
-        if (tag_name_end < html_lower.size()) {
-            const char next = html_lower[tag_name_end];
-            if (!(next == '>' || next == '/' || next == ' ' ||
-                  next == '\t' || next == '\r' || next == '\n')) {
-                i = tag_name_end;
+        const auto name_end = open + 7;
+        if (name_end < lower.size()) {
+            const char next = lower[name_end];
+            if (!(next == '>' || next == '/' ||
+                  std::isspace(static_cast<unsigned char>(next)))) {
+                i = name_end;
                 continue;
             }
         }
-        // Find the closing '>' of this open tag.
-        auto close = html.find('>', open);
-        if (close == std::string::npos) break;
-        std::string tag = html.substr(open, close - open);
-        // Lowercase a copy for attr lookup; preserve original for value.
-        std::string tag_lower = tag;
-        for (auto& c : tag_lower)
-            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        size_t a = 0;
-        while ((a = tag_lower.find(needle, a)) != std::string::npos) {
-            if (a > 0) {
-                const char before = tag_lower[a - 1];
-                if (!(before == ' ' || before == '\t' ||
-                      before == '\r' || before == '\n')) {
-                    a += needle.size();
-                    continue;
-                }
-            }
-            // HTML permits whitespace around the equals sign.
-            auto equals = a + needle.size();
-            while (equals < tag_lower.size() &&
-                   std::isspace(static_cast<unsigned char>(tag_lower[equals])))
-                ++equals;
-            if (equals >= tag_lower.size() || tag_lower[equals] != '=') {
-                a += needle.size();
-                continue;
-            }
-            auto v = equals + 1;
-            while (v < tag.size() &&
-                   std::isspace(static_cast<unsigned char>(tag[v])))
-                ++v;
-            if (v < tag.size() && (tag[v] == '"' || tag[v] == '\'')) {
-                char q = tag[v++];
-                auto end = tag.find(q, v);
-                if (end != std::string::npos)
-                    out.push_back(tag.substr(v, end - v));
-            } else {
-                auto end = tag.find_first_of(" \t\r\n>", v);
-                if (end == std::string::npos) end = tag.size();
-                out.push_back(tag.substr(v, end - v));
-            }
-            break;
-        }
-        i = close + 1;
+        auto tag = parse_open_tag(html, name_end);
+        if (tag.end == std::string::npos) break;
+        auto body_end = lower.find("</script", tag.end);
+        if (body_end == std::string::npos) body_end = html.size();
+        visit(tag, std::string_view(html).substr(tag.end, body_end - tag.end));
+        // Resume after the opening tag, not the body: `<script/>` has no
+        // closing tag, and skipping to the next one would hide a script.
+        i = tag.end;
     }
+}
+
+// Extract the value of `attr` from every <script> element in `html`.
+std::vector<std::string> scrape_script_attr(const std::string& html, const std::string& attr) {
+    std::vector<std::string> out;
+    const std::string needle = lower_trim(attr);
+    for_each_script(html, [&](const OpenTag& tag, std::string_view) {
+        for (const auto& [name, value] : tag.attrs) {
+            if (name == needle) {  // HTML keeps the first of duplicate attributes
+                out.push_back(value);
+                break;
+            }
+        }
+    });
     return out;
 }
 
@@ -232,40 +262,13 @@ std::vector<std::string> scrape_tailwind_tokens(const std::string& html) {
     static const std::regex config_re(
         R"REX((^|[^A-Za-z0-9_$])tailwind(\.config)?\s*=[^=])REX",
         std::regex::ECMAScript);
-
-    std::string text = html;
-    for (size_t open = text.find("<!--"); open != std::string::npos;
-         open = text.find("<!--", open)) {
-        auto close = text.find("-->", open + 4);
-        text.erase(open, close == std::string::npos ? std::string::npos
-                                                    : close + 3 - open);
-    }
-    std::string lower = text;
-    std::transform(lower.begin(), lower.end(), lower.begin(),
-                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-
-    for (size_t i = 0;;) {
-        auto open = lower.find("<script", i);
-        if (open == std::string::npos) break;
-        auto after = open + 7;
-        if (after < lower.size() && lower[after] != '>' &&
-            !std::isspace(static_cast<unsigned char>(lower[after]))) {
-            i = after;
-            continue;
-        }
-        auto body_start = lower.find('>', after);
-        if (body_start == std::string::npos) break;
-        ++body_start;
-        auto body_end = lower.find("</script", body_start);
-        if (body_end == std::string::npos) body_end = lower.size();
-        auto body = strip_js_comments(text.substr(body_start, body_end - body_start));
-        if (std::regex_search(body, config_re)) {
-            auto begin = std::sregex_iterator(body.begin(), body.end(), token_re);
-            for (auto it = begin; it != std::sregex_iterator{}; ++it)
-                seen.insert((*it)[1].str());
-        }
-        i = body_end;
-    }
+    for_each_script(html, [&](const OpenTag&, std::string_view raw) {
+        auto body = strip_js_comments(std::string(raw));
+        if (!std::regex_search(body, config_re)) return;
+        auto begin = std::sregex_iterator(body.begin(), body.end(), token_re);
+        for (auto it = begin; it != std::sregex_iterator{}; ++it)
+            seen.insert((*it)[1].str());
+    });
     return {seen.begin(), seen.end()};
 }
 

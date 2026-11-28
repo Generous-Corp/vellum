@@ -525,4 +525,17 @@ TEST_CASE("tailwind tokens come only from a live Tailwind config script",
     REQUIRE_FALSE(has(live, "commented-token"));
 }
 
+TEST_CASE("script attributes are read outside other attributes' quoted values",
+          "[import-detect]") {
+    ScratchDir scratch("script-attr-quotes");
+    write_text(scratch.path / "quoted.html", R"HTML(
+<script data-example=' type="__bundler/template" src="/fake.js"'></script>
+<script data-gt="a > b" type="module" src='/real.js'></script>
+<script type="text/plain" type="__bundler/template"></script>
+)HTML");
+    auto snap = det::snapshot_input(scratch.path / "quoted.html");
+    REQUIRE(snap.script_types == std::vector<std::string>{"module", "text/plain"});
+    REQUIRE(snap.script_srcs == std::vector<std::string>{"/real.js"});
+}
+
 int main() { return import_detect_test::run_all(); }
