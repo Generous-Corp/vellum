@@ -103,6 +103,15 @@ vellum_add_framework_test(render-surface-logic
 target_include_directories(vellum-framework-render-surface-logic-test PRIVATE
     "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
 
+# SkpFrameCapture records a frame and serializes a .skp without a GPU.
+vellum_add_framework_test(skp-capture
+    SOURCES skp_capture_test.cpp
+    UNITS Vellum::MirrorRender_2d)
+# The PNG fixture comes from HeadlessSurface, whose header includes the device
+# layer's.
+target_include_directories(vellum-framework-skp-capture-test PRIVATE
+    "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     vellum_add_framework_test(canvas-raster-parity
         SOURCES canvas_raster_parity_test.cpp
@@ -241,7 +250,64 @@ if(TARGET vellum-dawn-headers AND TARGET vellum-gpu)
     else()
         set_tests_properties(vellum.framework.headless-surface-gpu PROPERTIES SKIP_RETURN_CODE 77)
     endif()
+    # SkiaSurface frames, retained layers, the persistent scene and readback.
+    vellum_add_framework_test(skia-surface-frames
+        SOURCES skia_surface_frames_test.cpp
+        UNITS Vellum::MirrorRender_2d Vellum::DawnHeaders Vellum::Gpu)
+    target_include_directories(vellum-framework-skia-surface-frames-test PRIVATE
+        "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
+    set_tests_properties(vellum.framework.skia-surface-frames PROPERTIES SKIP_RETURN_CODE 77)
+    # Canvas path fills and strokes rasterized on the device and read back.
+    vellum_add_framework_test(canvas-path-raster
+        SOURCES canvas_path_raster_test.cpp
+        UNITS Vellum::MirrorRender_2d Vellum::MirrorView_core Vellum::DawnHeaders Vellum::Gpu)
+    target_include_directories(vellum-framework-canvas-path-raster-test PRIVATE
+        "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
+    set_tests_properties(vellum.framework.canvas-path-raster PROPERTIES SKIP_RETURN_CODE 77)
+    # The glyph preblend every surface is created with, and that text agrees
+    # across the surface, its retained layers and its scene target.
+    vellum_add_framework_test(text-raster-policy
+        SOURCES text_raster_policy_test.cpp
+        UNITS Vellum::MirrorRender_2d Vellum::DawnHeaders Vellum::Gpu)
+    target_include_directories(vellum-framework-text-raster-policy-test PRIVATE
+        "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
+    target_compile_definitions(vellum-framework-text-raster-policy-test PRIVATE
+        VELLUM_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/framework/external/fonts/JetBrainsMono-Regular.ttf")
+    set_tests_properties(vellum.framework.text-raster-policy PROPERTIES SKIP_RETURN_CODE 77)
+    # Caller-supplied SkSL whose names match Graphite's own runtime-effect names.
+    vellum_add_framework_test(runtime-effect-names-gpu
+        SOURCES runtime_effect_names_gpu_test.cpp
+        UNITS Vellum::MirrorRender_2d Vellum::DawnHeaders Vellum::Gpu)
+    target_include_directories(vellum-framework-runtime-effect-names-gpu-test PRIVATE
+        "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
+    set_tests_properties(vellum.framework.runtime-effect-names-gpu PROPERTIES SKIP_RETURN_CODE 77)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        # A presentable surface on a CAMetalLayer no window hosts: swapchain
+        # configuration, the acquired texture's size, and fractional-scale readback.
+        vellum_add_framework_test(gpu-surface-swapchain-macos
+            SOURCES gpu_surface_swapchain_macos_test.mm
+            UNITS Vellum::MirrorRender_2d Vellum::DawnHeaders Vellum::Gpu)
+        target_include_directories(vellum-framework-gpu-surface-swapchain-macos-test PRIVATE
+            "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
+        target_link_libraries(vellum-framework-gpu-surface-swapchain-macos-test PRIVATE
+            "-framework QuartzCore")
+        set_tests_properties(vellum.framework.gpu-surface-swapchain-macos PROPERTIES
+            SKIP_RETURN_CODE 77 TIMEOUT 120)
+    else()
+        set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+            "gpu_surface_swapchain_macos_test.mm")
+    endif()
 else()
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+        "gpu_surface_swapchain_macos_test.mm")
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+        "runtime_effect_names_gpu_test.cpp")
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+        "text_raster_policy_test.cpp")
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+        "canvas_path_raster_test.cpp")
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+        "skia_surface_frames_test.cpp")
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
         "gpu_surface_device_test.cpp")
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
