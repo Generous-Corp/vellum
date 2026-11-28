@@ -199,7 +199,16 @@ if(TARGET vellum-dawn-headers AND TARGET vellum-gpu)
     target_include_directories(vellum-framework-webgpu-error-scopes-test PRIVATE
         "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
     set_tests_properties(vellum.framework.webgpu-error-scopes PROPERTIES SKIP_RETURN_CODE 77)
+    # The device layer's offscreen surface on a real Dawn device.
+    vellum_add_framework_test(gpu-surface-device
+        SOURCES gpu_surface_device_test.cpp
+        UNITS Vellum::MirrorRender_2d Vellum::DawnHeaders Vellum::Gpu)
+    target_include_directories(vellum-framework-gpu-surface-device-test PRIVATE
+        "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
+    set_tests_properties(vellum.framework.gpu-surface-device PROPERTIES SKIP_RETURN_CODE 77)
 else()
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+        "gpu_surface_device_test.cpp")
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
         "webgpu_error_scopes_test.cpp")
 endif()
@@ -394,9 +403,26 @@ vellum_add_framework_test(design-codegen-web-grid
     SOURCES design_codegen_web_grid_test.cpp
     UNITS Vellum::MirrorView_script)
 
+vellum_add_framework_test(design-frame-host-param
+    SOURCES design_frame_host_param_test.cpp
+    UNITS Vellum::MirrorView_core Vellum::Value)
+
 vellum_add_framework_test(host-param-surface-model
     SOURCES host_param_surface_model_test.cpp
     UNITS Vellum::MirrorView_core Vellum::Value)
+
+vellum_add_framework_test(js-bytecode-embed
+    SOURCES js_bytecode_embed_test.cpp
+    UNITS Vellum::MirrorView_script
+           js_bytecode_embed_fixture js_bytecode_embed_bridge_fixture)
+target_include_directories(vellum-framework-js-bytecode-embed-test PRIVATE
+    "${CMAKE_BINARY_DIR}")
+target_compile_definitions(vellum-framework-js-bytecode-embed-test PRIVATE
+    VELLUM_TEST_JS_BYTECODE_FIXTURE="${PROJECT_SOURCE_DIR}/fixtures/js-bytecode/bytecode_fixture.js")
+
+vellum_add_framework_test(jsx-lock
+    SOURCES jsx_lock_test.cpp
+    UNITS Vellum::MirrorView_script)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     # NSAccessibility roles, the element tree the editor view hands to AppKit and
