@@ -21,6 +21,7 @@ REPO = Path(__file__).resolve().parents[2]
 CLI = REPO / "cli" / "vellum_cli.py"
 IR_FIXTURE = REPO / "fixtures/emitter-conformance/keyed-list-18.ir.json"
 LOSSY_FIXTURE = REPO / "fixtures/emitter-conformance/form-controls-08.ir.json"
+STATIC_FIXTURE = REPO / "fixtures/baked-emit/static-export.html"
 PLUGIN_FIXTURE = REPO / "fixtures/emitter-conformance/fidelity-scene-no-display.pulp.json"
 TOOL = os.environ.get("VELLUM_DESIGN_EMIT", "")
 
@@ -331,6 +332,40 @@ class BakedEmitTests(unittest.TestCase):
         self.assertEqual(code, 2, payload)
         self.assertIn(".fig", payload["message"])
         self.assertFalse((self.out / "ui.cpp").exists())
+
+    def test_claude_design_offline_emits_visible_text_only(self) -> None:
+        code, payload = vellum("--source-type", "claude-design", str(STATIC_FIXTURE), "--offline",
+                               "--mode", "baked", "--emit", "cpp", "--out", str(self.out / "ui.cpp"))
+        self.assertEqual(code, 0, payload)
+        source = (self.out / "ui.cpp").read_text(encoding="utf-8")
+        for text in ("Gain Stage", "Drive", "Output Trim"):
+            self.assertIn(text, source)
+        self.assertNotIn("never rendered", source)
+
+    def test_claude_design_offline_emits_swiftui(self) -> None:
+        code, payload = vellum("--source-type", "claude-design", str(STATIC_FIXTURE), "--offline",
+                               "--mode", "baked", "--emit", "swiftui", "--out", str(self.out / "Gain.swift"))
+        self.assertEqual(code, 0, payload)
+        self.assertIn("Gain Stage", (self.out / "Gain.swift").read_text(encoding="utf-8"))
+
+    def test_claude_design_without_offline_points_at_the_browser_route(self) -> None:
+        code, payload = vellum("--source-type", "claude-design", str(STATIC_FIXTURE), "--mode", "baked",
+                               "--emit", "cpp", "--out", str(self.out / "ui.cpp"))
+        self.assertEqual(code, 2, payload)
+        self.assertIn("--offline", payload["message"])
+        self.assertIn("design-ir", payload["message"])
+        self.assertFalse((self.out / "ui.cpp").exists())
+
+    def test_offline_is_refused_for_a_structured_source(self) -> None:
+        code, payload = vellum("--source-type", "design-ir", str(IR_FIXTURE), "--offline", "--mode", "baked",
+                               "--emit", "cpp", "--out", str(self.out / "ui.cpp"))
+        self.assertEqual(code, 2, payload)
+        self.assertIn("--offline applies only to --source-type claude-design", payload["message"])
+
+    def test_offline_needs_a_baked_emit(self) -> None:
+        code, payload = vellum("--source-type", "claude-design", str(STATIC_FIXTURE), "--offline")
+        self.assertEqual(code, 2, payload)
+        self.assertIn("--offline applies only to --emit cpp or swiftui", payload["message"])
 
     def test_dry_run_returns_content_and_writes_nothing(self) -> None:
         code, payload = vellum("--source-type", "design-ir", str(IR_FIXTURE), "--mode", "baked",
