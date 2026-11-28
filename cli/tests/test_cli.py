@@ -80,7 +80,7 @@ class CliTests(unittest.TestCase):
     def test_version_matches_the_immutable_framework_release(self) -> None:
         completed = invoke("--version")
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertEqual(completed.stdout.strip(), "vellum 0.2.3")
+        self.assertEqual(completed.stdout.strip(), "vellum 0.2.4")
 
     def test_create_is_deterministic_and_has_maintainable_shape(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -123,7 +123,7 @@ class CliTests(unittest.TestCase):
             )
             lock = json.loads((first / "framework.lock").read_text())
             self.assertEqual(lock["project"]["id"], hashlib.sha256(b"vellum-project-v1:example-app").hexdigest()[:24])
-            self.assertEqual(lock["framework"]["version"], "0.2.3")
+            self.assertEqual(lock["framework"]["version"], "0.2.4")
             self.assertEqual(lock["framework"]["artifact"], {
                 "verified": False,
                 "sha256": None,
@@ -159,8 +159,8 @@ class CliTests(unittest.TestCase):
             }
             (sdk / "metadata.json").write_text(json.dumps({
                 "schema": "vellum.sdk-artifact.v1",
-                "framework_version": "0.2.3",
-                "cli_version": "0.2.3",
+                "framework_version": "0.2.4",
+                "cli_version": "0.2.4",
                 "cli_api": 1,
                 "source_commit": None,
                 "target": "test-host",
@@ -187,7 +187,7 @@ class CliTests(unittest.TestCase):
                 "verified": False,
                 "artifact": None,
                 "artifact_sha256": None,
-                "framework_version": "0.2.3",
+                "framework_version": "0.2.4",
                 "target": "test-host",
                 "source_commit": None,
             }), encoding="utf-8")
@@ -251,15 +251,15 @@ class CliTests(unittest.TestCase):
                 "test": False, "capture": False, "package": False,
             }
             (sdk / "metadata.json").write_text(json.dumps({
-                "schema": "vellum.sdk-artifact.v1", "framework_version": "0.2.3",
-                "cli_version": "0.2.3", "cli_api": 1, "source_commit": None,
+                "schema": "vellum.sdk-artifact.v1", "framework_version": "0.2.4",
+                "cli_version": "0.2.4", "cli_api": 1, "source_commit": None,
                 "target": "local-development",
                 "capabilities": {"authoring_cli": True, "cmake_sdk": False, "gpu_renderer": False, "custom_components": False, "commands": commands},
                 "files": [],
             }), encoding="utf-8")
             (sdk / "install-manifest.json").write_text(json.dumps({
                 "schema": "vellum.sdk-install.v1", "verified": False,
-                "artifact": None, "artifact_sha256": None, "framework_version": "0.2.3",
+                "artifact": None, "artifact_sha256": None, "framework_version": "0.2.4",
                 "target": "local-development", "source_commit": None,
             }), encoding="utf-8")
             backend = root / "backend"
@@ -415,8 +415,8 @@ class CliTests(unittest.TestCase):
             }
             (sdk / "metadata.json").write_text(json.dumps({
                 "schema": "vellum.sdk-artifact.v1",
-                "framework_version": "0.2.3",
-                "cli_version": "0.2.3",
+                "framework_version": "0.2.4",
+                "cli_version": "0.2.4",
                 "cli_api": 1,
                 "source_commit": None,
                 "target": "dual-target-test",
@@ -438,7 +438,7 @@ class CliTests(unittest.TestCase):
                 "verified": False,
                 "artifact": None,
                 "artifact_sha256": None,
-                "framework_version": "0.2.3",
+                "framework_version": "0.2.4",
                 "target": "dual-target-test",
                 "source_commit": None,
             }), encoding="utf-8")
@@ -558,10 +558,70 @@ class CliTests(unittest.TestCase):
                 payload["data"]["backend"]["data"]["argv"],
                 [
                     "build", "--project", str(project.resolve()), "--json",
-                    "--framework-version", "0.2.3", "--cli-api", "1",
+                    "--framework-version", "0.2.4", "--cli-api", "1",
                     "--target", "web",
                 ],
             )
+
+    def recording_backend(self, root: Path) -> Path:
+        backend = root / "vellum-backend"
+        backend.write_text(
+            f"#!{sys.executable}\n"
+            "import json, sys\n"
+            "print(json.dumps({'ok': True, 'status': 'recorded', 'message': 'recorded', "
+            "'data': {'argv': sys.argv[1:]}, 'diagnostics': []}))\n",
+            encoding="utf-8",
+        )
+        backend.chmod(0o755)
+        return backend
+
+    def test_stitch_import_is_an_explicit_native_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "app"
+            self.assertEqual(invoke("create", "Stitch", "-d", str(project)).returncode, 0)
+            source = root / "code.html"
+            source.write_text("<html><body><h1>Sample</h1></body></html>", encoding="utf-8")
+            env = {"VELLUM_BACKEND": str(self.recording_backend(root))}
+            for arguments in (("stitch", str(source)), (str(source), "--source-type", "stitch")):
+                completed = invoke("import", *arguments, "--json", cwd=project, env=env)
+                self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+                argv = json.loads(completed.stdout)["data"]["backend"]["data"]["argv"]
+                self.assertEqual(argv[0], "import")
+                self.assertEqual(argv[argv.index("--source-type") + 1], "stitch")
+                self.assertIn(str(source), argv)
+
+    def test_stitch_reimport_stays_on_the_locked_native_adapter(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "app"
+            self.assertEqual(invoke("create", "Stitch", "-d", str(project)).returncode, 0)
+            source = root / "code.html"
+            source.write_text("<html><body><h1>Sample</h1></body></html>", encoding="utf-8")
+            lock = project / "design/import.lock.json"
+            lock.parent.mkdir(parents=True, exist_ok=True)
+            # A pinned-provenance requirement with no pinned browser makes the
+            # browser capture route refuse before any browser could start.
+            env = {
+                "VELLUM_BACKEND": str(self.recording_backend(root)),
+                "VELLUM_REQUIRE_CHROME_PROVENANCE": "1",
+                "VELLUM_CHROME_PATH": "",
+            }
+            for adapter, routed_natively in (("stitch", True), ("html", False)):
+                lock.write_text(json.dumps({
+                    "schema": "vellum.design-import-lock.v1",
+                    "sources": {"main": {"adapter": adapter}},
+                }), encoding="utf-8")
+                completed = invoke("reimport", "--source", str(source), "--json",
+                                   cwd=project, env=env)
+                payload = json.loads(completed.stdout)
+                if routed_natively:
+                    self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+                    self.assertEqual(payload["data"]["backend"]["data"]["argv"][0], "reimport")
+                    self.assertIn(str(source), payload["data"]["backend"]["data"]["argv"])
+                else:
+                    self.assertNotEqual(completed.returncode, 0, completed.stdout)
+                    self.assertNotEqual(payload["status"], "recorded")
 
     def test_design_check_and_diff_use_stable_nested_cli_protocol(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -597,7 +657,7 @@ class CliTests(unittest.TestCase):
                     payload["data"]["backend"]["data"]["argv"],
                     [
                         expected_backend, "--project", str(project.resolve()), "--json",
-                        "--framework-version", "0.2.3", "--cli-api", "1",
+                        "--framework-version", "0.2.4", "--cli-api", "1",
                         "--as", "shell",
                     ],
                 )
@@ -763,8 +823,8 @@ class CliTests(unittest.TestCase):
             shutil.copytree(REPO / "packages/vellum-ui", sdk / "ui")
             (sdk / "metadata.json").write_text(json.dumps({
                 "schema": "vellum.sdk-artifact.v1",
-                "framework_version": "0.2.3",
-                "cli_version": "0.2.3",
+                "framework_version": "0.2.4",
+                "cli_version": "0.2.4",
                 "cli_api": 1,
                 "source_commit": None,
                 "target": "local-development",
@@ -780,7 +840,7 @@ class CliTests(unittest.TestCase):
             (sdk / "install-manifest.json").write_text(json.dumps({
                 "schema": "vellum.sdk-install.v1", "verified": False,
                 "artifact": None, "artifact_sha256": None,
-                "framework_version": "0.2.3", "target": "local-development",
+                "framework_version": "0.2.4", "target": "local-development",
                 "source_commit": None,
             }), encoding="utf-8")
             project = root / "app"
@@ -862,8 +922,8 @@ class CliTests(unittest.TestCase):
             }
             metadata = {
                 "schema": "vellum.sdk-artifact.v1",
-                "framework_version": "0.2.3",
-                "cli_version": "0.2.3",
+                "framework_version": "0.2.4",
+                "cli_version": "0.2.4",
                 "cli_api": 1,
                 "source_commit": "a" * 40,
                 "target": "test-host",
@@ -872,9 +932,9 @@ class CliTests(unittest.TestCase):
             manifest = {
                 "schema": "vellum.sdk-install.v1",
                 "verified": True,
-                "artifact": "vellum-sdk-0.2.3-test-host.tar.gz",
+                "artifact": "vellum-sdk-0.2.4-test-host.tar.gz",
                 "artifact_sha256": "b" * 64,
-                "framework_version": "0.2.3",
+                "framework_version": "0.2.4",
                 "target": "test-host",
                 "source_commit": "a" * 40,
             }
@@ -901,7 +961,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(invoke("create", "Compatibility", "-d", str(project)).returncode, 0)
             lock_path = project / "framework.lock"
             lock = json.loads(lock_path.read_text())
-            lock["framework"]["version"] = "0.2.3"
+            lock["framework"]["version"] = "0.2.4"
             lock_path.write_text(json.dumps(lock), encoding="utf-8")
             compatible = invoke("build", "--json", cwd=project)
             self.assertEqual(compatible.returncode, 4)

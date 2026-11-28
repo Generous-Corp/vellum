@@ -15,6 +15,17 @@
 #include <choc/text/choc_JSON.h>
 #include <choc/text/choc_UTF8.h>
 
+#if defined(_WIN32)
+#include <windows.h>
+#include <atomic>
+#include <cstdio>
+#else
+#include <cerrno>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <cstdlib>
+#endif
+
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -23,6 +34,7 @@
 #include <map>
 #include <sstream>
 #include <system_error>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -80,21 +92,60 @@ std::string read_text_file(const fs::path& p) {
 // file intact rather than truncated. Matters most for the ledger sidecar, whose
 // recorded history must survive an interrupted record.
 bool write_text_file(const fs::path& p, const std::string& content) {
-    fs::path tmp = p;
-    tmp += ".vellum-tmp";
-    {
-        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
-        if (!f.is_open()) return false;
-        f << content;
-        f.flush();
-        if (!f.good()) {
-            f.close();
-            std::error_code ec;
-            fs::remove(tmp, ec);
-            return false;
+    // The temp file has a unique, unpredictable name and is created exclusively
+    // (O_EXCL, never following a symlink), so a pre-created symlink cannot
+    // redirect the write and concurrent invocations never share a temp path.
+    fs::path dir = p.parent_path();
+    if (dir.empty()) dir = ".";
+    const std::string tmpl = (dir / (p.filename().string() + ".vellum-tmp.XXXXXX")).string();
+#if defined(_WIN32)
+    fs::path tmp;
+    FILE* fp = nullptr;
+    for (int attempt = 0; attempt < 16 && !fp; ++attempt) {
+        static std::atomic<unsigned> counter{0};
+        tmp = dir / (p.filename().string() + ".vellum-tmp." +
+                     std::to_string(GetCurrentProcessId()) + "." +
+                     std::to_string(counter.fetch_add(1)) + "." +
+                     std::to_string(GetTickCount64()));
+        fp = _wfopen(tmp.c_str(), L"wbx");  // 'x': fail if the path exists
+    }
+    if (!fp) return false;
+    bool ok = std::fwrite(content.data(), 1, content.size(), fp) == content.size();
+    ok = (std::fflush(fp) == 0) && ok;
+    ok = (std::fclose(fp) == 0) && ok;
+#else
+    std::vector<char> buf(tmpl.begin(), tmpl.end());
+    buf.push_back('\0');
+    const int fd = ::mkstemp(buf.data());  // O_CREAT|O_EXCL, mode 0600
+    if (fd < 0) return false;
+    const fs::path tmp(buf.data());
+    // Keep the destination's mode when it exists, else 0644 (mkstemp is 0600).
+    // No umask juggling: that is process-wide and racy in a threaded process.
+    mode_t mode = 0644;
+    struct stat st;
+    if (::stat(p.c_str(), &st) == 0 && S_ISREG(st.st_mode)) mode = st.st_mode & 07777;
+    ::fchmod(fd, mode);
+    bool ok = true;
+    const char* data = content.data();
+    size_t left = content.size();
+    while (left > 0 && ok) {
+        const ssize_t n = ::write(fd, data, left);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            ok = false;
+        } else {
+            data += n;
+            left -= static_cast<size_t>(n);
         }
     }
+    ok = (::fsync(fd) == 0 || errno == EINVAL || errno == ENOTSUP) && ok;
+    ok = (::close(fd) == 0) && ok;
+#endif
     std::error_code ec;
+    if (!ok) {
+        fs::remove(tmp, ec);
+        return false;
+    }
     fs::rename(tmp, p, ec);
     if (ec) {
         fs::remove(tmp, ec);
@@ -511,6 +562,15 @@ int run_record(const std::vector<std::string>& rest) {
             try {
                 auto probe = choc::json::parse(raw);
                 valid = probe.isObject();
+                // parse_ledger silently drops malformed assets, so a ledger
+                // whose "assets" is not an array of objects must be refused
+                // here rather than rewritten as empty.
+                if (valid && probe.hasObjectMember("assets")) {
+                    const auto assets = probe["assets"];
+                    valid = assets.isArray();
+                    for (uint32_t i = 0; valid && i < assets.size(); ++i)
+                        valid = assets[i].isObject();
+                }
             } catch (...) {
                 // Catch-all, not catch(std::exception&): this CLI co-links Yoga
                 // (-fno-rtti), which shadows std::exception's typeinfo so choc's
@@ -520,7 +580,7 @@ int run_record(const std::vector<std::string>& rest) {
             }
             if (!valid) {
                 std::cerr << "Error: ledger " << ledger_path.string()
-                          << " is not valid JSON; refusing to touch it. "
+                          << " is not a valid ledger; refusing to touch it. "
                              "Fix or delete it first.\n";
                 return 1;
             }
@@ -688,7 +748,14 @@ int run_export_tokens(const std::vector<std::string>& rest) {
             std::cerr << "Error: cannot read " << input << "\n";
             return 1;
         }
-        theme = vellum::view::Theme::from_json(content);
+        try {
+            theme = vellum::view::Theme::from_json(content);
+        } catch (...) {
+            // Bare catch: Yoga's -fno-rtti typeinfo shadows std::exception (see
+            // the ledger guard), so a typed catch would miss choc's ParseError.
+            std::cerr << "Error: " << input << " is not valid theme JSON\n";
+            return 1;
+        }
     }
     const std::string body = format == "css-variables"
                                  ? vellum::view::export_css_variables(theme)

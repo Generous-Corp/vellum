@@ -26,7 +26,9 @@ GENERIC_NAME = re.compile(r"(?:div|span|section|node|element|component)[_-]?\d+$
 COMPONENT_DECL = re.compile(r"\b(?:function\s+|const\s+)([A-Z][A-Za-z0-9_]*)")
 FUNCTION_DECL = re.compile(r"\bfunction\s+([A-Za-z_$][\w$]*)\s*\(")
 STATIC_STYLE = re.compile(r"style\s*=\s*\{\s*\{(?P<body>[^{}]*)\}\s*\}")
-OPEN_TAG = re.compile(r"<([A-Za-z][\w.-]*)(?:\s+[^<>]*?)?\s*/?>")
+SAME_LINE_LEAF = re.compile(
+    r"<([A-Za-z][\w.-]*)(?:\s+[^<>]*?)?\s*/>"
+    r"|<([A-Za-z][\w.-]*)(?:\s+[^<>]*?)?>[^<>]*</\2\s*>")
 # This scanner is intentionally conservative: it only compares complete
 # non-self-closing JSX elements with balanced tag names. It is not a TSX
 # parser, so malformed/unbalanced markup produces no structural finding and
@@ -253,60 +255,146 @@ def _canonical_markup(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _mask_non_markup_regions(text: str) -> str:
+def _mask_non_markup_regions(text: str, *, strings: bool = True,
+                             spans: list[tuple[int, int]] | None = None) -> str:
     """Blank comments and quoted JavaScript regions without changing offsets.
 
     The duplicate scanner is intentionally dependency-free rather than a TSX
     parser. Keeping line breaks and replacing the other bytes with spaces
     prevents markup-looking documentation, string, and template-literal text
     from being mistaken for JSX while preserving source offsets for findings.
-    A template literal is treated as one quoted region; JSX embedded in a
-    ``${...}`` expression is therefore a conservative false negative rather
-    than a false positive.
+    The literal parts of a template literal are masked; the ``${...}``
+    expressions inside it are executable code and are scanned like any other
+    code, so ``${Math.random()}`` is still seen by the nondeterminism scan.
+
+    With ``strings=False`` only comments are blanked; quoted regions are
+    skipped over (so ``"http://x"`` is not a comment) but kept, for scans such
+    as colour literals whose real values live inside quotes. ``spans``
+    collects the quoted literal ranges (template expressions excluded).
     """
     masked = list(text)
     length = len(text)
-    index = 0
 
     def blank(start: int, end: int) -> None:
         for position in range(start, end):
             if masked[position] != "\n":
                 masked[position] = " "
 
-    while index < length:
-        if text.startswith("//", index):
-            end = text.find("\n", index)
-            if end < 0:
-                end = length
-            blank(index, end)
-            index = end
-            continue
-        if text.startswith("/*", index):
-            end = text.find("*/", index + 2)
-            end = length if end < 0 else end + 2
-            blank(index, end)
-            index = end
-            continue
-        if text[index] not in "'\"`":
-            index += 1
-            continue
+    def literal_span(start: int, end: int) -> None:
+        if spans is not None:
+            spans.append((start, end))
+        if strings:
+            blank(start, end)
 
-        quote = text[index]
-        end = index + 1
+    def scan_template(index: int) -> int:
+        """Mask the template literal opening at ``index``; return its end."""
+        chunk_start = index
+        position = index + 1
         escaped = False
-        while end < length:
-            character = text[end]
+        while position < length:
+            character = text[position]
             if escaped:
                 escaped = False
             elif character == "\\":
                 escaped = True
-            elif character == quote:
+            elif character == "`":
+                literal_span(chunk_start, position + 1)
+                return position + 1
+            elif character == "$" and text.startswith("${", position):
+                literal_span(chunk_start, position + 2)
+                position = scan_code(position + 2, in_expression=True)
+                # ``position`` is at the closing brace of the expression.
+                chunk_start = position
+            position += 1
+        literal_span(chunk_start, length)
+        return length
+
+    def scan_code(index: int, *, in_expression: bool = False) -> int:
+        """Scan code from ``index``; for an expression stop at its ``}``."""
+        depth = 0
+        while index < length:
+            if text.startswith("//", index):
+                end = text.find("\n", index)
+                if end < 0:
+                    end = length
+                blank(index, end)
+                index = end
+                continue
+            if text.startswith("/*", index):
+                end = text.find("*/", index + 2)
+                end = length if end < 0 else end + 2
+                blank(index, end)
+                index = end
+                continue
+            character = text[index]
+            if in_expression:
+                if character == "{":
+                    depth += 1
+                elif character == "}":
+                    if depth == 0:
+                        return index
+                    depth -= 1
+            if character not in "'\"`":
+                index += 1
+                continue
+            if character == "'" and index > 0 and (text[index - 1].isalnum() or text[index - 1] == "_"):
+                # An apostrophe after a word character ("don't" in JSX text)
+                # is prose, not the start of a JavaScript string.
+                index += 1
+                continue
+            if character == "`":
+                index = scan_template(index)
+                continue
+            end = index + 1
+            escaped = False
+            while end < length:
+                current = text[end]
+                if escaped:
+                    escaped = False
+                elif current == "\\":
+                    escaped = True
+                elif current == character:
+                    end += 1
+                    break
+                elif current == "\n":
+                    # Ordinary JS strings cannot span lines; a stray
+                    # apostrophe in JSX text must not swallow the rest of
+                    # the file.
+                    break
                 end += 1
-                break
-            end += 1
-        blank(index, end)
-        index = end
+            literal_span(index, end)
+            index = end
+        return index
+
+    scan_code(0)
     return "".join(masked)
+
+
+_CSS_VALUE_WORDS = frozenset({
+    "solid", "dashed", "dotted", "double", "none", "inset", "outset", "transparent",
+    "inherit", "currentcolor", "auto", "bold", "normal", "inline", "block", "linear-gradient",
+})
+_CSS_VALUE_TOKEN = re.compile(
+    r"#[0-9a-fA-F]{3,8}|(?:rgba?|hsla?)\(\)|-?\d*\.?\d+(?:px|em|rem|%|pt|vh|vw|s|ms|deg)?")
+_CSS_FUNCTION = re.compile(r"(?:rgba?|hsla?)\([^()]*\)", re.IGNORECASE)
+
+
+def _is_style_value_string(content: str) -> bool:
+    """True for a quoted CSS value such as ``'#fff'`` or ``'1px solid #fff'``.
+
+    Every token must be a colour, a number with an optional unit, or a CSS
+    keyword, so prose such as ``"Use #fff for contrast"`` is not a style value.
+    """
+    content = content.strip("'\"` \t")
+    # Preserve functional colour values as one explicit token. Replacing only
+    # the parenthesized contents would leave a bare ``()`` token and make
+    # rgba()/hsla() values look like prose.
+    outside_parens = _CSS_FUNCTION.sub("css-function", content)
+    tokens = outside_parens.replace(",", " ").split()
+    return bool(tokens) and all(
+        token.lower() == "css-function" or
+        token.lower() in _CSS_VALUE_WORDS or _CSS_VALUE_TOKEN.fullmatch(token)
+        for token in tokens)
 
 
 def _duplicate_subtree_findings(text: str) -> list[tuple[int, int, str]]:
@@ -387,25 +475,41 @@ def lint_source(root: Path, *, enforce_size: bool = False, max_component_lines: 
         }
     component_count = 0
     for path in files:
-        text = path.read_text(encoding="utf-8")
         rel = path.relative_to(root if root.is_dir() else path.parent).as_posix()
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            findings.append(Finding("invalid-utf8", rel, 1, "source file is not valid UTF-8"))
+            continue
+        string_spans: list[tuple[int, int]] = []
+        code_text = _mask_non_markup_regions(text, strings=False, spans=string_spans)
+        bare_text = _mask_non_markup_regions(text)
         # Generic component/file names lose semantic identity on re-import.
         if GENERIC_NAME.search(path.stem):
             findings.append(Finding("generic-name", rel, 1, "file name is positional or generic"))
-        for match in COMPONENT_DECL.finditer(text):
+        for match in COMPONENT_DECL.finditer(bare_text):
             component_count += 1
             if GENERIC_NAME.search(match.group(1)):
                 findings.append(Finding("generic-name", rel, _line_for(text, match.start(1)),
                                         f"component {match.group(1)!r} has no semantic name"))
+        # Semantic scans must not fire on comments or quoted prose. Colour and
+        # style values live inside quotes, so those scans mask comments only;
+        # offsets are preserved so line numbers still come from ``text``.
         # Static inline styles are importer output; dynamic values are allowed.
-        for match in STATIC_STYLE.finditer(text):
+        for match in STATIC_STYLE.finditer(code_text):
+            if bare_text[match.start()] != "s":
+                continue  # ``style={{...}}`` quoted as prose, not a JSX attribute
             body = match.group("body")
             if not re.search(r"\b(?:var|value|state|props|theme|tokens?)\b", body):
                 findings.append(Finding("inline-static-style", rel, _line_for(text, match.start()),
                                         "static style object must be lifted to a stylesheet/token"))
         # Raw colours are allowed only when explicitly marked as an unmatched
         # token (the marker is counted by a later corpus budget).
-        for match in COLOR_LITERAL.finditer(text):
+        for match in COLOR_LITERAL.finditer(code_text):
+            enclosing = next((span for span in string_spans
+                              if span[0] <= match.start() < span[1]), None)
+            if enclosing and not _is_style_value_string(text[enclosing[0]:enclosing[1]]):
+                continue  # colour-looking text inside quoted prose
             line_start = text.rfind("\n", 0, match.start()) + 1
             line_end = text.find("\n", match.start())
             if line_end < 0:
@@ -414,41 +518,44 @@ def lint_source(root: Path, *, enforce_size: bool = False, max_component_lines: 
             if "unmatched" not in line.lower() and "tokens." not in line:
                 findings.append(Finding("literal-color", rel, _line_for(text, match.start()),
                                         "colour literal is not represented by a design token"))
-        for match in CLICK_TARGET.finditer(text):
+        for match in CLICK_TARGET.finditer(bare_text):
             attrs = match.group("attrs")
             if not re.search(r"\b(?:role\s*=|tabIndex\s*=|data-pulp-action\s*=)", attrs):
                 findings.append(Finding("nonsemantic-click-target", rel, _line_for(text, match.start()),
                                         "click handler on a non-interactive element lacks semantic metadata"))
-        for match in RANDOMNESS.finditer(text):
+        for match in RANDOMNESS.finditer(bare_text):
             findings.append(Finding("nondeterministic-expression", rel, _line_for(text, match.start()),
                                     "runtime output depends on an unseeded clock or random source"))
-        # Keep the high-signal same-line control for repeated leaves, then use
+        # Keep the high-signal same-line control for repeated identical leaves, then use
         # the balanced subtree scanner below for copied markup that spans lines.
-        for line_number, source_line in enumerate(text.splitlines(), 1):
-            tags = []
-            for match in OPEN_TAG.finditer(source_line):
-                tag = re.sub(r"\s+", " ", match.group(0)).strip()
-                if not tag.startswith(("<Fragment", "<React.Fragment", "<style", "<script")):
-                    tags.append(tag)
-            for tag in sorted(set(tags)):
-                count = tags.count(tag)
+        # Match on the masked line (comments/quoted prose blanked) but read the
+        # tag text from the original so differing attribute strings still differ.
+        for line_number, (source_line, masked_line) in enumerate(
+                zip(text.splitlines(), bare_text.splitlines()), 1):
+            leaves = []
+            for match in SAME_LINE_LEAF.finditer(masked_line):
+                leaf = re.sub(r"\s+", " ", source_line[match.start():match.end()]).strip()
+                if not leaf.startswith(("<Fragment", "<React.Fragment", "<style", "<script")):
+                    leaves.append(leaf)
+            for leaf in sorted(set(leaves)):
+                count = leaves.count(leaf)
                 if count > 1:
                     findings.append(Finding("duplicate-markup", rel, line_number,
-                                            f"opening markup occurs {count} times on one line: {tag[:80]}"))
+                                            f"identical element occurs {count} times on one line: {leaf[:80]}"))
         for line_number, count, signature in _duplicate_subtree_findings(text):
             findings.append(Finding(
                 "duplicate-markup", rel, line_number,
                 f"complete JSX subtree occurs {count} times across lines: {signature[:80]}"))
         if enforce_size:
             lines = text.count("\n") + 1
-            for match in COMPONENT_DECL.finditer(text):
+            for match in COMPONENT_DECL.finditer(bare_text):
                 # Conservative file-level accounting is preferable to claiming
                 # precise brace parsing; split large files before enabling this.
                 if lines > max_component_lines:
                     findings.append(Finding("component-size", rel, _line_for(text, match.start()),
                                             f"component file exceeds {max_component_lines} lines"))
                     break
-            for match in FUNCTION_DECL.finditer(text):
+            for match in FUNCTION_DECL.finditer(bare_text):
                 if lines > max_function_lines:
                     findings.append(Finding("function-size", rel, _line_for(text, match.start()),
                                             f"function file exceeds {max_function_lines} lines"))

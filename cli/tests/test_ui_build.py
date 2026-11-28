@@ -157,6 +157,65 @@ class UiBuildContractTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("contains a symlink", result.stderr)
 
+    def test_symlinked_output_tree_is_rejected_by_build_and_check(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "Editor.tsx").write_text("sentinel\n", encoding="utf-8")
+        self.assertEqual(self.run_cli("build").returncode, 0)
+        built = self.out / "Editor.tsx"
+        built.unlink()
+        built.symlink_to(outside / "Editor.tsx")
+        for command in ("build", "check"):
+            completed = self.run_cli(command)
+            self.assertNotEqual(completed.returncode, 0, command)
+            self.assertIn("symlink", completed.stdout + completed.stderr)
+        self.assertEqual((outside / "Editor.tsx").read_text(encoding="utf-8"), "sentinel\n")
+        built.unlink()
+        # A symlinked output subdirectory must not redirect writes either.
+        (self.source / "sub").mkdir()
+        (self.source / "sub" / "a.css").write_text("a{}\n", encoding="utf-8")
+        (self.out / "sub").symlink_to(outside, target_is_directory=True)
+        self.assertNotEqual(self.run_cli("build").returncode, 0)
+        self.assertFalse((outside / "a.css").exists())
+
+    def test_built_files_are_world_readable(self):
+        self.assertEqual(self.run_cli("build").returncode, 0)
+        for path in (self.out / "Editor.tsx", self.out / "ui-build-manifest.json"):
+            self.assertEqual(path.stat().st_mode & 0o777, 0o644, path.name)
+
+    def test_reserved_manifest_name_source_is_rejected(self):
+        (self.source / "ui-build-manifest.json").write_text("{}\n", encoding="utf-8")
+        completed = self.run_cli("build")
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("reserved", completed.stdout + completed.stderr)
+
+    def test_nested_manifest_named_output_is_untracked(self):
+        self.assertEqual(self.run_cli("build").returncode, 0)
+        (self.out / "sub").mkdir()
+        (self.out / "sub" / "ui-build-manifest.json").write_text("{}\n", encoding="utf-8")
+        completed = self.run_cli("check")
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("untracked", completed.stdout + completed.stderr)
+
+    def test_rebuild_removes_outputs_the_source_no_longer_has(self):
+        extra = self.source / "Extra.tsx"
+        extra.write_text((self.source / "Editor.tsx").read_text(encoding="utf-8"), encoding="utf-8")
+        self.assertEqual(self.run_cli("build").returncode, 0)
+        self.assertTrue((self.out / "Extra.tsx").is_file())
+        extra.unlink()
+        self.assertEqual(self.run_cli("build").returncode, 0)
+        self.assertFalse((self.out / "Extra.tsx").exists())
+        self.assertEqual(self.run_cli("check").returncode, 0)
+
+    def test_rebuild_refuses_files_the_build_never_wrote(self):
+        self.assertEqual(self.run_cli("build").returncode, 0)
+        stray = self.out / "notes.txt"
+        stray.write_text("keep\n", encoding="utf-8")
+        completed = self.run_cli("build")
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("untracked", completed.stdout + completed.stderr)
+        self.assertTrue(stray.is_file())
+
     def test_lint_command_filters_explicit_generated_vendor_roles(self):
         vendor = self.source / "vendor" / "runtime.js"
         vendor.parent.mkdir()

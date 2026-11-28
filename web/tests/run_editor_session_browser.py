@@ -32,7 +32,10 @@ from urllib.parse import urlsplit
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cli"))
 
-from vellum_browser import configured_provenance  # noqa: E402
+from vellum_browser import (  # noqa: E402
+    BrowserProvenanceError, configured_provenance, headless_mode_arguments,
+    prefer_headless_shell,
+)
 from vellum_cdp import CdpAdmission  # noqa: E402
 from vellum_cdp_client import ALLOWED_COMMANDS, CdpClient, CdpClientError  # noqa: E402
 from run_text_semantics_browser import stop_browser  # noqa: E402
@@ -142,7 +145,11 @@ def browser() -> str | None:
         valid, detail = configured_provenance(Path(chrome))
         if not valid:
             raise SystemExit(f"pinned Chrome lacks valid provenance: {detail}")
-    return chrome
+    try:
+        return str(prefer_headless_shell(
+            Path(chrome), strict=os.environ.get("VELLUM_REQUIRE_CHROME_PROVENANCE") == "1"))
+    except BrowserProvenanceError as error:
+        raise SystemExit(f"pinned headless shell refused: {error}") from None
 
 
 def stage(core_root: Path, negative_control: bool) -> dict[str, bytes]:
@@ -153,6 +160,8 @@ def stage(core_root: Path, negative_control: bool) -> dict[str, bytes]:
         files[name] = (fixture / name).read_bytes()
     for path in sorted((ROOT / "web/session").glob("*.js")):
         files[f"session/{path.name}"] = path.read_bytes()
+    # The session draws vector chrome through the shell's vector module.
+    files["shell/vector-canvas.js"] = (ROOT / "web/shell/vector-canvas.js").read_bytes()
     if negative_control:
         text = files["session/editor_session.js"].decode("utf-8")
         if text.count(RESIZE_DISPATCH) != 1:
@@ -270,9 +279,7 @@ def run(chrome: str, core_root: Path, capture_dir: Path, negative_control: bool)
     files = stage(core_root, negative_control)
     with tempfile.TemporaryDirectory(prefix="vellum-editor-chrome-") as profile:
         os.chmod(profile, 0o700)
-        # chrome-headless-shell is headless by construction and rejects the
-        # full browser's headless mode flag.
-        mode = [] if Path(chrome).name == "chrome-headless-shell" else ["--headless=new"]
+        mode = headless_mode_arguments(chrome)
         process = subprocess.Popen([
             chrome, *mode, "--disable-gpu-sandbox", "--no-first-run",
             "--disable-background-networking", "--disable-crash-reporter", "--mute-audio",

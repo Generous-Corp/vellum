@@ -1,0 +1,66 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "capture-primitives",
+    "design-schema-compiler",
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-26T17:47:13Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-63e5a6c14cd75ac06aeedf6b1b4246bad3da2e18",
+  "include_dependency_deltas": [
+    "apps/app-host/CMakeLists.txt",
+    "authoring/design_pipeline/CMakeLists.txt",
+    "authoring/design_pipeline/design_debug/CMakeLists.txt"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "capture-primitives",
+    "design-schema-compiler",
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "apps/app-host/CMakeLists.txt",
+    "apps/app-host/fixtures/counter.js",
+    "apps/app-host/test_agent_workflow.py",
+    "apps/app-host/test_visual_fixtures.py",
+    "authoring/design_pipeline/CMakeLists.txt",
+    "authoring/design_pipeline/design_debug/CMakeLists.txt",
+    "authoring/design_pipeline/design_debug/src/design_debug_main.cpp",
+    "authoring/design_pipeline/design_debug/tests/design_debug_contracts_test.cpp",
+    "authoring/design_pipeline/src/source_adapter_main.cpp",
+    "packages/vellum-design-ir/bin/backend-native-source.js"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "fceca68ef95e39b284de2a6d34ff875f0c95baed",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "4bc0a996a9b9c5e28a34e3a05fe0f02d954a0907",
+    "to_commit": "309d00988904538fcb5255447d3006195e378048"
+  },
+  "schema_api_deltas": [
+    "authoring/design_pipeline/design_debug/tests/design_debug_contracts_test.cpp",
+    "packages/vellum-design-ir/bin/backend-native-source.js"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "63e5a6c14cd75ac06aeedf6b1b4246bad3da2e18",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

@@ -82,6 +82,8 @@ def _source_files(source: Path) -> list[SourceFile]:
         if not path.is_file() or path.suffix.lower() not in SOURCE_SUFFIXES:
             continue
         relative = path.relative_to(source).as_posix()
+        if relative == MANIFEST_NAME:
+            raise UiBuildError(f"source file uses the reserved build manifest name: {relative}")
         data = path.read_bytes()
         files.append(SourceFile(relative, path, _sha256(data), len(data)))
     if not files:
@@ -218,12 +220,63 @@ def _validate_manifest(manifest: Any, source: Path, out: Path, files: list[Sourc
     output_files = {
         p.relative_to(out).as_posix()
         for p in out.rglob("*")
-        if p.is_file() and p.name != MANIFEST_NAME
+        if p.is_file() and p.relative_to(out).as_posix() != MANIFEST_NAME
     }
     source_paths = set(source_map)
     for extra in sorted(output_files - source_paths):
         errors.append(f"built output contains untracked file {extra}")
     return errors
+
+
+def _stale_owned_outputs(out: Path, source_paths: set[str]) -> list[Path]:
+    """Files a previous build wrote (per its manifest) that the source no longer has.
+
+    Ownership comes from the previous manifest, so a file the build never wrote
+    is never listed; those are reported by the caller instead.
+    """
+    try:
+        previous = json.loads(_manifest_path(out).read_text(encoding="utf-8"))
+        listed = [entry["path"] for entry in previous.get("files", [])]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return []
+    root = out.resolve()
+    stale = []
+    for rel in listed:
+        if not isinstance(rel, str) or rel in source_paths:
+            continue
+        target = (out / rel).resolve()
+        if target.is_relative_to(root) and target.is_file():
+            stale.append(target)
+    return stale
+
+
+def _remove_files_and_empty_dirs(out: Path, stale: list[Path]) -> None:
+    root = out.resolve()
+    for target in stale:
+        target.unlink()
+        parent = target.parent
+        while parent != root:
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+            parent = parent.parent
+
+
+def _reject_output_symlinks(out: Path) -> None:
+    """Fail closed if anything under the output root is a symlink.
+
+    A committed symlink in the output tree could redirect `build` writes outside
+    the project, or make `check` accept an external file as valid output.
+    """
+    if not out.exists():
+        return
+    for dirpath, dirnames, filenames in os.walk(out, followlinks=False):
+        for name in (*dirnames, *filenames):
+            path = Path(dirpath) / name
+            if path.is_symlink():
+                raise UiBuildError(
+                    f"output tree contains a symlink; remove it: {path.relative_to(out).as_posix()}")
 
 
 def _args(argv: list[str]) -> argparse.Namespace:
@@ -260,8 +313,21 @@ def run(command: str, source_arg: Path, out_arg: Path, *, json_output: bool = Fa
         raise UiBuildError("output root must be outside the source root")
     files = _source_files(source)
     lint = _load_lint(source)
+    if command in ("build", "check"):
+        _reject_output_symlinks(out)
     if command == "build":
         out.mkdir(parents=True, exist_ok=True)
+        source_paths = {f.relative for f in files}
+        stale = _stale_owned_outputs(out, source_paths)
+        owned = {p.relative_to(out.resolve()).as_posix() for p in stale}
+        untracked = sorted(
+            p.relative_to(out).as_posix() for p in out.rglob("*")
+            if p.is_file() and p.relative_to(out).as_posix() not in source_paths | owned
+            and p.relative_to(out).as_posix() != MANIFEST_NAME)
+        if untracked:
+            raise UiBuildError("output contains untracked file(s) the build does not own: "
+                               + ", ".join(untracked))
+        _remove_files_and_empty_dirs(out, stale)
         for f in files:
             destination = out / f.relative
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -271,6 +337,7 @@ def run(command: str, source_arg: Path, out_arg: Path, *, json_output: bool = Fa
                                              delete=False) as tmp:
                 tmp.write(f.path.read_bytes())
                 temp_name = Path(tmp.name)
+            os.chmod(temp_name, 0o644)
             os.replace(temp_name, destination)
         manifest = _canonical_manifest(source, files, lint)
         manifest_path = _manifest_path(out)
@@ -279,6 +346,7 @@ def run(command: str, source_arg: Path, out_arg: Path, *, json_output: bool = Fa
             json.dump(manifest, tmp, indent=2, sort_keys=True)
             tmp.write("\n")
             temp_name = Path(tmp.name)
+        os.chmod(temp_name, 0o644)
         os.replace(temp_name, manifest_path)
         receipt = {"ok": True, "command": command, "manifest": manifest_path.as_posix(),
                    "files": len(files), "source_digest": manifest["source_digest"]}

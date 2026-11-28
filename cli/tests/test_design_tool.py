@@ -121,6 +121,35 @@ class DesignToolCliTests(unittest.TestCase):
         self.assert_parse_error(rejected)
         self.assertNotIn('"manifest_version"', rejected.stdout)
 
+    @unittest.skipIf(os.name == "nt", "symlink pre-creation is POSIX-only")
+    def test_write_does_not_follow_predictable_temp_symlink(self) -> None:
+        # A pre-created symlink at the old predictable sibling temp path must
+        # not redirect compile output to an arbitrary target.
+        victim = self.write("victim.txt", "KEEP")
+        out = self.root / "out"
+        out.mkdir()
+        for name in ("design-manifest.json", "design-binding-prompt.md"):
+            (out / (name + ".vellum-tmp")).symlink_to(victim)
+        written = self.design("compile", "--out-dir", "out")
+        self.assertEqual(written.returncode, 0, written.stderr)
+        self.assertEqual(victim.read_text(encoding="utf-8"), "KEEP")
+        manifest = out / "design-manifest.json"
+        self.assertTrue(manifest.is_file() and not manifest.is_symlink())
+        json.loads(manifest.read_text(encoding="utf-8"))
+
+    def test_record_refuses_malformed_ledger_assets(self) -> None:
+        self.write("ui.js", "export const el = 1;\n")
+        ledger = self.write(".pulp-design-meta.json", '{"assets":"corrupt"}')
+        refused = self.design("record", "--name", "new", "--asset", "ui.js")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertEqual(ledger.read_text(encoding="utf-8"), '{"assets":"corrupt"}')
+
+    def test_export_tokens_rejects_malformed_theme_json(self) -> None:
+        bad = self.write("bad.json", "{not json")
+        completed = self.design("export-tokens", "--file", str(bad), "--dry-run")
+        self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
+        self.assertIn("not valid theme JSON", completed.stderr)
+
     def test_lint_adherence(self) -> None:
         clean = self.write("ui.js", "export const el = 1;\n")
         passed = self.design("lint-adherence", str(clean))
@@ -224,6 +253,23 @@ class DesignToolDiscoveryTests(unittest.TestCase):
             env=env, text=True, capture_output=True, check=False,
         )
         self.assertEqual(completed.returncode, 4)
+        self.assertEqual(json.loads(completed.stdout)["status"], "capability_unavailable")
+
+    @unittest.skipIf(os.name == "nt", "POSIX file modes")
+    def test_non_executable_tool_reports_capability_unavailable(self) -> None:
+        tmp = tempfile.TemporaryDirectory(prefix="vellum-not-exec-")
+        self.addCleanup(tmp.cleanup)
+        tool = Path(tmp.name) / "not-exec"
+        tool.write_text("x", encoding="utf-8")
+        tool.chmod(0o644)
+        env = {k: v for k, v in os.environ.items() if k not in {"VELLUM_SDK_ROOT"}}
+        env["VELLUM_DESIGN_TOOL"] = str(tool)
+        completed = subprocess.run(
+            [sys.executable, str(CLI), "design", "md-lint", "DESIGN.md", "--json"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(completed.returncode, 4, completed.stderr)
+        self.assertNotIn("Traceback", completed.stderr)
         self.assertEqual(json.loads(completed.stdout)["status"], "capability_unavailable")
 
     def test_help_lists_every_design_verb(self) -> None:

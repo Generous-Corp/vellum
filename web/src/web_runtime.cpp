@@ -1,3 +1,4 @@
+#include "backdrop_marks.hpp"
 #include "canvas_shell_lowering.hpp"
 #include "command_digest.hpp"
 
@@ -13,6 +14,7 @@
 #include <cmath>
 #include <initializer_list>
 #include <optional>
+#include <span>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -30,6 +32,9 @@ std::unique_ptr<vellum::runtime::Kernel> kernel;
 std::optional<vellum::graphics::SceneNode> building_vector;
 std::shared_ptr<vellum::graphics::VectorAsset> building_asset;
 std::size_t building_depth = 0;
+// The frame's backdrop marks and their count; see `vellum_web_set_backdrop`.
+std::vector<float> backdrop;
+std::size_t backdrop_marks = 0;
 
 bool finite(std::initializer_list<float> values) {
     for (const float value : values) {
@@ -102,6 +107,14 @@ EM_JS(void, canvas_color_matrix, (const char* id, const char* values), {
     if (backend.colorMatrix) backend.colorMatrix(UTF8ToString(id), UTF8ToString(values));
 });
 
+// The backdrop is a view of the core's own copy, valid for this call only.
+EM_JS(int, canvas_backdrop, (const float* data, int length), {
+    const backend = globalThis.VellumCanvasBackend;
+    if (typeof backend.backdrop !== "function") return 0;
+    backend.backdrop(HEAPF32.subarray(data >> 2, (data >> 2) + length));
+    return 1;
+});
+
 EM_JS(void, canvas_finish, (), {
     globalThis.VellumCanvasBackend.finish();
 });
@@ -140,6 +153,23 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_begin_frame(
     building_vector.reset();
     building_asset.reset();
     building_depth = 0;
+    backdrop.clear();
+    backdrop_marks = 0;
+    return 1;
+}
+
+/// Sets this frame's backdrop from `length` floats at `data`, in the layout
+/// `backdrop_marks.hpp` describes. The core copies them, so the caller may
+/// reuse its buffer. A malformed backdrop is refused and the frame keeps none.
+EMSCRIPTEN_KEEPALIVE int vellum_web_set_backdrop(const float* data, int length) {
+    backdrop.clear();
+    backdrop_marks = 0;
+    if (!kernel || length < 0 || (length > 0 && data == nullptr)) return 0;
+    const std::span<const float> marks(data, static_cast<std::size_t>(length));
+    const auto count = vellum::web::count_backdrop_marks(marks);
+    if (!count) return 0;
+    backdrop.assign(marks.begin(), marks.end());
+    backdrop_marks = *count;
     return 1;
 }
 
@@ -366,6 +396,10 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
     for (const auto& matrix : lowering.color_matrices) {
         canvas_color_matrix(matrix.id.c_str(), matrix.values.c_str());
     }
+    // A backend with no backdrop draws the scene over the plain background.
+    if (!backdrop.empty()) {
+        canvas_backdrop(backdrop.data(), static_cast<int>(backdrop.size()));
+    }
     std::string filter;
     for (std::size_t index = 0; index < commands.size(); ++index) {
         const auto& command = commands[index];
@@ -484,11 +518,11 @@ EMSCRIPTEN_KEEPALIVE const char* vellum_web_diagnostic_message(int index) {
 }
 
 EMSCRIPTEN_KEEPALIVE int vellum_web_command_count() {
-    return static_cast<int>(commands.size());
+    return static_cast<int>(commands.size() + backdrop_marks);
 }
 
 EMSCRIPTEN_KEEPALIVE std::uint32_t vellum_web_command_digest() {
-    return vellum::web::command_digest(commands);
+    return vellum::web::backdrop_digest(vellum::web::command_digest(commands), backdrop);
 }
 
 EMSCRIPTEN_KEEPALIVE const char* vellum_web_backend_name() {
