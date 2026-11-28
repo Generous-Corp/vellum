@@ -61,6 +61,9 @@ if(VELLUM_BUILD_TESTS)
     add_test(NAME vellum.web.browser-proof-wait
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_browser_proof_wait.py")
+    add_test(NAME vellum.web.make-native-reference
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_make_native_reference.py")
     add_test(NAME vellum.web.superconvolver-negative-control-status
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_superconvolver_negative_control.py")
@@ -101,7 +104,9 @@ if(VELLUM_BUILD_TESTS)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_superconvolver_view_browser.py"
             --core-root "$<TARGET_FILE_DIR:vellum-web-core>"
             --capture-dir "${CMAKE_BINARY_DIR}/web-captures/superconvolver-view")
-    foreach(control IN ITEMS move swap)
+    set(_vellum_superconvolver_controls
+        move swap missing-chip missing-label missing-field solid-background placeholder)
+    foreach(control IN LISTS _vellum_superconvolver_controls)
         add_test(NAME vellum.web.superconvolver-view-${control}-control
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_superconvolver_view_browser.py"
@@ -109,9 +114,11 @@ if(VELLUM_BUILD_TESTS)
                 --capture-dir "${CMAKE_BINARY_DIR}/web-captures/superconvolver-view-${control}-control"
                 --negative-control ${control})
     endforeach()
-    set_tests_properties(vellum.web.superconvolver-view
-        vellum.web.superconvolver-view-move-control vellum.web.superconvolver-view-swap-control
-        PROPERTIES SKIP_RETURN_CODE 77)
+    set_tests_properties(vellum.web.superconvolver-view PROPERTIES SKIP_RETURN_CODE 77)
+    foreach(control IN LISTS _vellum_superconvolver_controls)
+        set_tests_properties(vellum.web.superconvolver-view-${control}-control
+            PROPERTIES SKIP_RETURN_CODE 77)
+    endforeach()
     add_test(NAME vellum.web.text-ime-accessibility
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_text_semantics_browser.py"
